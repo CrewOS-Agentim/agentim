@@ -60,7 +60,17 @@ extension Skill {
             triggers: triggers, alwaysOn: fields["always"] == "true")
     }
 
-    static let defaults: [Skill] = [
+    /// Built-in skills: the same SKILL.md files the gateway ships (bundled from gateway/skills).
+    static let builtIn: [Skill] = {
+        let urls = Bundle.main.urls(forResourcesWithExtension: "md", subdirectory: "skills") ?? []
+        return urls.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
+            .compactMap(parse(markdown:))
+    }()
+
+    static let defaults: [Skill] = builtIn + extras
+
+    static let extras: [Skill] = [
         Skill(name: "Code Review", summary: "Review diffs for bugs first, style last",
               instructions: "When reviewing code: list correctness bugs first with file/line, then risks, then optional cleanups. Be specific and brief.",
               triggers: ["review", "diff", "pull request"]),

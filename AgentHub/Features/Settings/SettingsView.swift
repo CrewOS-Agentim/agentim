@@ -44,7 +44,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Local servers")
                 } footer: {
-                    Text("Models on your own computers: the AgentHub Runner (native or Docker, with memory checks and LTX), or Ollama, LM Studio and other OpenAI-compatible servers.")
+                    Text("Models on your own computers: the agentim runner (native or Docker, with memory checks and LTX), or Ollama, LM Studio and other OpenAI-compatible servers.")
                 }
 
                 Section("Cloud providers") {
@@ -64,8 +64,8 @@ struct SettingsView: View {
                     Picker("Optimize for", selection: $store.router.priority) {
                         ForEach(RouterSettings.Priority.allCases) { Text($0.label).tag($0) }
                     }
-                    Toggle("Keep sensitive prompts on-device", isOn: $store.router.keepSensitiveLocal)
-                    Toggle("Prefer on-device models", isOn: $store.router.preferLocal)
+                    Toggle("Keep sensitive prompts private", isOn: $store.router.keepSensitiveLocal)
+                    Toggle("Prefer private models (this Mac or your servers)", isOn: $store.router.preferLocal)
                     Picker("Fallback model", selection: $store.router.fallbackModelID) {
                         Text("Best available").tag(String?.none)
                         ForEach(store.availableModels) { Text($0.displayName).tag(Optional($0.id)) }
@@ -98,7 +98,7 @@ private struct ProviderKeyView: View {
         Form {
             Section {
                 SecureField("API key", text: $key)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                 if let help = provider.keyHelpURL { Link("Get a key", destination: help) }
             } footer: {
                 Text("Stored in the iOS Keychain on this device only.")
@@ -138,7 +138,7 @@ private struct HuggingFaceAccountView: View {
             } else {
                 Section {
                     SecureField("hf_…", text: $token)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                     Link("Create a read token", destination: Provider.huggingFace.keyHelpURL!)
                 } header: {
                     Text("Access token")

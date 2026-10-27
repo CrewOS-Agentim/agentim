@@ -193,11 +193,23 @@ final class SkillTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         let store = AppStore(fileURL: url)
         var agent = store.agents[0]
-        agent.skillIDs = [store.skills[0].id]  // Code Review (trigger: review)
+        agent.skillIDs = [store.skills.first { $0.name == "Code Review" }!.id]  // trigger: review
         let prompt = store.systemPrompt(agent: agent, message: "can you review this and /summarize")
         XCTAssertTrue(prompt.contains("Skill: Code Review"))
         XCTAssertTrue(prompt.contains("Skill: Summarize"))
         XCTAssertFalse(prompt.contains("Skill: Email Writer"))
+    }
+
+    func testBuiltInSkillsAndAgentsComeFromTheGateway() {
+        let slugs = Set(Skill.builtIn.map(\.slug))
+        for slug in ["validate-your-startup", "youtube-channel-creator", "software-engineer",
+                     "product-manager", "project-manager", "video-director"] {
+            XCTAssertTrue(slugs.contains(slug), slug)
+        }
+        let agents = Agent.starters(skills: Skill.defaults)
+        XCTAssertEqual(agents.first?.name, "Agent Tim")
+        XCTAssertEqual(agents.first?.skillIDs.count, 6)
+        XCTAssertTrue(agents.contains { $0.name == "YouTube Creator" })
     }
 }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// A computer on the user's network that serves models: the AgentHub Runner
+/// A computer on the user's network that serves models: the agentim runner
 /// (native or in Docker), or any OpenAI-compatible server such as Ollama,
 /// LM Studio, llama.cpp, vLLM or Docker Model Runner.
 struct LocalServer: Identifiable, Codable, Hashable {
@@ -11,7 +11,7 @@ struct LocalServer: Identifiable, Codable, Hashable {
         case openAICompatible
 
         var id: String { rawValue }
-        var label: String { self == .runner ? "AgentHub Runner" : "OpenAI-compatible" }
+        var label: String { self == .runner ? "agentim runner" : "OpenAI-compatible" }
     }
 
     var id = UUID()
@@ -39,8 +39,11 @@ extension AIModel {
     /// Router metadata for a server model, guessed from its name and parameter count.
     static func server(_ info: ServerModelInfo, on server: LocalServer) -> AIModel {
         let lower = info.id.lowercased()
-        let shortName = info.id.split(separator: "/").last.map(String.init) ?? info.id
-        let alias = "\(shortName)".lowercased().replacingOccurrences(of: ":", with: "-")
+        let (name, tag) = readableName(info.id)
+        // Same rule as the gateway: repo name without "-GGUF" or the tag, lowercased.
+        let alias = name.lowercased().replacingOccurrences(of: " ", with: "-")
+        let pretty = name.replacingOccurrences(of: "-", with: " ")
+        let shortName = tag.map { "\(pretty) \($0)" } ?? pretty
 
         if info.kind == "video" || info.kind == "image" {
             let cap: Capability = info.kind == "video" ? .video : .image
@@ -69,9 +72,21 @@ extension AIModel {
         }
         return AIModel(
             id: "server-\(server.id.uuidString.prefix(8))/\(info.id)",
-            displayName: "\(shortName) · \(server.name)", modelName: info.id,
+            displayName: shortName, modelName: info.id,
             location: .server(serverID: server.id), capabilities: caps,
             contextWindow: 32_768, costTier: 0, qualityTier: quality, alias: alias)
+    }
+
+    /// "ollama/hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M" → ("Qwen3-4B-Instruct-2507", nil),
+    /// "ollama/qwen2.5-coder:14b" → ("qwen2.5-coder", "14b"). Quantization tags are dropped.
+    static func readableName(_ id: String) -> (name: String, tag: String?) {
+        let last = id.split(separator: "/").last.map(String.init) ?? id
+        let parts = last.split(separator: ":", maxSplits: 1).map(String.init)
+        var name = parts[0]
+        if name.lowercased().hasSuffix("-gguf") { name = String(name.dropLast(5)) }
+        let tag = parts.count > 1 ? parts[1] : nil
+        let isQuant = tag.map { $0.range(of: #"^(q\d|iq\d|f16|bf16|fp16|latest)"#, options: [.regularExpression, .caseInsensitive]) != nil } ?? true
+        return (name, isQuant ? nil : tag)
     }
 
     /// "8.0B" → 8, "751.63M" → 0.75, "qwen2.5-coder:14b" → 14.

@@ -4,3 +4,5 @@ DerivedData/
 xcuserdata/
 .DS_Store
 __pycache__/
+.env
+*.xcodeproj/

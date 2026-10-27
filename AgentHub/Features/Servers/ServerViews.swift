@@ -42,9 +42,9 @@ struct ServerEditorView: View {
                 Section("Connection") {
                     TextField("Name", text: $server.name)
                     TextField(server.kind == .runner ? "http://my-mac.local:8765" : "http://my-mac.local:11434/v1", text: $urlText)
-                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                     SecureField(server.kind == .runner ? "Pairing token" : "API key (optional)", text: $token)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                 }
 
                 if server.kind == .openAICompatible {
@@ -74,7 +74,6 @@ struct ServerEditorView: View {
                 }
             }
             .navigationTitle(server.name.isEmpty ? "Local Server" : server.name)
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -213,7 +212,7 @@ struct PullModelView: View {
         Form {
             Section {
                 TextField("qwen3:4b or hf.co/user/repo:Q4_K_M", text: $reference)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                     .onSubmit { Task { await runCheck() } }
                 Button("Check memory") { Task { await runCheck() } }
                     .disabled(reference.isEmpty || isChecking)
@@ -254,7 +253,6 @@ struct PullModelView: View {
             }
         }
         .navigationTitle("Pull Model")
-        .navigationBarTitleDisplayMode(.inline)
     }
 
     private func runCheck() async {

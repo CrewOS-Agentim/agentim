@@ -16,7 +16,6 @@ struct AgentListView: View {
             }
             .navigationTitle("Agents")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { EditButton() }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         editing = Agent(name: "", emoji: "🤖", summary: "", systemPrompt: "")
@@ -50,8 +49,10 @@ private struct AgentRow: View {
                 }
                 HStack(spacing: 6) {
                     Tag(text: modelText, symbol: modelSymbol)
-                    if !agent.skillIDs.isEmpty { Tag(text: "\(agent.skillIDs.count) skills", symbol: "wand.and.stars") }
-                    if agent.preferLocal { Tag(text: "On-device", symbol: "iphone") }
+                    if !agent.skillIDs.isEmpty {
+                        Tag(text: agent.skillIDs.count == 1 ? "1 skill" : "\(agent.skillIDs.count) skills", symbol: "wand.and.stars")
+                    }
+                    if agent.preferLocal { Tag(text: "Private", symbol: "lock.fill") }
                 }
             }
         }
@@ -77,10 +78,15 @@ struct Tag: View {
     let symbol: String
 
     var body: some View {
-        Label(text, systemImage: symbol)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(.tint.opacity(0.12), in: Capsule())
+        HStack(spacing: 3) {
+            Image(systemName: symbol).imageScale(.small)
+            Text(text)
+        }
+        .font(.caption2)
+        .lineLimit(1)
+        .fixedSize()
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(.tint.opacity(0.12), in: Capsule())
     }
 }

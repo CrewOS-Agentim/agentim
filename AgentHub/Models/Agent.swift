@@ -41,3 +41,27 @@ extension Agent {
               systemPrompt: "You help the user think through personal notes. Be brief.", preferLocal: true),
     ]
 }
+
+extension Agent {
+    private struct Bundled: Decodable {
+        let name: String
+        let emoji: String
+        let summary: String
+        let system_prompt: String
+        let skills: [String]
+        let prefer_local: Bool
+    }
+
+    /// The gateway's agents (gateway/config/agents.json), wired to the built-in skills.
+    static func starters(skills: [Skill]) -> [Agent] {
+        guard let url = Bundle.main.url(forResource: "agents", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let bundled = try? JSONDecoder().decode([Bundled].self, from: data)
+        else { return defaults }
+        return bundled.map { entry in
+            Agent(name: entry.name, emoji: entry.emoji, summary: entry.summary, systemPrompt: entry.system_prompt,
+                  skillIDs: skills.filter { entry.skills.contains($0.slug) }.map(\.id),
+                  preferLocal: entry.prefer_local)
+        }
+    }
+}

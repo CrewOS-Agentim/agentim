@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AgentHub Runner: lets the AgentHub iOS app use models running on this computer.
+"""agentim runner: lets agentim (the gateway and the Mac app) use models on this computer.
 
 Runs natively (`python3 runner.py`) or in Docker. Standard library only.
 
@@ -117,7 +117,7 @@ def gpus():
 
 
 def required_bytes(weight_bytes):
-    """Weights + KV cache/activations (~20%) + runtime overhead. Same rule as the iOS app."""
+    """Weights + KV cache/activations (~20%) + runtime overhead. Same rule as the Mac app."""
     return int(weight_bytes * 1.2) + 512 * MB
 
 
@@ -438,25 +438,35 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
-            # Relay line by line so tokens reach the phone as they're generated.
+            # Relay line by line so tokens reach the client as they're generated.
             for line in upstream:
                 self.wfile.write(line)
                 self.wfile.flush()
 
-    def ltx_chat(self, kind, body):
+    def render_media(self, kind, body):
+        """Runs LTX and returns the reply text with a link to the result (or why it failed)."""
         prompt = next((m["content"] for m in reversed(body.get("messages", [])) if m.get("role") == "user"), "")
+        try:
+            # Absolute URL built from the address the caller used to reach us.
+            url = f"http://{self.headers.get('Host', 'localhost')}{publish_file(LTX.generate(kind, prompt))}"
+            return f"Rendered your {kind} with LTX Desktop.\n\n[{kind}]({url})"
+        except Exception as e:
+            return f"Couldn't render the {kind}: {e}"
+
+    def ltx_chat(self, kind, body):
+        if not body.get("stream"):
+            # Plain JSON completion, like any OpenAI-compatible server (the gateway uses this).
+            return self.send_json(200, {"object": "chat.completion", "model": f"ltx/{kind}", "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": self.render_media(kind, body)},
+                 "finish_reason": "stop"}]})
+
         self.start_sse()
 
         def chunk(text):
             self.sse({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})
 
         chunk(f"Rendering {kind} with LTX Desktop… ")
-        try:
-            # Absolute URL built from the address the phone used to reach us.
-            url = f"http://{self.headers.get('Host', 'localhost')}{publish_file(LTX.generate(kind, prompt))}"
-            chunk(f"done.\n\n[{kind}]({url})")
-        except Exception as e:
-            chunk(f"failed: {e}")
+        chunk(self.render_media(kind, body))
         self.wfile.write(b"data: [DONE]\n\n")
 
     def check(self, body):
@@ -539,7 +549,7 @@ def main():
     port = int(os.environ.get("RUNNER_PORT", "8765"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     total, available, _ = host_memory()
-    print(f"AgentHub Runner {VERSION} on port {port} ({'container' if IN_CONTAINER else 'native'})")
+    print(f"agentim runner {VERSION} on port {port} ({'container' if IN_CONTAINER else 'native'})")
     print(f"Memory: {total / 2**30:.1f} GB total, {available / 2**30:.1f} GB available")
     for name, info in backend_status().items():
         print(f"  {name:9} {info['url']:45} {'up' if info['healthy'] else 'down'}")

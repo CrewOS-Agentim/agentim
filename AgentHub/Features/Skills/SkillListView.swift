@@ -18,8 +18,8 @@ struct SkillListView: View {
                             Text(skill.summary).font(.subheadline).foregroundStyle(.secondary)
                             HStack(spacing: 6) {
                                 if skill.alwaysOn { Tag(text: "Always on", symbol: "bolt.fill") }
-                                ForEach(skill.triggers.prefix(3), id: \.self) { Tag(text: $0, symbol: "text.magnifyingglass") }
-                                Tag(text: "\(usage(skill)) agents", symbol: "person.2")
+                                ForEach(skill.triggers.prefix(2), id: \.self) { Tag(text: $0, symbol: "text.magnifyingglass") }
+                                Tag(text: usage(skill) == 1 ? "1 agent" : "\(usage(skill)) agents", symbol: "person.2")
                             }
                         }
                     }
@@ -91,7 +91,6 @@ struct SkillEditorView: View {
                 }
             }
             .navigationTitle(skill.name.isEmpty ? "New Skill" : skill.name)
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -126,7 +125,6 @@ private struct SkillImportView: View {
                 if let error { Text(error).foregroundStyle(.red) }
             }
             .navigationTitle("Import Skill")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -139,9 +137,9 @@ private struct SkillImportView: View {
                         onParsed(skill)
                     }
                 }
-                ToolbarItem(placement: .bottomBar) {
+                ToolbarItem(placement: .automatic) {
                     Button("Paste from clipboard", systemImage: "doc.on.clipboard") {
-                        markdown = UIPasteboard.general.string ?? ""
+                        markdown = NSPasteboard.general.string(forType: .string) ?? ""
                     }
                 }
             }

@@ -26,7 +26,7 @@ final class AppStore {
         case offline(String)
     }
 
-    var agents: [Agent] = Agent.defaults { didSet { scheduleSave() } }
+    var agents: [Agent] = Agent.starters(skills: Skill.defaults) { didSet { scheduleSave() } }
     var skills: [Skill] = Skill.defaults { didSet { scheduleSave() } }
     var conversations: [Conversation] = [] { didSet { scheduleSave() } }
     var customModels: [AIModel] = [] { didSet { scheduleSave() } }
@@ -53,7 +53,7 @@ final class AppStore {
 
     init(fileURL: URL? = nil) {
         self.fileURL = fileURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("agenthub.json")
+            .appendingPathComponent("agentim/agentim.json")
         load()
         pathMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in self?.isOnline = path.status == .satisfied }
@@ -173,6 +173,8 @@ final class AppStore {
     }
 
     func models(on server: LocalServer) -> [AIModel] { serverModels.filter { $0.serverID == server.id } }
+
+    func markOnline(_ id: UUID, system: RunnerClient.System?) { serverStatus[id] = .online(system) }
 
     func deleteServerModel(_ model: AIModel) async throws {
         guard let server = servers.first(where: { $0.id == model.serverID }) else { return }

@@ -19,7 +19,7 @@ struct MemoryAssessment: Equatable {
     var availableBytes: Int64
     var deviceBytes: Int64
     var freeDiskBytes: Int64
-    var hostLabel = "this device"
+    var hostLabel = "this Mac"
 
     var canDownload: Bool { verdict == .fits || verdict == .tight }
 
@@ -42,19 +42,24 @@ enum DeviceMemory {
     /// Physical RAM.
     static var physicalBytes: Int64 { Int64(ProcessInfo.processInfo.physicalMemory) }
 
-    /// What this process may still allocate before jetsam kills it.
+    /// Memory the Mac can hand out right now: free + inactive + purgeable + speculative pages
+    /// (the same "available" figure Activity Monitor and `vm_stat` imply).
     static var availableToAppBytes: Int64 {
-        #if os(iOS) && !targetEnvironment(simulator)
-        return Int64(os_proc_available_memory())
-        #else
-        // The simulator has no jetsam limit; use the iOS rule of thumb instead.
-        return appCeilingBytes
-        #endif
+        var stats = vm_statistics64()
+        var count = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &stats) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                host_statistics64(mach_host_self(), HOST_VM_INFO64, $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return appCeilingBytes / 2 }
+        let pages = UInt64(stats.free_count) + UInt64(stats.inactive_count)
+            + UInt64(stats.purgeable_count) + UInt64(stats.speculative_count)
+        return Int64(pages * UInt64(vm_kernel_page_size))
     }
 
-    /// iOS lets one foreground app use roughly 60% of RAM with the
-    /// increased-memory-limit entitlement (about 50% without it).
-    static var appCeilingBytes: Int64 { Int64(Double(physicalBytes) * 0.6) }
+    /// Apple silicon lets the GPU wire roughly 75% of unified memory, which caps one model.
+    static var appCeilingBytes: Int64 { Int64(Double(physicalBytes) * 0.75) }
 
     static var freeDiskBytes: Int64 {
         let url = URL(fileURLWithPath: NSHomeDirectory())

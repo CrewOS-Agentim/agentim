@@ -17,7 +17,6 @@ struct ChatView: View {
                 composer(conversation)
             }
             .navigationTitle(conversation.title)
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .primaryAction) { modelMenu(conversation) } }
         } else {
             ContentUnavailableView("Conversation deleted", systemImage: "trash")

@@ -57,8 +57,22 @@ final class ServerRoutingTests: XCTestCase {
     }
 
     func testAliasPicksServerModel() throws {
-        let decision = try route("@llama3.1-8b hi", [opus, llama8b])
+        let decision = try route("@llama3.1 hi", [opus, llama8b])
         XCTAssertEqual(decision.model.id, llama8b.id)
+    }
+
+    func testReadableNames() {
+        let (hfName, hfTag) = AIModel.readableName("ollama/hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M")
+        XCTAssertEqual(hfName, "Qwen3-4B-Instruct-2507")
+        XCTAssertNil(hfTag)
+        XCTAssertEqual(AIModel.readableName("ollama/qwen2.5-coder:14b").tag, "14b")
+        XCTAssertNil(AIModel.readableName("ollama/llama3.2:latest").tag)
+
+        let qwen = AIModel.server(ServerModelInfo(
+            id: "ollama/hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M", kind: nil, size_bytes: nil,
+            parameter_size: "4.0B", loaded: nil), on: server)
+        XCTAssertEqual(qwen.displayName, "Qwen3 4B Instruct 2507")
+        XCTAssertEqual(qwen.alias, "qwen3-4b-instruct-2507")  // same alias the gateway uses
     }
 
     func testServerModelHeuristics() {

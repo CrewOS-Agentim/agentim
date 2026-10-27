@@ -23,7 +23,7 @@ enum ChatClientError: LocalizedError {
         switch self {
         case .missingKey(let provider): "No API key for \(provider). Add one in Settings."
         case .http(let code, let body): "HTTP \(code): \(body.prefix(300))"
-        case .unsupportedOnSimulator: "On-device models need a real iPhone or iPad (Metal GPU). Use a cloud model in the simulator."
+        case .unsupportedOnSimulator: "On-device models need Apple silicon (Metal GPU)."
         case .modelNotInstalled(let repo): "\(repo) isn't downloaded yet."
         }
     }
