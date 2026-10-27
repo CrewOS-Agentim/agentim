@@ -1,0 +1,141 @@
+import SwiftUI
+
+struct SettingsView: View {
+    @Environment(AppStore.self) private var store
+
+    var body: some View {
+        @Bindable var store = store
+        NavigationStack {
+            Form {
+                Section {
+                    NavigationLink { HuggingFaceAccountView() } label: {
+                        LabeledContent {
+                            Text(store.huggingFaceAccount?.name ?? "Not connected")
+                        } label: {
+                            Label("Hugging Face", systemImage: "face.smiling")
+                        }
+                    }
+                } header: {
+                    Text("Accounts")
+                } footer: {
+                    Text("Download on-device models and use Hugging Face Inference Providers with one token.")
+                }
+
+                Section("Cloud providers") {
+                    ForEach(store.providers.filter { $0.id != Provider.huggingFace.id }) { provider in
+                        NavigationLink { ProviderKeyView(provider: provider) } label: {
+                            LabeledContent {
+                                Image(systemName: store.isConnected(provider) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(store.isConnected(provider) ? .green : .secondary)
+                            } label: {
+                                Label(provider.name, systemImage: provider.symbol)
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    Picker("Optimize for", selection: $store.router.priority) {
+                        ForEach(RouterSettings.Priority.allCases) { Text($0.label).tag($0) }
+                    }
+                    Toggle("Keep sensitive prompts on-device", isOn: $store.router.keepSensitiveLocal)
+                    Toggle("Prefer on-device models", isOn: $store.router.preferLocal)
+                    Picker("Fallback model", selection: $store.router.fallbackModelID) {
+                        Text("Best available").tag(String?.none)
+                        ForEach(store.availableModels) { Text($0.displayName).tag(Optional($0.id)) }
+                    }
+                } header: {
+                    Text("Router")
+                } footer: {
+                    Text("Precedence: @alias in a message → conversation pin → agent pin → offline/sensitive/on-device rules → best match for the task. If a model errors before answering, the next best is tried.")
+                }
+
+                Section("About") {
+                    LabeledContent("Models available", value: "\(store.availableModels.count)")
+                    LabeledContent("Device memory", value: MemoryAssessment.format(DeviceMemory.physicalBytes))
+                    LabeledContent("Network", value: store.isOnline ? "Online" : "Offline")
+                }
+            }
+            .navigationTitle("Settings")
+        }
+    }
+}
+
+private struct ProviderKeyView: View {
+    @Environment(AppStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    let provider: Provider
+    @State private var key = ""
+
+    var body: some View {
+        Form {
+            Section {
+                SecureField("API key", text: $key)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                if let help = provider.keyHelpURL { Link("Get a key", destination: help) }
+            } footer: {
+                Text("Stored in the iOS Keychain on this device only.")
+            }
+            Section {
+                Button("Save") {
+                    store.setAPIKey(key, for: provider)
+                    dismiss()
+                }
+                .disabled(key.isEmpty)
+                if store.isConnected(provider) {
+                    Button("Disconnect", role: .destructive) {
+                        store.setAPIKey(nil, for: provider)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .navigationTitle(provider.name)
+    }
+}
+
+private struct HuggingFaceAccountView: View {
+    @Environment(AppStore.self) private var store
+    @State private var token = ""
+    @State private var error: String?
+    @State private var isConnecting = false
+
+    var body: some View {
+        Form {
+            if let account = store.huggingFaceAccount {
+                Section("Connected") {
+                    LabeledContent("Username", value: account.name)
+                    if let name = account.fullname { LabeledContent("Name", value: name) }
+                    Button("Disconnect", role: .destructive) { store.disconnectHuggingFace() }
+                }
+            } else {
+                Section {
+                    SecureField("hf_…", text: $token)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Link("Create a read token", destination: Provider.huggingFace.keyHelpURL!)
+                } header: {
+                    Text("Access token")
+                } footer: {
+                    Text("A read token is enough to download models. Enable \"Make calls to Inference Providers\" to also use Hugging Face cloud models.")
+                }
+                if let error { Text(error).foregroundStyle(.red) }
+                Button {
+                    Task {
+                        isConnecting = true
+                        defer { isConnecting = false }
+                        do {
+                            try await store.connectHuggingFace(token: token.trimmingCharacters(in: .whitespaces))
+                            error = nil
+                        } catch {
+                            self.error = "Couldn't verify the token: \(error.localizedDescription)"
+                        }
+                    }
+                } label: {
+                    if isConnecting { ProgressView() } else { Text("Connect") }
+                }
+                .disabled(token.isEmpty || isConnecting)
+            }
+        }
+        .navigationTitle("Hugging Face")
+    }
+}
