@@ -73,8 +73,20 @@ services:
       - "127.0.0.1:3000:3000"   # dashboard for the QR code; local only
     restart: unless-stopped
 
+  # Voice notes in and out: Whisper (speech-to-text) + Kokoro (text-to-speech), OpenAI-compatible.
+  # Enabled by onboarding with COMPOSE_PROFILES=voice; models download on first use.
+  voice:
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    profiles: ["voice"]
+    volumes:
+      - voice-models:/home/ubuntu/.cache/huggingface/hub
+    ports:
+      - "127.0.0.1:8000:8000"   # onboarding downloads the chosen models through this
+    restart: unless-stopped
+
 volumes:
   ollama-models:
   runner-data:
   gateway-data:
   whatsapp-sessions:
+  voice-models:

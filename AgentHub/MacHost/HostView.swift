@@ -36,7 +36,7 @@ struct HostView: View {
                             Button("Open Docker Desktop") { host.startDocker() }
                         }
                     }
-                    ForEach(HostController.services, id: \.self) { name in
+                    ForEach(HostController.services + HostController.optionalServices.filter { name in host.services.contains { $0.name == name } }, id: \.self) { name in
                         let service = host.services.first { $0.name == name }
                         LabeledContent {
                             Text(service.map { $0.health.isEmpty ? $0.state : "\($0.state) · \($0.health)" } ?? "not created")
@@ -74,6 +74,7 @@ struct HostView: View {
                     }
                     Toggle("Open agentim at login", isOn: $host.launchAtLogin)
                     HStack {
+                        Button("Run setup again…") { UserDefaults.standard.set(false, forKey: "onboardingComplete") }
                         Button("Install always-on helpers…") { host.installHelpers() }
                         Button("Open logs") { host.openLogs() }
                     }
@@ -110,6 +111,7 @@ struct HostView: View {
         case "runner": "Runner (memory checks)"
         case "gateway": "Gateway (Telegram · Slack · WhatsApp)"
         case "whatsapp": "WhatsApp bridge"
+        case "voice": "Voice (Whisper + Kokoro)"
         default: service
         }
     }

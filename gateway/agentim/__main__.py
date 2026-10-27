@@ -10,6 +10,7 @@ from .llm import LLM
 from .models import Catalog, bootstrap
 from .server import serve
 from .store import Store
+from .voice import Voice
 
 BANNER = r"""
      .-'''-.
@@ -17,6 +18,7 @@ BANNER = r"""
    |  (___)  |    Agent Tim is on the switchboard.
     \ ~~~~~ /     channels: {channels}
    /|/|/|/|/|\    models:   {runners}
+                  voice:    {voice}
 """
 
 
@@ -38,12 +40,14 @@ def main():
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"), format="%(asctime)s %(name)s %(message)s")
     config = config_lib.from_env()
     catalog = Catalog(config)
+    voice = Voice(config.voice_url, config.stt_model, config.tts_model, config.tts_voice)
     gateway = Gateway(config, Store(os.path.join(config.data_dir, "agentim.db")), LLM(config), catalog,
-                      skill_lib.load_dir(config.skills_dir))
+                      skill_lib.load_dir(config.skills_dir), voice if voice.enabled else None)
     channels = build_channels(config, gateway)
     print(BANNER.format(
         version=__version__, channels=", ".join(channels) or "none configured (see .env)",
-        runners=", ".join(config.runner_urls)), flush=True)
+        runners=", ".join(config.runner_urls),
+        voice=f"{config.stt_model} + {config.tts_model}" if voice.enabled else "off"), flush=True)
     if not any(config.allowed.values()):
         logging.warning("AGENTIM_ALLOWED_USERS is empty: Agent Tim will reply to strangers with their id only.")
 

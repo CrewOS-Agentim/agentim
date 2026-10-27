@@ -67,8 +67,28 @@ struct RootView: View {
     /// `-section models` on launch picks the starting section (used for screenshots).
     @State private var selection: SidebarItem? = SidebarItem(rawValue: UserDefaults.standard.string(forKey: "section") ?? "") ?? .chats
     @Environment(HostController.self) private var host
+    /// First launch shows onboarding; "Run setup again" in This Mac resets this.
+    /// `-onboarding YES` forces it (screenshots); demo mode otherwise skips it.
+    @AppStorage("onboardingComplete") private var onboardingComplete = false
+    @State private var onboarding = OnboardingModel(demo: AppStore.isDemo)
+
+    private var showOnboarding: Bool {
+        if UserDefaults.standard.bool(forKey: "onboarding") { return true }
+        return !onboardingComplete && !AppStore.isDemo
+    }
 
     var body: some View {
+        if showOnboarding {
+            OnboardingView(model: onboarding) {
+                onboardingComplete = true
+                UserDefaults.standard.removeObject(forKey: "onboarding")
+            }
+        } else {
+            main
+        }
+    }
+
+    private var main: some View {
         NavigationSplitView {
             List(SidebarItem.allCases, selection: $selection) { item in
                 Label(item.title, systemImage: item.symbol).tag(item)
