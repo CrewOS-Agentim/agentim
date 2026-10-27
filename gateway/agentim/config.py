@@ -50,6 +50,11 @@ class Config:
     skills_dir: str = ""
     agents: list = field(default_factory=list)
     port: int = 8780
+    voice_url: str = ""
+    stt_model: str = "Systran/faster-whisper-small"
+    tts_model: str = "speaches-ai/Kokoro-82M-v1.0-ONNX"
+    tts_voice: str = "af_heart"
+    voice_replies: bool = True
 
 
 def parse_allowed(raw):
@@ -95,4 +100,9 @@ def from_env(env=None):
         skills_dir=env.get("AGENTIM_SKILLS_DIR", os.path.join(here, "skills")),
         agents=load_agents(agents_path),
         port=int(env.get("AGENTIM_PORT", "8780")),
+        voice_url=env.get("VOICE_URL", "").rstrip("/"),
+        stt_model=env.get("AGENTIM_STT_MODEL", "Systran/faster-whisper-small"),
+        tts_model=env.get("AGENTIM_TTS_MODEL", "speaches-ai/Kokoro-82M-v1.0-ONNX"),
+        tts_voice=env.get("AGENTIM_TTS_VOICE", "af_heart"),
+        voice_replies=flag("AGENTIM_VOICE_REPLIES", True),
     )

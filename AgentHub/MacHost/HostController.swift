@@ -18,6 +18,7 @@ final class HostController {
     enum Power: Equatable { case charger, battery, unknown }
 
     static let services = ["ollama", "runner", "gateway", "whatsapp"]
+    static let optionalServices = ["voice"]
     static let helperPlists = [
         "watchdog": "~/Library/LaunchAgents/com.agentim.watchdog.plist",
         "runner": "~/Library/LaunchAgents/com.agentim.runner.plist",
@@ -58,13 +59,16 @@ final class HostController {
         if demo { seedDemo() }
     }
 
+    /// Services Compose created: the core four, plus voice when it's enabled.
+    var expectedCount: Int { max(Self.services.count, services.count) }
+
     var summary: String {
         if !dockerRunning { return "Docker is off" }
         let up = services.filter(\.isRunning).count
-        return up == Self.services.count ? "All \(up) services running" : "\(up)/\(Self.services.count) services running"
+        return up == expectedCount ? "All \(up) services running" : "\(up)/\(expectedCount) services running"
     }
 
-    var isHealthy: Bool { dockerRunning && services.filter(\.isRunning).count == Self.services.count }
+    var isHealthy: Bool { dockerRunning && services.filter(\.isRunning).count == expectedCount }
 
     // MARK: - Polling
 

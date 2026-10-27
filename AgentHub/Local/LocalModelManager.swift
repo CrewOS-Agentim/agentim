@@ -128,7 +128,7 @@ final class LocalModelManager {
 }
 
 /// URLSession download with byte-level progress, bridged to async/await.
-private final class FileDownloader: NSObject, URLSessionDownloadDelegate {
+final class FileDownloader: NSObject, URLSessionDownloadDelegate {
     private let progress: (Int64) -> Void
     private var continuation: CheckedContinuation<URL, Error>?
 

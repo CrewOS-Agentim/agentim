@@ -35,6 +35,15 @@ targets:
         buildPhase: resources
       - path: gateway/config/agents.json
         buildPhase: resources
+    postCompileScripts:
+      # Ship the Docker stack inside the app so onboarding works without the repo.
+      - name: Bundle Docker stack
+        basedOnDependencyAnalysis: false
+        script: |
+          STACK="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/stack"
+          mkdir -p "$STACK"
+          rsync -a --delete --exclude tests --exclude __pycache__ --exclude '*.pyc' --exclude 'test_*.py' \
+            "$SRCROOT/gateway" "$SRCROOT/runner" "$SRCROOT/deploy" "$SRCROOT/docker-compose.yml" "$SRCROOT/.env.example" "$STACK/"
     dependencies:
       - package: MLXSwiftLM
         product: MLXLLM
@@ -61,6 +70,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         # Not sandboxed: the control center runs docker, pmset and launchctl for you.
         ENABLE_APP_SANDBOX: NO
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
 
   AgentHubTests:
     type: bundle.unit-test

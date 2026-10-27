@@ -34,18 +34,44 @@
 
 `agent·im` → **Agent Tim**. He's an octopus, so he has eight arms for eight jobs:
 
-- 💬 answers you on **Telegram, WhatsApp and Slack**
+- 💬 answers you on **Telegram, WhatsApp and Slack**, in text or 🎙️ **voice notes**
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
 - 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
 - 🔌 **stays up**: the lid closes, the Mac is on the charger, and Tim is still answering. Anything that stops gets started again.
-- 🖥️ ships with a **native macOS app** (Swift/SwiftUI) to manage it all
+- 🖥️ ships with a **native macOS app** (Swift/SwiftUI) whose onboarding installs Docker and your models for you
 - ☁️ and if you *want* the cloud, Claude, GPT and Gemini plug in too
 
 <br clear="right">
 
 ## 🚀 Quick start
+
+### The easy way: let Agent Tim set himself up
+
+Open the Mac app and the onboarding does the rest:
+
+1. **Docker:** if it isn't installed, agentim downloads Docker Desktop and installs it for you.
+2. **Pick your models.** Every option shows its real download size and whether it fits in Docker's memory. The best fit is pre-selected.
+
+   | | Options |
+   |---|---|
+   | 💬 **Chat** | Qwen3 1.7B · Llama 3.2 3B · **Qwen3 4B** · Gemma 3 12B · Qwen3 14B · Qwen3 30B |
+   | 🧑‍💻 **Coding** | use the chat model · Qwen2.5 Coder 1.5B / **7B** / 14B · Qwen3 Coder 30B |
+   | 🎙️ **Voice** | off · Whisper Base / **Small** / Large v3 Turbo, each + Kokoro |
+   | 🎬 **Video & images** | **LTX Desktop** · skip |
+
+3. **Install.** It sets up the Docker stack (shipped inside the app) and starts the containers. Then it downloads your models with live progress, installs the restart watchdog and connects everything.
+
+<p align="center"><img src="docs/assets/screenshots/onboarding-models.png" alt="agentim onboarding: pick your models" width="85%"></p>
+
+```sh
+brew install xcodegen
+xcodebuild -downloadComponent MetalToolchain   # once; MLX needs it
+xcodegen generate && open agentim.xcodeproj     # ⌘R. Onboarding opens on first launch
+```
+
+### The terminal way
 
 You need a Mac with Apple silicon, [Docker Desktop](https://www.docker.com/products/docker-desktop/), and five minutes.
 
@@ -171,6 +197,14 @@ triggers: release notes, changelog
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
 
+## 🎙️ Voice
+
+Pick a voice model during onboarding (or set `COMPOSE_PROFILES=voice` in `.env`). The `voice` container ([Speaches](https://github.com/speaches-ai/speaches): Whisper + Kokoro) runs entirely on your Mac.
+
+- **Send a voice note** on Telegram or WhatsApp. Tim transcribes it locally (🎙️ "…"), answers, and **replies with a voice note**. Code and links stay in the text; they aren't read aloud.
+- Strangers' audio is never transcribed: the allow-list is checked first.
+- Turn spoken replies off with `AGENTIM_VOICE_REPLIES=false`, or change the voice with `AGENTIM_TTS_VOICE` (e.g. `af_heart`).
+
 ## 🎬 Making videos
 
 With [LTX Desktop](https://ltx.studio) open on the Mac, the native runner (installed by `install.sh`) adds `ltx/video` and `ltx/image`. In any chat:
@@ -204,7 +238,8 @@ CI runs all four on every push.
 ## 🗺 Roadmap
 
 - [ ] Sync agents and skills between the Mac app and the gateway
-- [ ] Voice notes in and out (Whisper + Kokoro)
+- [x] Voice notes in and out (Whisper + Kokoro)
+- [x] One-click onboarding: Docker + model picker
 - [ ] Discord and iMessage channels
 - [ ] One-click Hugging Face model picker in the Mac app for the Docker stack
 

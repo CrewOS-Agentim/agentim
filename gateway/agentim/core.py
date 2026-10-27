@@ -32,8 +32,9 @@ def split_media(text):
 
 
 class Gateway:
-    def __init__(self, config, store, llm, models_provider, skills):
+    def __init__(self, config, store, llm, models_provider, skills, voice=None):
         self.config = config
+        self.voice = voice  # agentim.voice.Voice, or None when voice isn't set up
         self.store = store
         self.llm = llm
         self.models_provider = models_provider  # () -> [Model]
