@@ -90,6 +90,15 @@ final class EnvFileTests: XCTestCase {
         XCTAssertEqual(plan.ollamaRefs.count, 2)
     }
 
+    func testDockerFailuresAreExplained() {
+        let creds = OnboardingModel.explainDockerFailure("Error getting credentials - err: signal: terminated, out: ``")
+        XCTAssertTrue(creds.contains("Keychain"))
+        XCTAssertTrue(OnboardingModel.explainDockerFailure("error from registry: denied").contains("Docker Desktop"))
+        XCTAssertTrue(OnboardingModel.explainDockerFailure("Cannot connect to the Docker daemon at unix://").contains("isn't running"))
+        XCTAssertTrue(OnboardingModel.explainDockerFailure("write /var/lib: no space left on device").contains("disk space"))
+        XCTAssertEqual(OnboardingModel.explainDockerFailure("  something else  "), "something else")
+    }
+
     func testPlanWithoutVoiceOrCoderModel() {
         let plan = OnboardingPlan(chat: ModelCatalog.choice(id: "chat-llama3.2-3b")!, coding: ModelCatalog.choice(id: "code-same")!,
                                   voice: ModelCatalog.choice(id: "voice-off")!, media: ModelCatalog.choice(id: "media-off")!)
@@ -112,6 +121,19 @@ final class StackBundleTests: XCTestCase {
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: stack.appendingPathComponent("gateway/tests").path),
                        "tests aren't shipped")
+    }
+
+    /// Onboarding starts services by name; they must match the compose file it ships.
+    func testCoreServicesMatchTheComposeFile() throws {
+        let stack = try XCTUnwrap(StackFiles.bundled)
+        let compose = try String(contentsOf: stack.appendingPathComponent("docker-compose.yml"), encoding: .utf8)
+        let servicesBlock = try XCTUnwrap(compose.components(separatedBy: "\nservices:\n").last?.components(separatedBy: "\nvolumes:\n").first)
+        let names = servicesBlock.split(separator: "\n").compactMap { line -> String? in
+            guard line.hasPrefix("  "), !line.hasPrefix("   "), line.hasSuffix(":") else { return nil }
+            return line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ":", with: "")
+        }
+        XCTAssertEqual(Set(names), Set(OnboardingModel.coreServices + ["voice"]))
+        XCTAssertEqual(Set(HostController.services), Set(OnboardingModel.coreServices))
     }
 
     func testInstallCopiesStackAndKeepsEnv() throws {

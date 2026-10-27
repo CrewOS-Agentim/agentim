@@ -88,10 +88,10 @@ final class OnboardingModel {
             try env.text.write(to: envURL, atomically: true, encoding: .utf8)
             update("stack", .done)
 
-            // 2. Containers
+            // 2. Core containers first; voice starts in its own step so a voice problem can't block chat.
             update("start", .running(nil))
-            let up = await Shell.run(["docker", "compose", "up", "-d", "--build"], in: root)
-            guard up.ok else { throw SetupError(String(up.output.suffix(500))) }
+            let up = await Shell.run(["docker", "compose", "up", "-d", "--build"] + Self.coreServices, in: root)
+            guard up.ok else { throw SetupError(Self.explainDockerFailure(up.output)) }
             append(up.output)
             update("start", .done)
 
@@ -105,6 +105,8 @@ final class OnboardingModel {
             if case .voice(let stt, let tts) = plan.voice.kind {
                 update("voice", .running(nil))
                 do {
+                    let voiceUp = await Shell.run(["docker", "compose", "up", "-d", "voice"], in: root)
+                    guard voiceUp.ok else { throw SetupError(Self.explainDockerFailure(voiceUp.output)) }
                     try await waitFor(URL(string: "http://localhost:8000/health")!, timeout: 600)
                     for model in [stt, tts] { try await downloadVoiceModel(model) }
                     update("voice", .done)
@@ -135,6 +137,26 @@ final class OnboardingModel {
                 tasks[running].status = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// Everything except the optional voice service.
+    static let coreServices = ["ollama", "runner", "gateway", "whatsapp"]
+
+    /// Turns Docker's pull errors into something a person can act on.
+    nonisolated static func explainDockerFailure(_ output: String) -> String {
+        let tail = String(output.trimmingCharacters(in: .whitespacesAndNewlines).suffix(300))
+        let lower = output.lowercased()
+        if lower.contains("error getting credentials") || lower.contains("denied") || lower.contains("unauthorized") {
+            return "Docker couldn't download an image (\(tail)). If a Keychain prompt is open, allow Docker to use it; "
+                + "otherwise quit and reopen Docker Desktop (or sign out of it), then press Install again."
+        }
+        if lower.contains("no space left") {
+            return "Docker ran out of disk space. Free some space in Docker Desktop → Settings → Resources, then try again."
+        }
+        if lower.contains("cannot connect to the docker daemon") || lower.contains("is the docker daemon running") {
+            return "Docker isn't running. Open Docker Desktop, wait for it to start, then press Install again."
+        }
+        return tail
     }
 
     private func name(for ref: String) -> String {
