@@ -1,8 +1,11 @@
 import SwiftUI
 
+/// Messages-style two panes: conversations on the left, the open chat on the right.
+/// Selection-driven (no navigation path), so switching sidebar sections is always safe.
 struct ConversationListView: View {
     @Environment(AppStore.self) private var store
-    @State private var path: [UUID] = []
+    // `-openChat YES` opens the most recent chat (used for screenshots).
+    @State private var selection: UUID? = nil
     @State private var search = ""
 
     private var filtered: [Conversation] {
@@ -15,18 +18,18 @@ struct ConversationListView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            List {
+        HSplitView {
+            List(selection: $selection) {
                 ForEach(filtered) { conversation in
-                    NavigationLink(value: conversation.id) {
-                        ConversationRow(conversation: conversation, agent: store.agent(for: conversation))
-                    }
+                    ConversationRow(conversation: conversation, agent: store.agent(for: conversation))
+                        .tag(conversation.id)
+                        .contextMenu {
+                            Button("Delete", role: .destructive) { delete([conversation.id]) }
+                        }
                 }
-                .onDelete { offsets in
-                    let ids = offsets.map { filtered[$0].id }
-                    store.conversations.removeAll { ids.contains($0.id) }
-                }
+                .onDelete { offsets in delete(offsets.map { filtered[$0].id }) }
             }
+            .searchable(text: $search, placement: .sidebar)
             .overlay {
                 if store.conversations.isEmpty {
                     ContentUnavailableView(
@@ -34,23 +37,41 @@ struct ConversationListView: View {
                         description: Text("Start one with any agent. The router picks the best model for each message."))
                 }
             }
-            .searchable(text: $search)
-            .navigationTitle("Chats")
-            .navigationDestination(for: UUID.self) { ChatView(conversationID: $0) }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        ForEach(store.agents) { agent in
-                            Button("\(agent.emoji) \(agent.name)") {
-                                path.append(store.newConversation(agent: agent).id)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
+            .frame(minWidth: 260, idealWidth: 300, maxWidth: 380)
+
+            Group {
+                if let selection {
+                    ChatView(conversationID: selection).id(selection)
+                } else {
+                    ContentUnavailableView("Pick a chat", systemImage: "bubble.left.and.bubble.right",
+                                           description: Text("Or start a new one with ⌘N."))
                 }
             }
+            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
         }
+        .navigationTitle("Chats")
+        .onAppear {
+            if selection == nil, UserDefaults.standard.bool(forKey: "openChat") { selection = filtered.first?.id }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    ForEach(store.agents) { agent in
+                        Button("\(agent.emoji) \(agent.name)") { selection = store.newConversation(agent: agent).id }
+                    }
+                } label: {
+                    Label("New chat", systemImage: "square.and.pencil")
+                } primaryAction: {
+                    if let agent = store.agents.first { selection = store.newConversation(agent: agent).id }
+                }
+                .keyboardShortcut("n")
+            }
+        }
+    }
+
+    private func delete(_ ids: [UUID]) {
+        if let selection, ids.contains(selection) { self.selection = nil }
+        store.conversations.removeAll { ids.contains($0.id) }
     }
 }
 

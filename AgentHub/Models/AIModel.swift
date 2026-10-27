@@ -27,7 +27,7 @@ enum ModelLocation: Codable, Hashable {
     case cloud(providerID: String)
     /// A Hugging Face repo downloaded to the device and run with MLX.
     case local(repoID: String)
-    /// Served by a computer the user owns (AgentHub Runner, Ollama, LM Studio, Docker...).
+    /// Served by a computer the user owns (agentim runner, Ollama, LM Studio, Docker...).
     case server(serverID: UUID)
 }
 
@@ -66,7 +66,7 @@ struct AIModel: Identifiable, Codable, Hashable {
     var locationSymbol: String {
         switch location {
         case .cloud: "cloud"
-        case .local: "iphone"
+        case .local: "laptopcomputer"
         case .server: "desktopcomputer"
         }
     }

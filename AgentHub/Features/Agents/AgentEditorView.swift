@@ -37,9 +37,9 @@ struct AgentEditorView: View {
                 if isRemote {
                     Section("Endpoint") {
                         TextField("https://my-agent.example.com/v1/chat/completions", text: $endpoint)
-                            .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                         TextField("Model / agent id", text: $remoteModel)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                         SecureField("Bearer token (optional)", text: $remoteKey)
                     }
                 } else {
@@ -53,7 +53,7 @@ struct AgentEditorView: View {
                                 Text(model.displayName).tag(ModelPreference.pinned(model.id))
                             }
                         }
-                        Toggle("Prefer on-device models", isOn: $agent.preferLocal)
+                        Toggle("Prefer private models (this Mac or your servers)", isOn: $agent.preferLocal)
                     } header: {
                         Text("Routing")
                     } footer: {
@@ -73,7 +73,6 @@ struct AgentEditorView: View {
                 }
             }
             .navigationTitle(agent.name.isEmpty ? "New Agent" : agent.name)
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Talks to a LocalServer: the AgentHub Runner's management API, or the
+/// Talks to a LocalServer: the agentim runner's management API, or the
 /// `/models` list of a plain OpenAI-compatible server.
 struct RunnerClient {
     var server: LocalServer

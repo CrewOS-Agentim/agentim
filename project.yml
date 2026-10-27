@@ -1,8 +1,8 @@
-name: AgentHub
+name: agentim
 options:
-  bundleIdPrefix: com.agenthub
+  bundleIdPrefix: com.agentim
   deploymentTarget:
-    iOS: "17.0"
+    macOS: "14.0"
   createIntermediateGroups: true
 
 settings:
@@ -10,6 +10,10 @@ settings:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+    # Signs to run locally; set your team in Xcode to distribute.
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
 
 packages:
   MLXSwiftLM:
@@ -22,9 +26,15 @@ packages:
 targets:
   AgentHub:
     type: application
-    platform: iOS
+    platform: macOS
     sources:
       - AgentHub
+      # Built-in skills and agents are shared with the gateway.
+      - path: gateway/skills
+        type: folder
+        buildPhase: resources
+      - path: gateway/config/agents.json
+        buildPhase: resources
     dependencies:
       - package: MLXSwiftLM
         product: MLXLLM
@@ -32,32 +42,29 @@ targets:
         product: MLXLMCommon
       - package: SwiftTransformers
         product: Tokenizers
-    entitlements:
-      path: AgentHub/Resources/AgentHub.entitlements
-      properties:
-        com.apple.developer.kernel.increased-memory-limit: true
     info:
       path: AgentHub/Resources/Info.plist
       properties:
-        CFBundleDisplayName: AgentHub
-        UILaunchScreen: {}
-        UIApplicationSupportsIndirectInputEvents: true
-        NSLocalNetworkUsageDescription: AgentHub connects to model servers on your network, like the AgentHub Runner, Ollama or LM Studio.
+        CFBundleDisplayName: agentim
+        CFBundleName: agentim
+        LSApplicationCategoryType: public.app-category.productivity
+        NSHumanReadableCopyright: MIT License
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-        UISupportedInterfaceOrientations:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.agenthub.app
-        TARGETED_DEVICE_FAMILY: "1,2"
+        PRODUCT_NAME: agentim
+        PRODUCT_MODULE_NAME: AgentHub
+        PRODUCT_BUNDLE_IDENTIFIER: com.agentim.mac
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: NO
+        # Not sandboxed: the control center runs docker, pmset and launchctl for you.
+        ENABLE_APP_SANDBOX: NO
 
   AgentHubTests:
     type: bundle.unit-test
-    platform: iOS
+    platform: macOS
     sources:
       - AgentHubTests
     dependencies:
@@ -65,7 +72,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/AgentHub.app/AgentHub"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/agentim.app/Contents/MacOS/agentim"
         BUNDLE_LOADER: "$(TEST_HOST)"
 
 schemes:

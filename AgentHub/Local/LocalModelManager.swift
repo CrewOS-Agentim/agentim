@@ -22,7 +22,7 @@ final class LocalModelManager {
 
     nonisolated static var modelsDirectory: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Models", isDirectory: true)
+            .appendingPathComponent("agentim/Models", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

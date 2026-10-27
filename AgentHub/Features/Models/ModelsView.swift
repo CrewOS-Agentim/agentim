@@ -2,13 +2,14 @@ import SwiftUI
 
 struct ModelsView: View {
     @Environment(AppStore.self) private var store
-    @State private var filter: Filter = .all
+    /// `-modelsFilter Servers` on launch picks the starting filter (used for screenshots).
+    @State private var filter = Filter(rawValue: UserDefaults.standard.string(forKey: "modelsFilter") ?? "") ?? .all
     @State private var addingCustom = false
     @State private var browsingHub = false
     @State private var editingServer: LocalServer?
 
     enum Filter: String, CaseIterable, Identifiable {
-        case all = "All", local = "On-device", servers = "Servers", cloud = "Cloud"
+        case all = "All", local = "This Mac", servers = "Servers", cloud = "Cloud"
         var id: String { rawValue }
     }
 
@@ -52,7 +53,7 @@ struct ModelsView: View {
         if store.servers.isEmpty {
             Section {
                 Button { editingServer = newServer } label: {
-                    Label("Add a computer running the AgentHub Runner, Ollama, LM Studio or Docker", systemImage: "plus.circle")
+                    Label("Add a computer running the agentim runner, Ollama, LM Studio or Docker", systemImage: "plus.circle")
                 }
             } header: {
                 Text("Your servers")
@@ -76,7 +77,7 @@ struct ModelsView: View {
                 DownloadRow(repo: repo)
             }
         } header: {
-            Text("On-device")
+            Text("This Mac")
         } footer: {
             Text("Runs privately with MLX, works offline, free. Swipe to delete and free up storage.")
         }
@@ -85,7 +86,7 @@ struct ModelsView: View {
             !store.installedLocalModels.contains { $0.id == s.id } && store.localModels.downloads[s.modelName] == nil
         }
         if !suggestions.isEmpty {
-            Section("Suggested for this device") {
+            Section("Suggested for this Mac") {
                 ForEach(suggestions) { model in
                     NavigationLink { LocalModelDetailView(repo: model.modelName) } label: {
                         ModelRow(model: model, available: false)
@@ -140,7 +141,7 @@ struct ModelRow: View {
                 ForEach(model.capabilities.sorted { $0.rawValue < $1.rawValue }) { Tag(text: $0.label, symbol: "checkmark") }
             }
             HStack(spacing: 12) {
-                Text("\(model.contextWindow / 1_000)K context")
+                if !model.isMedia { Text("\(model.contextWindow / 1_000)K context") }
                 Text(model.costTier == 0 ? "Free" : String(repeating: "$", count: model.costTier))
                 Text(String(repeating: "★", count: model.qualityTier))
             }
@@ -207,10 +208,10 @@ private struct CustomModelView: View {
                     ForEach(store.providers) { Text($0.name).tag($0.id) }
                 }
                 TextField("Model id (e.g. deepseek/deepseek-r1)", text: $modelName)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                 TextField("Display name", text: $displayName)
                 TextField("Alias for @mentions", text: $alias)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .autocorrectionDisabled()
                 Section("Router hints") {
                     ForEach(Capability.allCases) { cap in
                         Toggle(cap.label, isOn: Binding(
@@ -223,7 +224,6 @@ private struct CustomModelView: View {
                 }
             }
             .navigationTitle("Add Model")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

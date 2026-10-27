@@ -69,7 +69,7 @@ struct LocalModelDetailView: View {
                     LabeledContent("Files", value: "\(candidate.files.count)")
                 }
             }
-            Section("Will it run on this device?") {
+            Section("Will it run on this Mac?") {
                 if let assessment = candidate?.assessment {
                     AssessmentView(assessment: assessment)
                 } else if let error {
@@ -81,7 +81,6 @@ struct LocalModelDetailView: View {
             Section { action }
         }
         .navigationTitle(repo.split(separator: "/").last.map(String.init) ?? repo)
-        .navigationBarTitleDisplayMode(.inline)
         .task {
             do {
                 candidate = try await store.localModels.inspect(repo: repo, token: store.huggingFaceToken)

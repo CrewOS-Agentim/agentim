@@ -1,4 +1,8 @@
+import json
+import os
+import re
 import unittest
+import urllib.request
 
 import runner
 
@@ -56,6 +60,61 @@ class MemoryTests(unittest.TestCase):
         self.assertGreater(total, 0)
         self.assertLessEqual(available, total)
         self.assertLessEqual(ceiling, total)
+
+
+class LTXChatTests(unittest.TestCase):
+    """LTX through the chat API, with a fake LTX so nothing renders."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        import threading
+        from http.server import ThreadingHTTPServer
+
+        cls.tmp = tempfile.mkdtemp()
+        cls.video = os.path.join(cls.tmp, "clip.mp4")
+        with open(cls.video, "wb") as f:
+            f.write(b"0123456789")
+        runner.FILES_DIR = os.path.join(cls.tmp, "files")
+        runner.TOKEN = "t"
+        runner.LTX.generate = lambda kind, prompt: cls.video
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), runner.Handler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.base = f"http://127.0.0.1:{cls.server.server_port}"
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+
+    def post(self, body):
+        req = urllib.request.Request(f"{self.base}/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Authorization": "Bearer t", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.headers.get("Content-Type"), resp.read().decode()
+
+    def test_non_streaming_returns_json_with_link(self):
+        content_type, raw = self.post({"model": "ltx/video", "stream": False,
+                                       "messages": [{"role": "user", "content": "a fox"}]})
+        self.assertEqual(content_type, "application/json")
+        text = json.loads(raw)["choices"][0]["message"]["content"]
+        url = re.search(r"\[video\]\((http://[^)]+)\)", text).group(1)
+        with urllib.request.urlopen(url, timeout=5) as resp:  # the file is served back
+            self.assertEqual(resp.read(), b"0123456789")
+
+    def test_streaming_returns_sse(self):
+        content_type, raw = self.post({"model": "ltx/video", "stream": True,
+                                       "messages": [{"role": "user", "content": "a fox"}]})
+        self.assertEqual(content_type, "text/event-stream")
+        self.assertIn("[video](", raw)
+        self.assertTrue(raw.rstrip().endswith("data: [DONE]"))
+
+    def test_range_requests_for_video_players(self):
+        _, raw = self.post({"model": "ltx/video", "messages": [{"role": "user", "content": "x"}]})
+        url = re.search(r"\((http://[^)]+)\)", raw).group(1)
+        req = urllib.request.Request(url, headers={"Range": "bytes=2-4"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 206)
+            self.assertEqual(resp.read(), b"234")
 
 
 if __name__ == "__main__":

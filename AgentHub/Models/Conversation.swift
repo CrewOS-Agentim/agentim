@@ -24,7 +24,13 @@ struct Conversation: Identifiable, Codable, Hashable {
     var pinnedModelID: String?
     var updatedAt = Date()
 
+    /// Last message as plain text (markdown markers removed) for list rows.
     var preview: String {
-        messages.last(where: { $0.role != .system })?.content ?? "New conversation"
+        guard let content = messages.last(where: { $0.role != .system })?.content else { return "New conversation" }
+        return content
+            .replacingOccurrences(of: #"\[(video|image)\]\([^)]*\)"#, with: "🎬", options: .regularExpression)
+            .replacingOccurrences(of: #"[*_`#>]+"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
     }
 }

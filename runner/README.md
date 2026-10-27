@@ -1,6 +1,6 @@
-# AgentHub Runner
+# agentim runner
 
-Lets the AgentHub iPhone app use models running on your own computer, either natively or in Docker. It uses only the Python standard library.
+Lets agentim (the gateway and the Mac app) use models running on your own computer, either natively or in Docker. It uses only the Python standard library.
 
 | | |
 |---|---|
@@ -18,7 +18,7 @@ python3 runner.py
 It prints something like:
 
 ```
-AgentHub Runner 0.1.0 on port 8765 (native)
+agentim runner 0.1.0 on port 8765 (native)
 Memory: 48.0 GB total, 13.0 GB available
   ollama    http://localhost:11434    up
   ltx       up

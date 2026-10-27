@@ -1,0 +1,80 @@
+# agentim: the default, always-on stack.
+#
+#   cp .env.example .env    # add your bot tokens + allowed users
+#   docker compose up -d
+#
+# Everything restarts on its own (crash, Docker restart, reboot).
+# On macOS, run deploy/macos/install.sh once so Docker itself comes back after
+# a reboot and the Mac stays awake with the lid closed while charging.
+name: agentim
+
+services:
+  # Local Hugging Face models (GGUF), served by Ollama. Pulled on first start
+  # after the runner checks they fit in memory.
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+    restart: unless-stopped
+    # Linux + NVIDIA: uncomment to use the GPU.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+
+  # Memory checks, model pulls, one OpenAI-compatible API over every backend.
+  runner:
+    build: ./runner
+    environment:
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}
+      OLLAMA_URL: http://ollama:11434
+    volumes:
+      - runner-data:/data
+    ports:
+      - "8765:8765"   # for the iOS app
+    depends_on: [ollama]
+    restart: unless-stopped
+
+  # Telegram, Slack and WhatsApp to agents, skills and the router.
+  gateway:
+    build: ./gateway
+    env_file: .env
+    environment:
+      # The native runner on the Mac (deploy/macos) adds LTX video; harmless if it isn't running.
+      RUNNER_URLS: http://runner:8765,http://host.docker.internal:8766
+      WAHA_URL: http://whatsapp:3000
+      WAHA_API_KEY: ${WAHA_API_KEY:-}
+    volumes:
+      - gateway-data:/data
+    ports:
+      - "8780:8780"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on: [runner, whatsapp]
+    restart: unless-stopped
+
+  # WhatsApp bridge (WAHA). Link your number once: open http://localhost:3000/dashboard and scan the QR.
+  whatsapp:
+    image: devlikeapro/waha:latest
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:-}
+      WHATSAPP_API_KEY: ${WAHA_API_KEY:-}
+      WAHA_DASHBOARD_USERNAME: ${WAHA_DASHBOARD_USERNAME:-admin}
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_DASHBOARD_PASSWORD:?set WAHA_DASHBOARD_PASSWORD in .env}
+      WHATSAPP_DEFAULT_ENGINE: WEBJS
+      WHATSAPP_RESTART_ALL_SESSIONS: "True"
+      WHATSAPP_HOOK_URL: http://gateway:8780/webhooks/whatsapp?secret=${AGENTIM_WEBHOOK_SECRET:?set AGENTIM_WEBHOOK_SECRET in .env}
+      WHATSAPP_HOOK_EVENTS: message
+    volumes:
+      - whatsapp-sessions:/app/.sessions
+    ports:
+      - "127.0.0.1:3000:3000"   # dashboard for the QR code; local only
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
+  runner-data:
+  gateway-data:
+  whatsapp-sessions:
