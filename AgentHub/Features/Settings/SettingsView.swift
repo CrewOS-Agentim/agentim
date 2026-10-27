@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
+    @State private var editingServer: LocalServer?
 
     var body: some View {
         @Bindable var store = store
@@ -19,6 +20,31 @@ struct SettingsView: View {
                     Text("Accounts")
                 } footer: {
                     Text("Download on-device models and use Hugging Face Inference Providers with one token.")
+                }
+
+                Section {
+                    ForEach(store.servers) { server in
+                        Button { editingServer = server } label: {
+                            LabeledContent {
+                                if case .online? = store.serverStatus[server.id] {
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                                } else {
+                                    Image(systemName: "circle").foregroundStyle(.secondary)
+                                }
+                            } label: {
+                                Label(server.name, systemImage: "desktopcomputer")
+                            }
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                    .onDelete { offsets in offsets.map { store.servers[$0] }.forEach(store.removeServer) }
+                    Button("Add server", systemImage: "plus") {
+                        editingServer = LocalServer(name: "", baseURL: URL(string: "http://localhost")!)
+                    }
+                } header: {
+                    Text("Local servers")
+                } footer: {
+                    Text("Models on your own computers: the AgentHub Runner (native or Docker, with memory checks and LTX), or Ollama, LM Studio and other OpenAI-compatible servers.")
                 }
 
                 Section("Cloud providers") {
@@ -57,6 +83,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .sheet(item: $editingServer) { ServerEditorView(server: $0) }
         }
     }
 }

@@ -28,6 +28,8 @@ enum PromptClassifier {
     }
 
     private static func primaryCapability(_ text: String, rawLength: Int, tokens: Int) -> Capability {
+        if contains(text, videoSignals) { return .video }
+        if contains(text, imageSignals) { return .image }
         if tokens > 24_000 { return .longContext }
         if contains(text, codeSignals) { return .coding }
         if contains(text, reasoningSignals) { return .reasoning }
@@ -57,6 +59,14 @@ enum PromptClassifier {
     ]
     static let creativeSignals = [
         "story", "poem", "write a", "draft", "rewrite", "slogan", "lyrics", "blog post", "tone",
+    ]
+    static let videoSignals = [
+        "make a video", "generate a video", "create a video", "render a video", "video of", "video clip",
+        "animate ", "animation of", "short film", "film of",
+    ]
+    static let imageSignals = [
+        "make an image", "generate an image", "create an image", "image of", "picture of", "photo of",
+        "draw ", "illustrate", "illustration of", "render an image", "poster of",
     ]
     static let sensitiveSignals = [
         "password", "passcode", "ssn", "social security", "diagnosis", "medical", "my salary",

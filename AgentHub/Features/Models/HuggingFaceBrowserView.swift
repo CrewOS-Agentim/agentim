@@ -71,14 +71,7 @@ struct LocalModelDetailView: View {
             }
             Section("Will it run on this device?") {
                 if let assessment = candidate?.assessment {
-                    Label(title(assessment.verdict), systemImage: symbol(assessment.verdict))
-                        .foregroundStyle(color(assessment.verdict))
-                        .font(.headline)
-                    Text(assessment.message).font(.subheadline)
-                    LabeledContent("Memory needed", value: MemoryAssessment.format(assessment.requiredBytes))
-                    LabeledContent("Free for apps now", value: MemoryAssessment.format(assessment.availableBytes))
-                    LabeledContent("Device app limit", value: MemoryAssessment.format(assessment.deviceBytes))
-                    LabeledContent("Free storage", value: MemoryAssessment.format(assessment.freeDiskBytes))
+                    AssessmentView(assessment: assessment)
                 } else if let error {
                     Text(error).foregroundStyle(.red)
                 } else {
@@ -113,31 +106,6 @@ struct LocalModelDetailView: View {
                 Label("Download", systemImage: "arrow.down.circle.fill")
             }
             .disabled(!candidate.assessment.canDownload)
-        }
-    }
-
-    private func title(_ verdict: MemoryAssessment.Verdict) -> String {
-        switch verdict {
-        case .fits: "Fits"
-        case .tight: "Tight fit"
-        case .tooLarge: "Too large for this device"
-        case .notEnoughDisk: "Not enough storage"
-        }
-    }
-
-    private func symbol(_ verdict: MemoryAssessment.Verdict) -> String {
-        switch verdict {
-        case .fits: "checkmark.circle.fill"
-        case .tight: "exclamationmark.triangle.fill"
-        case .tooLarge, .notEnoughDisk: "xmark.octagon.fill"
-        }
-    }
-
-    private func color(_ verdict: MemoryAssessment.Verdict) -> Color {
-        switch verdict {
-        case .fits: .green
-        case .tight: .orange
-        case .tooLarge, .notEnoughDisk: .red
         }
     }
 }

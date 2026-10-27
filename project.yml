@@ -42,6 +42,9 @@ targets:
         CFBundleDisplayName: AgentHub
         UILaunchScreen: {}
         UIApplicationSupportsIndirectInputEvents: true
+        NSLocalNetworkUsageDescription: AgentHub connects to model servers on your network, like the AgentHub Runner, Ollama or LM Studio.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

@@ -19,6 +19,7 @@ struct MemoryAssessment: Equatable {
     var availableBytes: Int64
     var deviceBytes: Int64
     var freeDiskBytes: Int64
+    var hostLabel = "this device"
 
     var canDownload: Bool { verdict == .fits || verdict == .tight }
 
@@ -27,7 +28,7 @@ struct MemoryAssessment: Equatable {
         switch verdict {
         case .fits: return "Needs ~\(need) of memory. \(Self.format(availableBytes)) available."
         case .tight: return "Needs ~\(need); only \(Self.format(availableBytes)) free right now. Close other apps before running it."
-        case .tooLarge: return "Needs ~\(need), but this device can give an app at most ~\(Self.format(deviceBytes))."
+        case .tooLarge: return "Needs ~\(need), but \(hostLabel) can give a model at most ~\(Self.format(deviceBytes))."
         case .notEnoughDisk: return "Download needs more storage than the \(Self.format(freeDiskBytes)) free."
         }
     }

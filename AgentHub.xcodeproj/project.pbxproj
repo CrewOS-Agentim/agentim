@@ -17,6 +17,8 @@
 		49B2EAC03B090A41E279A1F4 /* AgentEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92AB0D8A63ED4E5D1DAC80D8 /* AgentEditorView.swift */; };
 		4DCC67EFAE8738FD75439A69 /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = D18659ECD00B55FF8C06C33E /* MLXLLM */; };
 		505E1B30425D054F3C3D1AD3 /* ModelRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A97DC865313D6BD296D85208 /* ModelRouter.swift */; };
+		5AA5EE499ECB7EB11982E8E8 /* LocalServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C2D73968D572A7D3BF6F6E3 /* LocalServer.swift */; };
+		5B6E32197A8F93AB327DF5DC /* ServerRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E7AA77B46B50694781A7F4 /* ServerRoutingTests.swift */; };
 		5D18E8951D92B66BD80D85A0 /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = 6E997546AFDBEE3A4989F1C7 /* Tokenizers */; };
 		67382C15FA1DC15741E9DC37 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5FB651DDD6872148D9EBC5D7 /* ChatView.swift */; };
 		679C64662B3C0F9EA064F949 /* RouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDBDD193146FDA6EE6FD90F4 /* RouterTests.swift */; };
@@ -28,6 +30,7 @@
 		81276727BCBAB1C9330CE29A /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2E92A4257505B3A6D859C00 /* Keychain.swift */; };
 		84A0FA273CC7749AFAD5771D /* AgentListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A29A9397C72D63FAFF8FE81 /* AgentListView.swift */; };
 		87CD82475AF118767249E435 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CDAFB712529C0CA7D411F2B /* ModelsView.swift */; };
+		970C3AD09064371501C450A3 /* RunnerIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5A86DB0F2E33965A481ED13 /* RunnerIntegrationTests.swift */; };
 		99BC3746716AB09E705C68FC /* Agent.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7D61EF0F0AB839E4B05E933 /* Agent.swift */; };
 		9D3684E26E12490FEB2093AE /* AIModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 203C333D7EF94E151EDBA5C8 /* AIModel.swift */; };
 		A120582417AED2BA983D9D27 /* HuggingFaceBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1909907F1FE54A01C9075A8 /* HuggingFaceBrowserView.swift */; };
@@ -36,6 +39,8 @@
 		DDE1B2D096250DCD2B63B5DF /* PromptClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4046E480A17AC131D4BF5FD /* PromptClassifier.swift */; };
 		E0069675AA5144E6D4460324 /* MLXChatClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6789D1A2E33F94F90AC615E1 /* MLXChatClient.swift */; };
 		E815407E6D0BD01AF246A379 /* Skill.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C15919EBCA6CC469A64A06C /* Skill.swift */; };
+		F10FCFECD0A620454193C005 /* RunnerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C55720114825757E7142772 /* RunnerClient.swift */; };
+		F4F3B29D9F3180C7C9776EBE /* ServerViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27FF7EEB8AC06AFB932D96C2 /* ServerViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -49,10 +54,12 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0C55720114825757E7142772 /* RunnerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerClient.swift; sourceTree = "<group>"; };
 		1A29A9397C72D63FAFF8FE81 /* AgentListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentListView.swift; sourceTree = "<group>"; };
 		1D5BC7232722004341C2D4FD /* Conversation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Conversation.swift; sourceTree = "<group>"; };
 		1F6B10A14F1A1248C0F43688 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		203C333D7EF94E151EDBA5C8 /* AIModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIModel.swift; sourceTree = "<group>"; };
+		27FF7EEB8AC06AFB932D96C2 /* ServerViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerViews.swift; sourceTree = "<group>"; };
 		28E3C2D031843A3A6A8BCF36 /* Provider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
 		42EB83E59C0691AA3CEE547F /* ConversationListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConversationListView.swift; sourceTree = "<group>"; };
 		50F3396A73B653AC5D840432 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -61,11 +68,14 @@
 		6789D1A2E33F94F90AC615E1 /* MLXChatClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLXChatClient.swift; sourceTree = "<group>"; };
 		6CDAFB712529C0CA7D411F2B /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 		79E06DE014F1BF1C6870C5D3 /* AgentHubTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AgentHubTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		79E7AA77B46B50694781A7F4 /* ServerRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerRoutingTests.swift; sourceTree = "<group>"; };
+		7C2D73968D572A7D3BF6F6E3 /* LocalServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalServer.swift; sourceTree = "<group>"; };
 		87CF78C83C1F6271447FF8A7 /* AgentHub.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AgentHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8C4CE5922AA13D26F3D5BC11 /* AgentHub.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = AgentHub.entitlements; sourceTree = "<group>"; };
 		92AB0D8A63ED4E5D1DAC80D8 /* AgentEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentEditorView.swift; sourceTree = "<group>"; };
 		9C15919EBCA6CC469A64A06C /* Skill.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Skill.swift; sourceTree = "<group>"; };
 		A072C6FB55039F23927E51B9 /* ChatClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatClient.swift; sourceTree = "<group>"; };
+		A5A86DB0F2E33965A481ED13 /* RunnerIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerIntegrationTests.swift; sourceTree = "<group>"; };
 		A9131EFD573FFCCEC938524D /* LocalModelManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalModelManager.swift; sourceTree = "<group>"; };
 		A97DC865313D6BD296D85208 /* ModelRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelRouter.swift; sourceTree = "<group>"; };
 		AF69F2A5D46DEE85849A4B18 /* AnthropicClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnthropicClient.swift; sourceTree = "<group>"; };
@@ -118,6 +128,7 @@
 				C7D61EF0F0AB839E4B05E933 /* Agent.swift */,
 				203C333D7EF94E151EDBA5C8 /* AIModel.swift */,
 				1D5BC7232722004341C2D4FD /* Conversation.swift */,
+				7C2D73968D572A7D3BF6F6E3 /* LocalServer.swift */,
 				28E3C2D031843A3A6A8BCF36 /* Provider.swift */,
 				9C15919EBCA6CC469A64A06C /* Skill.swift */,
 			);
@@ -154,6 +165,8 @@
 			isa = PBXGroup;
 			children = (
 				BDBDD193146FDA6EE6FD90F4 /* RouterTests.swift */,
+				A5A86DB0F2E33965A481ED13 /* RunnerIntegrationTests.swift */,
+				79E7AA77B46B50694781A7F4 /* ServerRoutingTests.swift */,
 			);
 			path = AgentHubTests;
 			sourceTree = "<group>";
@@ -175,6 +188,7 @@
 				2940CDF7525D45E999496950 /* Agents */,
 				B8C3D40CD2F1B90270EE582D /* Chats */,
 				6E8F546CF07CF19C566A0E11 /* Models */,
+				9C995AA5372F6DF9457EA072 /* Servers */,
 				DBBF4DD0A2D5672CB350B69C /* Settings */,
 				16533C2E2D7977B5D284CF22 /* Skills */,
 			);
@@ -199,6 +213,14 @@
 			path = Store;
 			sourceTree = "<group>";
 		};
+		9C995AA5372F6DF9457EA072 /* Servers */ = {
+			isa = PBXGroup;
+			children = (
+				27FF7EEB8AC06AFB932D96C2 /* ServerViews.swift */,
+			);
+			path = Servers;
+			sourceTree = "<group>";
+		};
 		A4A5BCEC01C6FF538CC2A892 /* AgentHub */ = {
 			isa = PBXGroup;
 			children = (
@@ -220,6 +242,7 @@
 				AF69F2A5D46DEE85849A4B18 /* AnthropicClient.swift */,
 				A072C6FB55039F23927E51B9 /* ChatClient.swift */,
 				F4B66C83F31345ABA60B5BD3 /* OpenAICompatibleClient.swift */,
+				0C55720114825757E7142772 /* RunnerClient.swift */,
 			);
 			path = Providers;
 			sourceTree = "<group>";
@@ -357,12 +380,15 @@
 				1F0AA30999A0860F68D49877 /* HuggingFaceClient.swift in Sources */,
 				81276727BCBAB1C9330CE29A /* Keychain.swift in Sources */,
 				779AD5FA55896BB0FEF34CE2 /* LocalModelManager.swift in Sources */,
+				5AA5EE499ECB7EB11982E8E8 /* LocalServer.swift in Sources */,
 				E0069675AA5144E6D4460324 /* MLXChatClient.swift in Sources */,
 				505E1B30425D054F3C3D1AD3 /* ModelRouter.swift in Sources */,
 				87CD82475AF118767249E435 /* ModelsView.swift in Sources */,
 				7B9C15F0EB37FA7C2C6FE854 /* OpenAICompatibleClient.swift in Sources */,
 				DDE1B2D096250DCD2B63B5DF /* PromptClassifier.swift in Sources */,
 				3B351A92975785E9331EB207 /* Provider.swift in Sources */,
+				F10FCFECD0A620454193C005 /* RunnerClient.swift in Sources */,
+				F4F3B29D9F3180C7C9776EBE /* ServerViews.swift in Sources */,
 				3E2DD6AB83CC82ED621141E3 /* SettingsView.swift in Sources */,
 				E815407E6D0BD01AF246A379 /* Skill.swift in Sources */,
 				2DE9D49862E3A591158D61CD /* SkillListView.swift in Sources */,
@@ -374,6 +400,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				679C64662B3C0F9EA064F949 /* RouterTests.swift in Sources */,
+				970C3AD09064371501C450A3 /* RunnerIntegrationTests.swift in Sources */,
+				5B6E32197A8F93AB327DF5DC /* ServerRoutingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

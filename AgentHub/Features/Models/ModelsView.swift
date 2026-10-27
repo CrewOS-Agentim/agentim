@@ -4,9 +4,11 @@ struct ModelsView: View {
     @Environment(AppStore.self) private var store
     @State private var filter: Filter = .all
     @State private var addingCustom = false
+    @State private var browsingHub = false
+    @State private var editingServer: LocalServer?
 
     enum Filter: String, CaseIterable, Identifiable {
-        case all = "All", local = "On-device", cloud = "Cloud"
+        case all = "All", local = "On-device", servers = "Servers", cloud = "Cloud"
         var id: String { rawValue }
     }
 
@@ -19,21 +21,44 @@ struct ModelsView: View {
                 .pickerStyle(.segmented)
                 .listRowBackground(Color.clear)
 
-                if filter != .cloud { localSections }
-                if filter != .local { cloudSections }
+                if filter == .all || filter == .local { localSections }
+                if filter == .all || filter == .servers { serverSections }
+                if filter == .all || filter == .cloud { cloudSections }
             }
+            .refreshable { await store.refreshServers() }
             .navigationTitle("Models")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
-                        NavigationLink { HuggingFaceBrowserView() } label: {
-                            Label("Browse Hugging Face", systemImage: "magnifyingglass")
-                        }
+                        Button("Browse Hugging Face", systemImage: "magnifyingglass") { browsingHub = true }
+                        Button("Add local server", systemImage: "desktopcomputer") { editingServer = newServer }
                         Button("Add cloud model id", systemImage: "cloud") { addingCustom = true }
                     } label: { Image(systemName: "plus") }
                 }
             }
+            .navigationDestination(isPresented: $browsingHub) { HuggingFaceBrowserView() }
             .sheet(isPresented: $addingCustom) { CustomModelView() }
+            .sheet(item: $editingServer) { ServerEditorView(server: $0) }
+        }
+    }
+
+    private var newServer: LocalServer {
+        LocalServer(name: "", baseURL: URL(string: "http://localhost")!)
+    }
+
+    @ViewBuilder
+    private var serverSections: some View {
+        ForEach(store.servers) { ServerSection(server: $0) }
+        if store.servers.isEmpty {
+            Section {
+                Button { editingServer = newServer } label: {
+                    Label("Add a computer running the AgentHub Runner, Ollama, LM Studio or Docker", systemImage: "plus.circle")
+                }
+            } header: {
+                Text("Your servers")
+            } footer: {
+                Text("Run bigger models on your Mac or PC (natively or in Docker) and LTX video, all private to your network.")
+            }
         }
     }
 
@@ -106,7 +131,7 @@ struct ModelRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Image(systemName: model.isLocal ? "iphone" : "cloud").foregroundStyle(.tint)
+                Image(systemName: model.locationSymbol).foregroundStyle(.tint)
                 Text(model.displayName).font(.headline)
                 Spacer()
                 Text("@\(model.alias)").font(.caption.monospaced()).foregroundStyle(.secondary)

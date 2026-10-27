@@ -15,6 +15,15 @@ final class AppStore {
         var installedLocalModels: [AIModel]
         var customProviders: [Provider]
         var router: RouterSettings
+        // Optional so files saved before servers existed still load.
+        var servers: [LocalServer]?
+        var serverModels: [AIModel]?
+    }
+
+    enum ServerStatus: Equatable {
+        case checking
+        case online(RunnerClient.System?)
+        case offline(String)
     }
 
     var agents: [Agent] = Agent.defaults { didSet { scheduleSave() } }
@@ -24,6 +33,10 @@ final class AppStore {
     var installedLocalModels: [AIModel] = [] { didSet { scheduleSave() } }
     var customProviders: [Provider] = [] { didSet { scheduleSave() } }
     var router = RouterSettings() { didSet { scheduleSave() } }
+    var servers: [LocalServer] = [] { didSet { scheduleSave() } }
+    /// Last known model list per server; only routed to while the server is online.
+    var serverModels: [AIModel] = [] { didSet { scheduleSave() } }
+    private(set) var serverStatus: [UUID: ServerStatus] = [:]
 
     /// Bumped when a Keychain value changes so views re-read connection state.
     private(set) var credentialsVersion = 0
@@ -69,7 +82,7 @@ final class AppStore {
     /// The HF token doubles as the key for Hugging Face Inference Providers.
     var huggingFaceToken: String? { apiKey(for: .huggingFace) }
 
-    var allModels: [AIModel] { AIModel.cloudCatalog + customModels + installedLocalModels }
+    var allModels: [AIModel] { AIModel.cloudCatalog + customModels + installedLocalModels + serverModels }
 
     /// What the router may choose from: connected providers + installed local weights.
     var availableModels: [AIModel] {
@@ -77,6 +90,7 @@ final class AppStore {
             switch model.location {
             case .cloud(let id): provider(id: id).map(isConnected) ?? false
             case .local(let repo): LocalModelManager.isInstalled(repo)
+            case .server(let id): if case .online? = serverStatus[id] { true } else { false }
             }
         }
     }
@@ -111,6 +125,59 @@ final class AppStore {
         localModels.delete(model.modelName)
         installedLocalModels.removeAll { $0.id == model.id }
         Task { await LocalModelCache.shared.unload() }
+    }
+
+    // MARK: - Local servers
+
+    func serverToken(_ server: LocalServer) -> String? {
+        _ = credentialsVersion
+        return Keychain.get(server.keychainAccount)
+    }
+
+    func saveServer(_ server: LocalServer, token: String) {
+        Keychain.set(token.trimmingCharacters(in: .whitespacesAndNewlines), for: server.keychainAccount)
+        credentialsVersion += 1
+        if let i = servers.firstIndex(where: { $0.id == server.id }) { servers[i] = server } else { servers.append(server) }
+        Task { await refresh(server) }
+    }
+
+    func removeServer(_ server: LocalServer) {
+        Keychain.set(nil, for: server.keychainAccount)
+        servers.removeAll { $0.id == server.id }
+        serverModels.removeAll { $0.serverID == server.id }
+        serverStatus[server.id] = nil
+    }
+
+    func runnerClient(_ server: LocalServer) -> RunnerClient {
+        RunnerClient(server: server, token: serverToken(server))
+    }
+
+    func refreshServers() async {
+        await withTaskGroup(of: Void.self) { group in
+            for server in servers { group.addTask { await self.refresh(server) } }
+        }
+    }
+
+    /// Re-reads a server's health, memory and models.
+    func refresh(_ server: LocalServer) async {
+        serverStatus[server.id] = .checking
+        let client = runnerClient(server)
+        do {
+            let system = server.kind == .runner ? try await client.system() : nil
+            let models = try await client.models().map { AIModel.server($0, on: server) }
+            serverModels = serverModels.filter { $0.serverID != server.id } + models
+            serverStatus[server.id] = .online(system)
+        } catch {
+            serverStatus[server.id] = .offline(error.localizedDescription)
+        }
+    }
+
+    func models(on server: LocalServer) -> [AIModel] { serverModels.filter { $0.serverID == server.id } }
+
+    func deleteServerModel(_ model: AIModel) async throws {
+        guard let server = servers.first(where: { $0.id == model.serverID }) else { return }
+        try await runnerClient(server).delete(model.modelName)
+        await refresh(server)
     }
 
     // MARK: - Conversations
@@ -229,6 +296,9 @@ final class AppStore {
         switch model.location {
         case .local(let repo):
             return MLXChatClient(repo: repo)
+        case .server(let id):
+            guard let server = servers.first(where: { $0.id == id }) else { return nil }
+            return OpenAICompatibleClient(baseURL: server.openAIBaseURL, apiKey: serverToken(server))
         case .cloud(let providerID):
             guard let provider = provider(id: providerID), let key = apiKey(for: provider) else { return nil }
             switch provider.wire {
@@ -265,6 +335,8 @@ final class AppStore {
         installedLocalModels = snapshot.installedLocalModels.filter { LocalModelManager.isInstalled($0.modelName) }
         customProviders = snapshot.customProviders
         router = snapshot.router
+        servers = snapshot.servers ?? []
+        serverModels = snapshot.serverModels ?? []
         isLoading = false
     }
 
@@ -281,7 +353,8 @@ final class AppStore {
     func saveNow() {
         let snapshot = Snapshot(
             agents: agents, skills: skills, conversations: conversations, customModels: customModels,
-            installedLocalModels: installedLocalModels, customProviders: customProviders, router: router)
+            installedLocalModels: installedLocalModels, customProviders: customProviders, router: router,
+            servers: servers, serverModels: serverModels)
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])

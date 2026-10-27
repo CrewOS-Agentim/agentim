@@ -37,11 +37,11 @@ enum SSE {
         return payload.isEmpty || payload == "[DONE]" ? nil : payload
     }
 
-    /// POSTs `body` and yields text deltas extracted by `delta` from each event.
-    static func stream(
+    /// Sends `request` and yields whatever `decode` extracts from each event (nil skips it).
+    static func stream<Event>(
         _ request: URLRequest,
-        delta: @escaping (Data) throws -> String?
-    ) -> AsyncThrowingStream<String, Error> {
+        decode: @escaping (Data) throws -> Event?
+    ) -> AsyncThrowingStream<Event, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -53,9 +53,9 @@ enum SSE {
                     }
                     for try await line in bytes.lines {
                         guard let payload = payload(fromLine: line),
-                              let text = try delta(Data(payload.utf8)), !text.isEmpty
+                              let event = try decode(Data(payload.utf8))
                         else { continue }
-                        continuation.yield(text)
+                        continuation.yield(event)
                     }
                     continuation.finish()
                 } catch {

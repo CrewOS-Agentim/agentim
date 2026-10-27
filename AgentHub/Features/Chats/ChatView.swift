@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 struct ChatView: View {
@@ -79,7 +80,7 @@ struct ChatView: View {
             ) {
                 Label("Auto (router)", systemImage: "wand.and.rays").tag(String?.none)
                 ForEach(store.availableModels) { model in
-                    Label(model.displayName, systemImage: model.isLocal ? "iphone" : "cloud").tag(Optional(model.id))
+                    Label(model.displayName, systemImage: model.locationSymbol).tag(Optional(model.id))
                 }
             }
         } label: {
@@ -105,7 +106,7 @@ private struct RoutePreview: View {
             } else if !text.isEmpty {
                 switch store.previewRoute(text, in: conversation) {
                 case .success(let decision):
-                    Label(decision.model.displayName, systemImage: decision.model.isLocal ? "iphone" : "cloud")
+                    Label(decision.model.displayName, systemImage: decision.model.locationSymbol)
                     Text("· \(decision.reason)").lineLimit(1)
                 case .failure(let error):
                     Label(error.localizedDescription, systemImage: "exclamationmark.triangle").lineLimit(1)
@@ -140,17 +141,42 @@ struct MessageRow: View {
             .background(background, in: RoundedRectangle(cornerRadius: 16))
             .foregroundStyle(message.role == .user ? Color.white : Color.primary)
 
+            ForEach(media, id: \.url) { item in
+                Group {
+                    if item.isVideo {
+                        VideoPlayer(player: AVPlayer(url: item.url))
+                    } else {
+                        AsyncImage(url: item.url) { $0.resizable().scaledToFit() } placeholder: { ProgressView() }
+                    }
+                }
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxWidth: 420)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+            }
+
             if message.role == .assistant, let model {
                 Label {
                     Text(model.displayName) + Text(message.routingReason.map { " · \($0)" } ?? "")
                 } icon: {
-                    Image(systemName: model.isLocal ? "iphone" : "cloud")
+                    Image(systemName: model.locationSymbol)
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
+    }
+
+    /// `[video](http://…mp4)` / `[image](http://…png)` links from media models (e.g. LTX via the runner).
+    private var media: [(url: URL, isVideo: Bool)] {
+        guard message.role == .assistant,
+              let regex = try? NSRegularExpression(pattern: #"\[(?:video|image)\]\((https?://[^)\s]+)\)"#)
+        else { return [] }
+        let text = message.content
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match in
+            guard let range = Range(match.range(at: 1), in: text), let url = URL(string: String(text[range])) else { return nil }
+            return (url, ["mp4", "mov", "m4v"].contains(url.pathExtension.lowercased()))
+        }
     }
 
     private var background: AnyShapeStyle {

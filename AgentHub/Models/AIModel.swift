@@ -2,7 +2,7 @@ import Foundation
 
 /// What a model is good at. The router matches these against the task.
 enum Capability: String, Codable, CaseIterable, Identifiable {
-    case coding, reasoning, creative, fast, longContext, general
+    case coding, reasoning, creative, fast, longContext, general, video, image
 
     var id: String { rawValue }
 
@@ -14,14 +14,21 @@ enum Capability: String, Codable, CaseIterable, Identifiable {
         case .fast: "Fast"
         case .longContext: "Long context"
         case .general: "General"
+        case .video: "Video"
+        case .image: "Image"
         }
     }
+
+    /// Generates media instead of text; only chosen when the message asks for it.
+    var isMedia: Bool { self == .video || self == .image }
 }
 
 enum ModelLocation: Codable, Hashable {
     case cloud(providerID: String)
     /// A Hugging Face repo downloaded to the device and run with MLX.
     case local(repoID: String)
+    /// Served by a computer the user owns (AgentHub Runner, Ollama, LM Studio, Docker...).
+    case server(serverID: UUID)
 }
 
 struct AIModel: Identifiable, Codable, Hashable {
@@ -41,9 +48,27 @@ struct AIModel: Identifiable, Codable, Hashable {
     var alias: String
     var isBuiltIn: Bool = true
 
-    var isLocal: Bool {
+    /// Private and free: runs on this device or on the user's own server.
+    var isLocal: Bool { isOnDevice || serverID != nil }
+
+    var isOnDevice: Bool {
         if case .local = location { return true }
         return false
+    }
+
+    var serverID: UUID? {
+        if case .server(let id) = location { return id }
+        return nil
+    }
+
+    var isMedia: Bool { !capabilities.isEmpty && capabilities.allSatisfy(\.isMedia) }
+
+    var locationSymbol: String {
+        switch location {
+        case .cloud: "cloud"
+        case .local: "iphone"
+        case .server: "desktopcomputer"
+        }
     }
 
     var providerID: String? {

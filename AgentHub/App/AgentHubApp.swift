@@ -9,10 +9,15 @@ struct AgentHubApp: App {
         WindowGroup {
             RootView()
                 .environment(store)
-                .task { await store.refreshHuggingFaceAccount() }
+                .task {
+                    async let account: Void = store.refreshHuggingFaceAccount()
+                    async let servers: Void = store.refreshServers()
+                    _ = await (account, servers)
+                }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { store.saveNow() }
+            if phase == .active { Task { await store.refreshServers() } }
         }
     }
 }

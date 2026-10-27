@@ -63,7 +63,11 @@ struct ModelRouter {
 
     func route(_ request: RoutingRequest) throws -> RoutingDecision {
         let (alias, cleaned) = Self.extractOverride(request.text)
-        let profile = PromptClassifier.classify(cleaned, history: request.history)
+        var profile = PromptClassifier.classify(cleaned, history: request.history)
+        // Asked for media but nothing can make it: answer in text instead.
+        if profile.primary.isMedia, !available.contains(where: { $0.capabilities.contains(profile.primary) }) {
+            profile.primary = .creative
+        }
 
         func decide(_ model: AIModel, _ reason: String) -> RoutingDecision {
             RoutingDecision(
@@ -83,16 +87,17 @@ struct ModelRouter {
             return decide(model, "\(request.agent?.name ?? "Agent") is pinned to this model")
         }
 
-        let locals = available.filter(\.isLocal)
+        // Your own computers count as private; with no network only the phone itself is reachable.
+        let locals = candidates(for: profile).filter { request.isOnline ? $0.isLocal : $0.isOnDevice }
         if !request.isOnline {
             guard let best = bestLocal(locals, profile) else { throw RoutingError.noModelsAvailable }
             return decide(best, "Offline, using on-device model")
         }
         if profile.isSensitive, settings.keepSensitiveLocal, let best = bestLocal(locals, profile) {
-            return decide(best, "Looks sensitive, kept on-device")
+            return decide(best, best.isOnDevice ? "Looks sensitive, kept on-device" : "Looks sensitive, kept on your server")
         }
         if request.agent?.preferLocal == true, let best = bestLocal(locals, profile) {
-            return decide(best, "\(request.agent?.name ?? "Agent") prefers on-device models")
+            return decide(best, "\(request.agent?.name ?? "Agent") prefers private models")
         }
 
         let ranking = ranked(for: profile, request: request)
@@ -110,8 +115,8 @@ struct ModelRouter {
     /// All usable models for the task, best first. Models whose context window
     /// can't hold the conversation are excluded.
     func ranked(for profile: TaskProfile, request: RoutingRequest) -> [AIModel] {
-        let fitting = available.filter { model in
-            model.contextWindow >= profile.estimatedTokens + 1_024 && (request.isOnline || model.isLocal)
+        let fitting = candidates(for: profile).filter { model in
+            model.contextWindow >= profile.estimatedTokens + 1_024 && (request.isOnline || model.isOnDevice)
         }
         let scored: [(model: AIModel, score: Double)] = fitting.map { ($0, score($0, profile)) }
         return scored
@@ -138,6 +143,12 @@ struct ModelRouter {
         }
         if settings.preferLocal && model.isLocal { score += 3 }
         return score
+    }
+
+    /// Media requests only go to media models; text requests never do.
+    private func candidates(for profile: TaskProfile) -> [AIModel] {
+        if profile.primary.isMedia { return available.filter { $0.capabilities.contains(profile.primary) } }
+        return available.filter { !$0.isMedia }
     }
 
     private func bestLocal(_ locals: [AIModel], _ profile: TaskProfile) -> AIModel? {
