@@ -17,6 +17,7 @@ import secrets
 import shlex
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import threading
@@ -645,7 +646,10 @@ class Projects:
         started = time.time()
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "agentim-live-check"})
-            with opener(req, timeout=20) as resp:
+            # Homebrew's Python ships without CA certificates; macOS keeps them in /etc/ssl/cert.pem.
+            cafile = "/etc/ssl/cert.pem" if os.path.exists("/etc/ssl/cert.pem") else None
+            kwargs = {"context": ssl.create_default_context(cafile=cafile)} if opener is urllib.request.urlopen else {}
+            with opener(req, timeout=20, **kwargs) as resp:
                 status = resp.status
         except urllib.error.HTTPError as e:
             status = e.code
