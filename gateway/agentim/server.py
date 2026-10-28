@@ -8,12 +8,14 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import __version__
+from .mcp import MCPServer
 
 log = logging.getLogger("agentim.server")
 
 
 def make_handler(gateway, channels, catalog):
     config = gateway.config
+    mcp = MCPServer(gateway, catalog)
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -40,8 +42,25 @@ def make_handler(gateway, channels, catalog):
         def log_message(self, fmt, *args):
             log.debug("%s %s", self.address_string(), fmt % args)
 
+        def mcp_authorized(self, path):
+            """/mcp with the API token, or /mcp/<AGENTIM_MCP_SECRET> (ChatGPT connectors can't send headers)."""
+            if path == "/mcp":
+                return self.authorized()
+            secret = path[len("/mcp/"):]
+            if config.mcp_secret and len(config.mcp_secret) >= 16 and secrets.compare_digest(secret, config.mcp_secret):
+                return True
+            self.send_json(401, {"error": "missing or wrong token"})
+            return False
+
         def do_GET(self):
             path = urllib.parse.urlparse(self.path).path
+            if path == "/mcp" or path.startswith("/mcp/"):
+                # No server-initiated stream: JSON responses only.
+                self.send_response(405)
+                self.send_header("Allow", "POST")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if path == "/health":
                 return self.send_json(200, {"ok": True, "version": __version__})
             if path.startswith("/v1/startups"):
@@ -71,6 +90,20 @@ def make_handler(gateway, channels, catalog):
             if url.path.startswith("/v1/startups"):
                 if self.authorized():
                     self.startups_post(url.path)
+                return
+            if url.path == "/mcp" or url.path.startswith("/mcp/"):
+                if self.mcp_authorized(url.path):
+                    try:
+                        body = self.read_json()
+                    except ValueError:
+                        return self.send_json(400, MCPServer._error(None, -32700, "Parse error"))
+                    status, payload = mcp.handle_body(body)
+                    if payload is None:
+                        self.send_response(status)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                    else:
+                        self.send_json(status, payload)
                 return
             if url.path != "/v1/messages":
                 return self.send_json(404, {"error": "not found"})

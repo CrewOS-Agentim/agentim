@@ -93,8 +93,51 @@ struct HostView: View {
                     Text("Telegram and Slack tokens live in .env. Hugging Face models run in the Docker stack; LTX video runs natively.")
                 }
 
+                Section {
+                    LabeledContent {
+                        if host.claudeConnected {
+                            Button("Disconnect") { Task { await host.connectClaude(remove: true) } }
+                        } else {
+                            Button("Add to Claude") { Task { await host.connectClaude() } }
+                        }
+                    } label: {
+                        Label(host.claudeConnected ? "Claude Desktop: connected" : "Claude Desktop & Claude Code",
+                              systemImage: "sparkle")
+                    }
+                    LabeledContent {
+                        if host.chatGPTConnectorURL == nil {
+                            Button("Connect ChatGPT") { Task { await host.connectChatGPT() } }
+                        } else {
+                            Button("Close tunnel") { Task { await host.disconnectChatGPT() } }
+                        }
+                    } label: {
+                        Label("ChatGPT", systemImage: "bubble.left.and.text.bubble.right")
+                    }
+                    if let url = host.chatGPTConnectorURL {
+                        HStack {
+                            Text(url).font(.caption.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                            Spacer()
+                            Button("Copy", systemImage: "doc.on.doc") { host.copyToClipboard(url) }
+                        }
+                        Text("In ChatGPT: Settings → Apps & Connectors → Advanced → turn on Developer mode, then Create, paste this URL and choose “No authentication”. Keep the URL private: it's the key to your agentim. It changes if the tunnel restarts.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let note = host.connectorNote {
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Use agentim from Claude & ChatGPT")
+                } footer: {
+                    Text("Adds agentim as a connector (MCP), so Claude and ChatGPT can ask your local models and agents, make images and videos with LTX, and run your startups. Claude talks to it on this Mac; ChatGPT needs a temporary public HTTPS tunnel (Cloudflare).")
+                }
+
                 if let error = host.lastError {
-                    Section { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+                    Section {
+                        Text(error).foregroundStyle(.red).textSelection(.enabled)
+                        Button("Report this on GitHub", systemImage: "ladybug") {
+                            IssueReporter.open(kind: .bug, title: "This Mac: ", details: "```\n\(error)\n```")
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -112,6 +155,7 @@ struct HostView: View {
         case "gateway": "Gateway (Telegram · Slack · WhatsApp)"
         case "whatsapp": "WhatsApp bridge"
         case "voice": "Voice (Whisper + Kokoro)"
+        case "tunnel": "ChatGPT tunnel (Cloudflare)"
         default: service
         }
     }
@@ -142,6 +186,8 @@ struct MenuBarContent: View {
             openWindow(id: "main")
             NSApp.activate(ignoringOtherApps: true)
         }
+        Button("Report an issue…") { IssueReporter.open(kind: .bug) }
+        Divider()
         Button("Quit agentim") { NSApp.terminate(nil) }.keyboardShortcut("q")
     }
 }

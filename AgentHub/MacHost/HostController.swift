@@ -18,7 +18,7 @@ final class HostController {
     enum Power: Equatable { case charger, battery, unknown }
 
     static let services = ["ollama", "runner", "gateway", "whatsapp"]
-    static let optionalServices = ["voice"]
+    static let optionalServices = ["voice", "tunnel"]
     static let helperPlists = [
         "watchdog": "~/Library/LaunchAgents/com.agentim.watchdog.plist",
         "runner": "~/Library/LaunchAgents/com.agentim.runner.plist",
@@ -36,6 +36,9 @@ final class HostController {
     private(set) var helpers: [String: Bool] = [:]
     private(set) var busy: String?
     private(set) var lastError: String?
+    /// The ChatGPT connector URL while the tunnel is up (it contains the MCP secret: show, don't log).
+    private(set) var chatGPTConnectorURL: String?
+    private(set) var connectorNote: String?
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -139,6 +142,62 @@ final class HostController {
         panel.canChooseFiles = false
         panel.message = "Choose the agentim folder (the one with docker-compose.yml)"
         if panel.runModal() == .OK, let url = panel.url { stackRoot = url }
+    }
+
+    // MARK: - Claude & ChatGPT connectors (agentim as an MCP server)
+
+    static let claudeDesktopConfig = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json")
+
+    /// Claude Desktop's config already lists agentim.
+    var claudeConnected: Bool {
+        guard let data = try? Data(contentsOf: Self.claudeDesktopConfig) else { return false }
+        return Self.configHasAgentim(data)
+    }
+
+    nonisolated static func configHasAgentim(_ data: Data) -> Bool {
+        let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        return (json?["mcpServers"] as? [String: Any])?["agentim"] != nil
+    }
+
+    func connectClaude(remove: Bool = false) async {
+        guard let root = stackRoot else { lastError = "Choose the agentim folder first."; return }
+        busy = remove ? "Disconnecting Claude…" : "Connecting Claude…"
+        defer { busy = nil }
+        let result = await Shell.run(["bash", "deploy/macos/connect-claude.sh"] + (remove ? ["remove"] : []), in: root)
+        if result.ok {
+            lastError = nil
+            connectorNote = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            lastError = String(result.output.suffix(400))
+        }
+    }
+
+    func connectChatGPT() async {
+        guard let root = stackRoot else { lastError = "Choose the agentim folder first."; return }
+        busy = "Opening a tunnel for ChatGPT…"
+        defer { busy = nil }
+        let result = await Shell.run(["bash", "deploy/macos/connect-chatgpt.sh"], in: root)
+        let url = result.output.split(separator: "\n").last.map(String.init)?.trimmingCharacters(in: .whitespaces)
+        if result.ok, let url, url.hasPrefix("https://") {
+            chatGPTConnectorURL = url
+            lastError = nil
+        } else {
+            lastError = String(result.output.suffix(400))
+        }
+    }
+
+    func disconnectChatGPT() async {
+        guard let root = stackRoot else { return }
+        busy = "Closing the ChatGPT tunnel…"
+        defer { busy = nil }
+        _ = await Shell.run(["bash", "deploy/macos/connect-chatgpt.sh", "stop"], in: root)
+        chatGPTConnectorURL = nil
+    }
+
+    func copyToClipboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     /// Adds this Mac's runners as servers: Docker (Hugging Face models) and native (LTX video).
