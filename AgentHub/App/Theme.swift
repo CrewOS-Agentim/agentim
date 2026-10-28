@@ -28,6 +28,8 @@ enum Theme {
     static let readableWidth: CGFloat = 760
     /// Minimum click target (Apple HIG).
     static let target: CGFloat = 44
+    /// Space between a column's bottom button and the window's bottom edge.
+    static let bottomInset: CGFloat = 20
 }
 
 extension View {
@@ -41,6 +43,17 @@ extension View {
         self.padding(padding)
             .background(Theme.surface, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Theme.border))
+    }
+}
+
+extension View {
+    /// The full-width button at the bottom of a list column (New startup, New agent…): tall, with room below it.
+    func bottomActionStyle() -> some View {
+        controlSize(.large)
+            .frame(minHeight: 40)
+            .padding(.horizontal, Theme.s3)
+            .padding(.top, Theme.s3)
+            .padding(.bottom, Theme.bottomInset)
     }
 }
 

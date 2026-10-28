@@ -107,6 +107,19 @@ struct RootView: View {
     }
 
     private var main: some View {
+        // The status bar sits under the split view, so it never covers a column's bottom buttons.
+        VStack(spacing: 0) {
+            split
+            StatusBar()
+        }
+        .onAppear {
+            Snapshots.runIfRequested { selection = $0 }
+            // `-openLogs YES` opens the Logs window (screenshots).
+            if UserDefaults.standard.bool(forKey: "openLogs") { openWindow(id: "logs") }
+        }
+    }
+
+    private var split: some View {
         NavigationSplitView {
             List(SidebarItem.allCases, selection: $selection) { item in
                 Label(item.title, systemImage: item.symbol).tag(item)
@@ -123,12 +136,6 @@ struct RootView: View {
             case .host: HostView()
             case .settings: SettingsView()
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
-        .onAppear {
-            Snapshots.runIfRequested { selection = $0 }
-            // `-openLogs YES` opens the Logs window (screenshots).
-            if UserDefaults.standard.bool(forKey: "openLogs") { openWindow(id: "logs") }
         }
     }
 }

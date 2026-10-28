@@ -138,7 +138,7 @@ struct ChatView: View {
         .frame(maxWidth: Theme.readableWidth + 80)
         .padding(.horizontal, Theme.s6)
         .padding(.top, Theme.s2)
-        .padding(.bottom, Theme.s4)
+        .padding(.bottom, Theme.bottomInset)
         .frame(maxWidth: .infinity)
     }
 

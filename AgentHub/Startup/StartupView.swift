@@ -78,10 +78,10 @@ private struct StartupList: View {
             .onDeleteCommand { model.askToDelete(model.selectedSummary) }
             Divider()
             Button { model.newStartup() } label: {
-                Label("New startup", systemImage: "plus").frame(maxWidth: .infinity)
+                Label("New startup or idea", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 28)
             }
             .buttonStyle(.borderedProminent)
-            .padding(12)
+            .bottomActionStyle()
         }
     }
 }
