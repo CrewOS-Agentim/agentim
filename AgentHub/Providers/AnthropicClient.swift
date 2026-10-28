@@ -31,7 +31,7 @@ struct AnthropicClient: ChatClient {
 
         let messages = request.messages
             .filter { $0.role != .system && !$0.isError }
-            .map { Body.Message(role: $0.role.rawValue, content: $0.content) }
+            .map { Body.Message(role: $0.role.rawValue, content: $0.modelContent) }
         urlRequest.httpBody = try? JSONEncoder().encode(
             Body(model: request.model, system: request.system.isEmpty ? nil : request.system,
                  messages: messages, max_tokens: request.maxTokens))

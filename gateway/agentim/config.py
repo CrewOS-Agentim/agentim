@@ -39,6 +39,7 @@ class Config:
     waha_api_key: str = ""
     waha_session: str = "default"
     webhook_secret: str = ""
+    mcp_secret: str = ""
     api_token: str = ""
     # {"telegram": {"123"}, "slack": {"U01"}, "whatsapp": {"15551234567@c.us"}}; "*" allows everyone.
     allowed: dict = field(default_factory=dict)
@@ -93,6 +94,7 @@ def from_env(env=None):
         waha_api_key=env.get("WAHA_API_KEY", ""),
         waha_session=env.get("WAHA_SESSION", "default"),
         webhook_secret=env.get("AGENTIM_WEBHOOK_SECRET", ""),
+        mcp_secret=env.get("AGENTIM_MCP_SECRET", ""),
         api_token=env.get("AGENTIM_API_TOKEN", env.get("RUNNER_TOKEN", "")),
         allowed=parse_allowed(env.get("AGENTIM_ALLOWED_USERS", "")),
         default_models=[m.strip() for m in models.split(",") if m.strip()] if models is not None else list(DEFAULT_MODELS),

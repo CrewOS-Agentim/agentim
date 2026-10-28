@@ -158,7 +158,7 @@ final class StackBundleTests: XCTestCase {
             guard line.hasPrefix("  "), !line.hasPrefix("   "), line.hasSuffix(":") else { return nil }
             return line.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ":", with: "")
         }
-        XCTAssertEqual(Set(names), Set(OnboardingModel.coreServices + ["voice"]))
+        XCTAssertEqual(Set(names), Set(OnboardingModel.coreServices + HostController.optionalServices))
         XCTAssertEqual(Set(HostController.services), Set(OnboardingModel.coreServices))
     }
 

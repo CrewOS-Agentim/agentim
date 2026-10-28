@@ -53,17 +53,17 @@ struct StartupDetail: Decodable, Equatable {
         var id: String { "\(round)-\(role)-\(ts)" }
     }
 
-    let id: String
-    let name: String
-    let pitch: String
-    let questions: [String]
+    var id: String
+    var name: String
+    var pitch: String
+    var questions: [String]
     var answers: [String]
     var status: String
     let plan: String
     let min_minutes: Int
     let max_minutes: Int
     let next_run: Double?
-    let rounds: Int
+    var rounds: Int
     let now: Double
     let team: [StartupPerson]
     let people: [String: PersonInfo]
@@ -143,7 +143,7 @@ struct StartupClient {
 @Observable
 final class StartupModel {
     private(set) var listing: StartupListing?
-    private(set) var detail: StartupDetail?
+    var detail: StartupDetail?
     private(set) var error: String?
     private(set) var busy: String?
     var selection: String?
@@ -151,6 +151,8 @@ final class StartupModel {
     var draftName = ""
     var draftPitch = ""
     var draftAnswers: [String] = []
+    /// The interview question on screen (0-based).
+    var questionIndex = 0
     var minMinutes = 10
     var maxMinutes = 30
 
@@ -163,6 +165,14 @@ final class StartupModel {
             listing = Self.demoListing
             selection = Self.demoDetail.id
             detail = Self.demoDetail
+            // `-demoInterview YES` opens Tutorly mid-interview (screenshots).
+            if UserDefaults.standard.bool(forKey: "demoInterview") {
+                selection = Self.demoInterview.id
+                detail = Self.demoInterview
+                draftAnswers = ["Parents of 8–12 year olds who help with homework every night", "", ""] + Array(repeating: "", count: 7)
+                draftAnswers[1] = "They Google it, then give up and text a friend"
+                questionIndex = 2
+            }
         }
     }
 
@@ -210,6 +220,11 @@ final class StartupModel {
         selection = id
         composing = false
         draftAnswers = []
+        questionIndex = 0
+        if isDemo {
+            detail = id == Self.demoInterview.id ? Self.demoInterview : Self.demoDetail
+            return
+        }
         await refresh(stackRoot: stackRoot)
     }
 
@@ -230,13 +245,46 @@ final class StartupModel {
             self.selection = created.id
             self.detail = created
             self.draftAnswers = Array(repeating: "", count: created.questions.count)
+            self.questionIndex = 0
         }
+    }
+
+    // MARK: - Interview: one question at a time
+
+    var questionCount: Int { detail?.questions.count ?? 0 }
+    var isLastQuestion: Bool { questionIndex >= questionCount - 1 }
+    var answeredCount: Int { draftAnswers.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count }
+
+    /// Makes sure there's an answer slot per question (e.g. after reopening a startup mid-interview).
+    func prepareInterview() {
+        guard let questions = detail?.questions else { return }
+        if draftAnswers.count != questions.count {
+            let saved = detail?.answers ?? []
+            draftAnswers = questions.indices.map { $0 < saved.count ? saved[$0] : "" }
+            questionIndex = min(saved.count, max(questions.count - 1, 0))
+        }
+    }
+
+    /// Next (or Skip, which leaves the answer empty). After the last question the team is hired.
+    func nextQuestion(skip: Bool = false, stackRoot: URL?) async {
+        guard questionIndex < draftAnswers.count else { return }
+        if skip { draftAnswers[questionIndex] = "" }
+        if isLastQuestion {
+            await submitAnswers(stackRoot: stackRoot)
+        } else {
+            questionIndex += 1
+        }
+    }
+
+    func previousQuestion() {
+        questionIndex = max(0, questionIndex - 1)
     }
 
     func submitAnswers(stackRoot: URL?) async {
         guard let id = detail?.id else { return }
+        let answers = draftAnswers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         await act("Hiring the team…", stackRoot) { client in
-            self.detail = try await client.answer(id, answers: self.draftAnswers)
+            self.detail = try await client.answer(id, answers: answers)
         }
     }
 
@@ -364,6 +412,29 @@ final class StartupModel {
             .init(id: "tutorly", name: "Tutorly", pitch: "AI homework coach for parents", status: "interview", rounds: 0,
                   next_run: nil, min_minutes: 10, max_minutes: 30),
         ])
+    }
+
+    static var demoInterview: StartupDetail {
+        var detail = demoDetail
+        detail.id = "tutorly"
+        detail.name = "Tutorly"
+        detail.pitch = "An AI homework coach for parents: snap a photo of tonight's homework and get a 2-minute explanation you can give your kid."
+        detail.status = "interview"
+        detail.questions = [
+            "Which parents feel this pain most, and how did you find out?",
+            "What do they do tonight when they get stuck on homework?",
+            "Why would a parent trust an AI explanation over the teacher's method?",
+            "Who pays: parents, schools or tutoring centers, and how much?",
+            "What single number will you grow every week?",
+            "Why are you the right founders for Tutorly?",
+            "Are you full-time on this, and how many months of runway do you have?",
+            "Who builds, who sells, and who breaks ties?",
+            "What ships in the next 90 days, and who are the first 10 families?",
+            "What would make you stop or pivot, and when will you check?",
+        ]
+        detail.answers = []
+        detail.rounds = 0
+        return detail
     }
 
     static var demoDetail: StartupDetail {

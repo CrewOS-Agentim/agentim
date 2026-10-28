@@ -5,16 +5,38 @@ struct ChatView: View {
     @Environment(AppStore.self) private var store
     let conversationID: UUID
     @State private var draft = ""
-    @FocusState private var composerFocused: Bool
+    @State private var attachments: [ChatAttachment] = []
+    @State private var attachError: String?
+    @State private var dropTargeted = false
+    @State private var importing = false
+    @State private var composerHeight: CGFloat = 84
 
     private var conversation: Conversation? { store.conversations.first { $0.id == conversationID } }
 
     var body: some View {
         if let conversation {
             VStack(spacing: 0) {
-                messages(conversation)
-                Divider()
+                if conversation.messages.isEmpty {
+                    EmptyChat { draft = $0 }
+                } else {
+                    messages(conversation)
+                }
                 composer(conversation)
+            }
+            .background(Theme.surfaceMuted)
+            .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+                for provider in providers {
+                    _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                        guard let url else { return }
+                        Task { @MainActor in addFiles([url]) }
+                    }
+                }
+                return !providers.isEmpty
+            }
+            .overlay { if dropTargeted { DropHint() } }
+            .animation(.easeOut(duration: 0.18), value: dropTargeted)
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+                if case .success(let urls) = result { addFiles(urls) }
             }
             .navigationTitle(conversation.title)
             .toolbar { ToolbarItem(placement: .primaryAction) { modelMenu(conversation) } }
@@ -26,44 +48,104 @@ struct ChatView: View {
     private func messages(_ conversation: Conversation) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: Theme.s4) {
                     ForEach(conversation.messages) { message in
                         MessageRow(message: message, model: store.model(id: message.modelID))
                             .id(message.id)
                     }
                 }
-                .padding()
+                .frame(maxWidth: Theme.readableWidth)
+                .padding(.horizontal, Theme.s6)
+                .padding(.vertical, Theme.s6)
+                .frame(maxWidth: .infinity)
             }
-            .scrollDismissesKeyboard(.interactively)
             .onChange(of: conversation.messages.last?.content) {
+                if let id = conversation.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
+            }
+            .onAppear {
                 if let id = conversation.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
             }
         }
     }
 
     private func composer(_ conversation: Conversation) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            RoutePreview(text: draft, conversation: conversation)
-            HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message · @alias to pick a model · /skill", text: $draft, axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($composerFocused)
-                    .padding(10)
-                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 18))
-                Button {
-                    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { return }
-                    draft = ""
-                    store.send(text, in: conversation.id)
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            if !attachments.isEmpty || attachError != nil {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: Theme.s2) {
+                        ForEach(attachments) { file in
+                            AttachmentChip(file: file) { attachments.removeAll { $0.id == file.id } }
+                        }
+                        if let attachError {
+                            Label(attachError, systemImage: "exclamationmark.triangle")
+                                .font(.callout).foregroundStyle(Theme.warning)
+                        }
+                    }
                 }
-                .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || store.isStreaming(conversation.id))
             }
+            VStack(spacing: 0) {
+                ComposerTextView(text: $draft, placeholder: "Message Agent Tim…  (@model · /skill · drop files)",
+                                 minHeight: 84, maxHeight: 320, onSubmit: { submit(conversation) },
+                                 height: $composerHeight)
+                    .frame(height: composerHeight)
+                    .padding(.horizontal, Theme.s2)
+                    .padding(.top, Theme.s1)
+                HStack(spacing: Theme.s3) {
+                    Button { importing = true } label: {
+                        Image(systemName: "paperclip").font(.system(size: 17, weight: .medium))
+                            .frame(width: 32, height: 32).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Attach files (or drag them into the chat)")
+                    .accessibilityLabel("Attach files")
+                    RoutePreview(text: draft, conversation: conversation)
+                    Spacer(minLength: Theme.s2)
+                    Text("⏎ send · ⇧⏎ new line").font(.caption).foregroundStyle(.tertiary)
+                    Button { submit(conversation) } label: {
+                        Image(systemName: store.isStreaming(conversation.id) ? "ellipsis" : "arrow.up")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(canSend(conversation) ? Theme.accent : Color.secondary.opacity(0.35), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend(conversation))
+                    .accessibilityLabel("Send")
+                    .help("Send (Return)")
+                }
+                .padding(.horizontal, Theme.s3)
+                .padding(.bottom, Theme.s2)
+            }
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
+                .strokeBorder(Theme.accent.opacity(draft.isEmpty ? 0.25 : 0.6), lineWidth: 1.5))
+            .shadow(color: .black.opacity(0.06), radius: 10, y: 2)
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .frame(maxWidth: Theme.readableWidth + 80)
+        .padding(.horizontal, Theme.s6)
+        .padding(.top, Theme.s2)
+        .padding(.bottom, Theme.s4)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func canSend(_ conversation: Conversation) -> Bool {
+        ChatComposer.canSend(draft: draft, attachments: attachments) && !store.isStreaming(conversation.id)
+    }
+
+    private func submit(_ conversation: Conversation) {
+        guard canSend(conversation) else { return }
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let files = attachments
+        draft = ""
+        attachments = []
+        attachError = nil
+        store.send(text, attachments: files, in: conversation.id)
+    }
+
+    private func addFiles(_ urls: [URL]) {
+        let result = ChatComposer.add(urls, to: attachments)
+        attachments = result.attachments
+        attachError = result.error
     }
 
     /// Per-conversation override: Auto (router) or a pinned model.
@@ -88,6 +170,45 @@ struct ChatView: View {
                 .labelStyle(.titleAndIcon)
                 .font(.footnote)
         }
+    }
+}
+
+/// A new conversation: Tim says hi and offers a few starting points.
+private struct EmptyChat: View {
+    let pick: (String) -> Void
+    static let starters = [
+        ("lightbulb", "Validate my startup idea", "/validate-your-startup "),
+        ("chevron.left.forwardslash.chevron.right", "Review some code", "Review this code and suggest improvements:\n"),
+        ("film", "Make a short video", "Make a video of "),
+        ("photo", "Draw an image", "Make an image of "),
+    ]
+
+    var body: some View {
+        VStack(spacing: Theme.s4) {
+            Spacer()
+            TimAvatar(size: 88)
+            Text("What are we working on?").headlineStyle(28)
+            Text("Ask anything. Agent Tim picks the right model, or pin one with @alias.")
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: Theme.s3) {
+                ForEach(Self.starters, id: \.1) { symbol, title, prompt in
+                    Button { pick(prompt) } label: {
+                        Label(title, systemImage: symbol)
+                            .frame(maxWidth: .infinity, minHeight: Theme.target, alignment: .leading)
+                            .padding(.horizontal, Theme.s4)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .frame(maxWidth: 520)
+            .padding(.top, Theme.s2)
+            Spacer()
+        }
+        .padding(Theme.s6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -126,44 +247,65 @@ struct MessageRow: View {
     let message: ChatMessage
     let model: AIModel?
 
-    var body: some View {
-        VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 4) {
-            Group {
-                if message.content.isEmpty && message.role == .assistant {
-                    ProgressView().padding(12)
-                } else {
-                    Text(LocalizedStringKey(message.content))
-                        .textSelection(.enabled)
-                        .padding(12)
-                }
-            }
-            .background(background, in: RoundedRectangle(cornerRadius: 16))
-            .foregroundStyle(message.role == .user ? Color.white : Color.primary)
+    private var isUser: Bool { message.role == .user }
 
-            ForEach(media, id: \.url) { item in
-                Group {
-                    if item.isVideo {
-                        VideoPlayer(player: AVPlayer(url: item.url))
-                    } else {
-                        AsyncImage(url: item.url) { $0.resizable().scaledToFit() } placeholder: { ProgressView() }
+    var body: some View {
+        HStack(alignment: .top, spacing: Theme.s3) {
+            if isUser { Spacer(minLength: 60) } else { TimAvatar(size: 30).padding(.top, 2) }
+            VStack(alignment: isUser ? .trailing : .leading, spacing: Theme.s1 + 2) {
+                if !(isUser && message.content.isEmpty) {
+                    Group {
+                        if message.content.isEmpty && message.role == .assistant {
+                            ProgressView().controlSize(.small).padding(Theme.s3)
+                        } else {
+                            Text(LocalizedStringKey(message.content))
+                                .font(.system(size: 14))
+                                .lineSpacing(3)
+                                .textSelection(.enabled)
+                                .padding(.horizontal, Theme.s4)
+                                .padding(.vertical, Theme.s3)
+                        }
+                    }
+                    .background(background, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                    .overlay {
+                        if !isUser {
+                            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border)
+                        }
+                    }
+                    .foregroundStyle(isUser ? Color.white : Color.primary)
+                }
+
+                if let files = message.attachments, !files.isEmpty {
+                    HStack(spacing: Theme.s2) {
+                        ForEach(files) { AttachmentChip(file: $0) }
                     }
                 }
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .frame(maxWidth: 420)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-            }
 
-            if message.role == .assistant, let model {
-                Label {
-                    Text(model.displayName) + Text(message.routingReason.map { " · \($0)" } ?? "")
-                } icon: {
-                    Image(systemName: model.locationSymbol)
+                ForEach(media, id: \.url) { item in
+                    Group {
+                        if item.isVideo {
+                            VideoPlayer(player: AVPlayer(url: item.url))
+                        } else {
+                            AsyncImage(url: item.url) { $0.resizable().scaledToFit() } placeholder: { ProgressView() }
+                        }
+                    }
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(maxWidth: 460)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                 }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+
+                if message.role == .assistant, let model {
+                    Label {
+                        Text(model.displayName) + Text(message.routingReason.map { " · \($0)" } ?? "")
+                    } icon: {
+                        Image(systemName: model.locationSymbol)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
             }
+            if !isUser { Spacer(minLength: 60) }
         }
-        .frame(maxWidth: .infinity, alignment: message.role == .user ? .trailing : .leading)
     }
 
     /// `[video](http://…mp4)` / `[image](http://…png)` links from media models (e.g. LTX via the runner).
@@ -179,7 +321,78 @@ struct MessageRow: View {
     }
 
     private var background: AnyShapeStyle {
-        if message.isError { return AnyShapeStyle(Color.red.opacity(0.15)) }
-        return message.role == .user ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.quaternary)
+        if message.isError { return AnyShapeStyle(Color.red.opacity(0.12)) }
+        return isUser ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.assistantBubble)
+    }
+}
+
+/// Composer rules shared by the view and tests.
+enum ChatComposer {
+    static func canSend(draft: String, attachments: [ChatAttachment]) -> Bool {
+        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty
+    }
+
+    /// Adds files (skipping duplicates by name, up to the limit); returns the first problem, if any.
+    static func add(_ urls: [URL], to current: [ChatAttachment]) -> (attachments: [ChatAttachment], error: String?) {
+        var attachments = current
+        var error: String?
+        for url in urls {
+            guard attachments.count < ChatAttachment.maxFiles else {
+                error = "Up to \(ChatAttachment.maxFiles) files per message."
+                break
+            }
+            if attachments.contains(where: { $0.name == url.lastPathComponent }) { continue }
+            do {
+                attachments.append(try ChatAttachment.load(url))
+            } catch let failure {
+                error = failure.localizedDescription
+            }
+        }
+        return (attachments, error)
+    }
+}
+
+private struct AttachmentChip: View {
+    let file: ChatAttachment
+    var remove: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: file.symbol)
+            Text(file.name).lineLimit(1).truncationMode(.middle)
+            Text(file.sizeLabel).foregroundStyle(.secondary)
+            if !file.isReadable {
+                Image(systemName: "eye.slash").foregroundStyle(.secondary)
+                    .help("The model gets the file name only: it can't read this kind of file.")
+            } else if file.truncated {
+                Image(systemName: "scissors").foregroundStyle(.secondary)
+                    .help("Long file: the model gets the first \(ChatAttachment.maxTextCharacters / 1000)k characters.")
+            }
+            if let remove {
+                Button(action: remove) { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+        .frame(maxWidth: 260)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.quaternary.opacity(0.7), in: Capsule())
+    }
+}
+
+private struct DropHint: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 16)
+            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [8, 6]))
+            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                Label("Drop files to attach", systemImage: "paperclip")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(8)
+            .allowsHitTesting(false)
     }
 }

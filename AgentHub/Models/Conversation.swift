@@ -13,6 +13,15 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var modelID: String?
     var routingReason: String?
     var isError = false
+    /// Files sent with the message (optional so older saved conversations still decode).
+    var attachments: [ChatAttachment]?
+
+    /// What the model reads: the text plus every attached file.
+    var modelContent: String {
+        guard let attachments, !attachments.isEmpty else { return content }
+        let files = attachments.map(\.promptBlock).joined(separator: "\n\n")
+        return content.isEmpty ? files : content + "\n\n" + files
+    }
 }
 
 struct Conversation: Identifiable, Codable, Hashable {
@@ -26,7 +35,8 @@ struct Conversation: Identifiable, Codable, Hashable {
 
     /// Last message as plain text (markdown markers removed) for list rows.
     var preview: String {
-        guard let content = messages.last(where: { $0.role != .system })?.content else { return "New conversation" }
+        guard let last = messages.last(where: { $0.role != .system }) else { return "New conversation" }
+        let content = last.content.isEmpty ? (last.attachments ?? []).map { "📎 \($0.name)" }.joined(separator: " ") : last.content
         return content
             .replacingOccurrences(of: #"\[(video|image)\]\([^)]*\)"#, with: "🎬", options: .regularExpression)
             .replacingOccurrences(of: #"[*_`#>]+"#, with: "", options: .regularExpression)

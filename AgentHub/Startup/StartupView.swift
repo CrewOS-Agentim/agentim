@@ -96,8 +96,8 @@ private struct NewStartup: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                Text("🚀").font(.system(size: 56))
-                Text("Pitch me your startup").font(.system(size: 34, weight: .bold))
+                TimAvatar(size: 84)
+                Text("Pitch me your startup").headlineStyle(34)
                 Text("I'll ask a few follow-up questions, then hire a team that works on it every 10–30 minutes, like a real company.")
                     .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 600)
 
@@ -152,53 +152,144 @@ private struct Interview: View {
     @Bindable var model: StartupModel
     let detail: StartupDetail
     let stackRoot: URL?
+    @State private var answerHeight: CGFloat = 120
+    @State private var forward = true
+
+    private var index: Int { min(model.questionIndex, max(detail.questions.count - 1, 0)) }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 12) {
-                    Text("🐙").font(.system(size: 40))
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("A few questions about \(detail.name)").font(.title2.bold())
-                        Text("So the team starts from what you know, not guesses.").foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.s6) {
+                    header
+                    if !detail.questions.isEmpty { questionCard }
+                    if let error = model.error {
+                        Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Theme.warning).font(.callout)
                     }
                 }
-                Text(detail.pitch).font(.callout).padding(12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
-                ForEach(Array(detail.questions.enumerated()), id: \.offset) { index, question in
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("\(index + 1). \(question)").font(.headline)
-                        TextField("Your answer", text: answerBinding(index), axis: .vertical)
-                            .lineLimit(2...5).textFieldStyle(.roundedBorder)
-                    }
-                }
-                HStack {
-                    Button("Skip questions") { Task { await model.skipQuestions(stackRoot: stackRoot) } }
-                    Button("Edit the team", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
-                    Spacer()
-                    Button {
-                        Task { await model.submitAnswers(stackRoot: stackRoot) }
-                    } label: {
-                        Label(model.busy ?? "Hire the team", systemImage: "person.3.fill")
-                    }
-                    .buttonStyle(.borderedProminent).controlSize(.large)
-                    .disabled(model.busy != nil || model.draftAnswers.contains { $0.trimmingCharacters(in: .whitespaces).isEmpty })
-                }
-                if let error = model.error { Text(error).foregroundStyle(.orange).font(.callout) }
+                .padding(Theme.s8)
+                .frame(maxWidth: 720, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(32)
-            .frame(maxWidth: 720, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            Divider()
+            controls
         }
-        .onAppear {
-            if model.draftAnswers.count != detail.questions.count {
-                model.draftAnswers = Array(repeating: "", count: detail.questions.count)
+        .onAppear { model.prepareInterview() }
+        .onChange(of: detail.id) { model.prepareInterview() }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.s4) {
+            HStack(spacing: Theme.s3) {
+                TimAvatar(size: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("A few questions about \(detail.name)").headlineStyle(24)
+                    Text("So the team starts from what you know, not guesses.").foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Edit the team", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
             }
+            DisclosureGroup("Your pitch") {
+                Text(detail.pitch).font(.callout).frame(maxWidth: .infinity, alignment: .leading).padding(.top, Theme.s2)
+            }
+            .font(.callout)
         }
     }
 
-    private func answerBinding(_ index: Int) -> Binding<String> {
+    private var questionCard: some View {
+        VStack(alignment: .leading, spacing: Theme.s4) {
+            // Step indicator: "Question 3 of 10" + one segment per question.
+            HStack {
+                Text("Question \(index + 1) of \(detail.questions.count)")
+                    .font(.callout.weight(.semibold)).foregroundStyle(Theme.accent)
+                Spacer()
+                Text("\(model.answeredCount) answered").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 4) {
+                ForEach(detail.questions.indices, id: \.self) { i in
+                    Capsule()
+                        .fill(i == index ? Theme.accent : (i < model.draftAnswers.count && !model.draftAnswers[i].isEmpty
+                                                           ? Theme.accent.opacity(0.45) : Color.secondary.opacity(0.2)))
+                        .frame(height: 6)
+                        .onTapGesture { model.questionIndex = i }
+                        .accessibilityLabel("Question \(i + 1)")
+                }
+            }
+
+            Text(detail.questions[index])
+                .headlineStyle(22)
+                .fixedSize(horizontal: false, vertical: true)
+                .id("q\(index)")
+                .transition(.asymmetric(insertion: .move(edge: forward ? .trailing : .leading).combined(with: .opacity),
+                                        removal: .opacity))
+
+            ComposerTextView(text: answerBinding, placeholder: "Your answer…  (Return for next · ⇧Return for a new line)",
+                             minHeight: 120, maxHeight: 300,
+                             onSubmit: { go(skip: false) }, height: $answerHeight)
+                .id("a\(index)")
+                .frame(height: answerHeight)
+                .padding(Theme.s2)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                    .strokeBorder(Theme.accent.opacity(0.4), lineWidth: 1.5))
+        }
+        .card(radius: Theme.radiusLarge, padding: Theme.s6)
+        .animation(.easeOut(duration: 0.22), value: index)
+    }
+
+    private var controls: some View {
+        HStack(spacing: Theme.s3) {
+            Button {
+                forward = false
+                model.previousQuestion()
+            } label: {
+                Label("Back", systemImage: "chevron.left").frame(minWidth: 70)
+            }
+            .controlSize(.large)
+            .disabled(index == 0 || model.busy != nil)
+            .keyboardShortcut(.leftArrow, modifiers: .command)
+
+            Menu("Skip all") {
+                Button("Skip the rest and hire the team now") { Task { await model.skipQuestions(stackRoot: stackRoot) } }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .foregroundStyle(.secondary)
+
+            Spacer()
+            if let busy = model.busy {
+                ProgressView().controlSize(.small)
+                Text(busy).foregroundStyle(.secondary)
+            }
+            Button("Skip") { go(skip: true) }
+                .controlSize(.large)
+                .disabled(model.busy != nil)
+                .help("Leave this one blank")
+            Button {
+                go(skip: false)
+            } label: {
+                HStack(spacing: 6) {
+                    Text(model.isLastQuestion ? "Hire the team" : "Next")
+                    Image(systemName: model.isLastQuestion ? "person.3.fill" : "chevron.right")
+                }
+                .frame(minWidth: 110)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(model.busy != nil)
+            .keyboardShortcut(.rightArrow, modifiers: .command)
+        }
+        .padding(.horizontal, Theme.s6)
+        .padding(.vertical, Theme.s4)
+        .background(.bar)
+    }
+
+    private func go(skip: Bool) {
+        forward = true
+        Task { await model.nextQuestion(skip: skip, stackRoot: stackRoot) }
+    }
+
+    private var answerBinding: Binding<String> {
         Binding(get: { index < model.draftAnswers.count ? model.draftAnswers[index] : "" },
                 set: { value in
                     if index < model.draftAnswers.count { model.draftAnswers[index] = value }

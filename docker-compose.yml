@@ -57,6 +57,16 @@ services:
     depends_on: [runner, whatsapp]
     restart: unless-stopped
 
+  # Optional: a public HTTPS address for ChatGPT connectors (they can't reach localhost).
+  # Start it with deploy/macos/connect-chatgpt.sh (or This Mac → Connect ChatGPT in the app). Only
+  # /mcp/<AGENTIM_MCP_SECRET> works without the API token. The address changes when the tunnel restarts.
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    profiles: [chatgpt]
+    command: tunnel --no-autoupdate --url http://gateway:8780
+    depends_on: [gateway]
+    restart: unless-stopped
+
   # WhatsApp bridge (WAHA). Link your number once: open http://localhost:3000/dashboard and scan the QR.
   whatsapp:
     # Apple silicon needs the arm build (WAHA_TAG=arm); onboarding and install.sh set it.

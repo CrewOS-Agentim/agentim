@@ -239,7 +239,7 @@ def list_models():
         except Exception as e:
             print(f"[runner] listing {name} failed: {e}", file=sys.stderr)
     models = [m for m in models if is_chat_model(m["id"])]
-    if LTX.available():
+    if LTX.available() or LTX.installed():
         models += [
             {"id": "ltx/video", "object": "model", "owned_by": "ltx", "backend": "ltx", "kind": "video"},
             {"id": "ltx/image", "object": "model", "owned_by": "ltx", "backend": "ltx", "kind": "image"},
@@ -279,6 +279,30 @@ class LTXBridge:
         except Exception:
             return None
 
+    APP_PATHS = ["/Applications/LTX Desktop.app", os.path.expanduser("~/Applications/LTX Desktop.app")]
+
+    def installed(self):
+        """LTX Desktop is on this Mac (it can be opened on demand), even if it isn't running."""
+        if os.environ.get("LTX_URL") or IN_CONTAINER or platform.system() != "Darwin":
+            return False
+        return any(os.path.isdir(path) for path in self.APP_PATHS)
+
+    def ensure_running(self, wait=180, sleep=time.sleep):
+        """Opens LTX Desktop if it's installed but closed, then waits for its backend."""
+        if self.available():
+            return self.endpoint()
+        if not self.installed():
+            raise RuntimeError("LTX Desktop isn't installed on this Mac. Get it from ltx.studio, then try again.")
+        app = next(path for path in self.APP_PATHS if os.path.isdir(path))
+        print("[runner] opening LTX Desktop", file=sys.stderr)
+        subprocess.run(["open", "-g", app], check=False)
+        deadline = time.time() + wait
+        while time.time() < deadline:
+            if self.available():
+                return self.endpoint()
+            sleep(3)
+        raise RuntimeError("LTX Desktop didn't start in time. Open it once, let it finish loading, then try again.")
+
     def available(self):
         endpoint = self.endpoint()
         if not endpoint:
@@ -292,7 +316,7 @@ class LTXBridge:
 
     def generate(self, kind, prompt):
         """Blocks until LTX finishes. Returns the local path of the result."""
-        endpoint = self.endpoint()
+        endpoint = self.ensure_running() if not os.environ.get("LTX_URL") else self.endpoint()
         if not endpoint:
             raise RuntimeError("LTX Desktop isn't running on this computer.")
         base, token = endpoint
