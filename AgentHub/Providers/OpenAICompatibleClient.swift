@@ -36,7 +36,7 @@ struct OpenAICompatibleClient: ChatClient {
         if !request.system.isEmpty { messages.append(.init(role: "system", content: request.system)) }
         messages += request.messages
             .filter { $0.role != .system && !$0.isError }
-            .map { Body.Message(role: $0.role.rawValue, content: $0.content) }
+            .map { Body.Message(role: $0.role.rawValue, content: $0.modelContent) }
         urlRequest.httpBody = try? JSONEncoder().encode(Body(model: request.model, messages: messages))
 
         return SSE.stream(urlRequest) { data in

@@ -126,5 +126,49 @@ class LTXChatTests(unittest.TestCase):
             self.assertEqual(resp.read(), b"234")
 
 
+class LTXLaunchTests(unittest.TestCase):
+    """LTX Desktop is opened on demand when it's installed but closed."""
+
+    def bridge(self, installed=True, starts_after=2):
+        bridge = runner.LTXBridge()
+        checks = {"n": 0}
+        opened = []
+
+        def available():
+            checks["n"] += 1
+            return bool(opened) and checks["n"] > starts_after
+
+        bridge.available = available
+        bridge.installed = lambda: installed
+        bridge.endpoint = lambda: ("http://127.0.0.1:1", "t")
+        bridge.APP_PATHS = [os.path.dirname(os.path.abspath(__file__))]  # any existing directory
+        return bridge, opened
+
+    def test_opens_ltx_and_waits(self):
+        bridge, opened = self.bridge()
+        original = runner.subprocess.run
+        runner.subprocess.run = lambda cmd, check=False: opened.append(cmd)
+        try:
+            self.assertEqual(bridge.ensure_running(wait=5, sleep=lambda s: None), ("http://127.0.0.1:1", "t"))
+        finally:
+            runner.subprocess.run = original
+        self.assertEqual(opened[0][:2], ["open", "-g"])
+
+    def test_not_installed(self):
+        bridge, _ = self.bridge(installed=False)
+        with self.assertRaisesRegex(RuntimeError, "isn't installed"):
+            bridge.ensure_running(wait=1, sleep=lambda s: None)
+
+    def test_timeout(self):
+        bridge, _ = self.bridge(starts_after=10**9)
+        original = runner.subprocess.run
+        runner.subprocess.run = lambda cmd, check=False: None  # opening does nothing
+        try:
+            with self.assertRaisesRegex(RuntimeError, "didn't start"):
+                bridge.ensure_running(wait=0, sleep=lambda s: None)
+        finally:
+            runner.subprocess.run = original
+
+
 if __name__ == "__main__":
     unittest.main()

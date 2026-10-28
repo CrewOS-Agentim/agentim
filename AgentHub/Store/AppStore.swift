@@ -205,7 +205,7 @@ final class AppStore {
         }
     }
 
-    func send(_ text: String, in conversationID: UUID) {
+    func send(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
         let conversation = conversations[index]
         let agent = agent(for: conversation)
@@ -228,7 +228,7 @@ final class AppStore {
                 }
                 prompt = decision.cleanedText
             } catch {
-                conversations[index].messages.append(ChatMessage(role: .user, content: text))
+                conversations[index].messages.append(ChatMessage(role: .user, content: text, attachments: attachments.nilIfEmpty))
                 conversations[index].messages.append(
                     ChatMessage(role: .assistant, content: error.localizedDescription, isError: true))
                 return
@@ -236,9 +236,9 @@ final class AppStore {
         }
 
         let system = systemPrompt(agent: agent, message: prompt)
-        conversations[index].messages.append(ChatMessage(role: .user, content: prompt))
+        conversations[index].messages.append(ChatMessage(role: .user, content: prompt, attachments: attachments.nilIfEmpty))
         if conversations[index].messages.filter({ $0.role == .user }).count == 1 {
-            conversations[index].title = String(prompt.prefix(48))
+            conversations[index].title = String((prompt.isEmpty ? attachments.first?.name ?? "Files" : prompt).prefix(48))
         }
         let history = conversations[index].messages
         let reply = ChatMessage(role: .assistant, content: "", modelID: targets.first?.modelID,
@@ -361,4 +361,8 @@ final class AppStore {
         try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: fileURL, options: [.atomic, .completeFileProtection])
     }
+}
+
+extension Array {
+    var nilIfEmpty: [Element]? { isEmpty ? nil : self }
 }

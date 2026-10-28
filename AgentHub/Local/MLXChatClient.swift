@@ -19,12 +19,12 @@ struct MLXChatClient: ChatClient {
                     guard let prompt = turns.last, prompt.role == .user else { return continuation.finish() }
 
                     let history: [Chat.Message] = turns.dropLast().map {
-                        $0.role == .user ? .user($0.content) : .assistant($0.content)
+                        $0.role == .user ? .user($0.modelContent) : .assistant($0.modelContent)
                     }
                     let session = ChatSession(
                         container, instructions: request.system.isEmpty ? nil : request.system,
                         history: history, generateParameters: GenerateParameters(maxTokens: request.maxTokens))
-                    for try await chunk in session.streamResponse(to: prompt.content) {
+                    for try await chunk in session.streamResponse(to: prompt.modelContent) {
                         continuation.yield(chunk)
                     }
                     continuation.finish()
