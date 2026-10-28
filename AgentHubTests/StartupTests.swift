@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import AgentHub
 
@@ -119,6 +120,67 @@ final class StartupTests: XCTestCase {
         let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: [[String: String]]]
         XCTAssertEqual(body["team"]?.first?["name"], "Jordan Lee")
         XCTAssertEqual(body["team"]?.first?["key"], "", "new hires get their key from the gateway")
+    }
+
+    @MainActor
+    func testInterviewOneQuestionAtATime() async throws {
+        let model = StartupModel(demo: true)
+        model.detail = try JSONDecoder().decode(StartupDetail.self, from: Data(detailJSON.utf8))
+        model.detail?.status = "interview"
+        model.detail?.answers = []
+        model.prepareInterview()
+        XCTAssertEqual(model.draftAnswers, ["", ""])
+        XCTAssertEqual(model.questionIndex, 0)
+        XCTAssertFalse(model.isLastQuestion)
+
+        model.draftAnswers[0] = "Office managers"
+        await model.nextQuestion(stackRoot: nil)
+        XCTAssertEqual(model.questionIndex, 1, "Next moves on")
+        XCTAssertTrue(model.isLastQuestion)
+
+        model.previousQuestion()
+        XCTAssertEqual(model.questionIndex, 0, "Back goes back")
+        XCTAssertEqual(model.draftAnswers[0], "Office managers", "answers are kept")
+        model.previousQuestion()
+        XCTAssertEqual(model.questionIndex, 0, "can't go before the first")
+
+        await model.nextQuestion(stackRoot: nil)
+        model.draftAnswers[1] = "draft I'll throw away"
+        await model.nextQuestion(skip: true, stackRoot: nil)
+        XCTAssertEqual(model.draftAnswers[1], "", "Skip leaves it blank")
+        XCTAssertEqual(model.answeredCount, 1)
+    }
+
+    @MainActor
+    func testInterviewResumesWhereTheFounderStopped() throws {
+        let model = StartupModel(demo: true)
+        model.detail = try JSONDecoder().decode(StartupDetail.self, from: Data(detailJSON.utf8))
+        model.detail?.answers = ["Offices"]
+        model.draftAnswers = []
+        model.prepareInterview()
+        XCTAssertEqual(model.draftAnswers, ["Offices", ""])
+        XCTAssertEqual(model.questionIndex, 1)
+    }
+
+    func testReturnSubmitsAndShiftReturnIsANewLine() {
+        XCTAssertTrue(SubmitTextView.shouldSubmit([]))
+        XCTAssertTrue(SubmitTextView.shouldSubmit(.command))
+        XCTAssertFalse(SubmitTextView.shouldSubmit(.shift))
+        XCTAssertFalse(SubmitTextView.shouldSubmit(.option))
+        XCTAssertFalse(SubmitTextView.shouldSubmit([.control]))
+    }
+
+    @MainActor
+    func testReturnKeyCallsSubmit() {
+        let view = SubmitTextView()
+        var submitted = 0
+        view.onSubmit = { submitted += 1 }
+        let returnKey = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+                                         context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+                                         isARepeat: false, keyCode: 36)!
+        view.keyDown(with: returnKey)
+        XCTAssertEqual(submitted, 1)
+        XCTAssertEqual(view.string, "", "Return doesn't insert a new line")
     }
 
     @MainActor
