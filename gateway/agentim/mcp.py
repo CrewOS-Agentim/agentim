@@ -73,6 +73,19 @@ TOOLS = [
           "next answer it; otherwise the next meeting starts from it.",
           {"startup": STARTUP_REF, "message": {"type": "string", "description": "What to tell the agents."}},
           ["startup", "message"]),
+    _tool("list_claude_sessions", "List Claude Code sessions",
+          "The user's existing Claude Code sessions on their Mac (only folders they allowed), newest first.",
+          read_only=True),
+    _tool("read_claude_session", "Read a Claude Code session",
+          "The latest messages of one Claude Code session (conversation text only).",
+          {"session": {"type": "string", "description": "Session id from list_claude_sessions, or its number (1, 2, …)."}},
+          ["session"], read_only=True),
+    _tool("continue_claude_session", "Continue a Claude Code session",
+          "Send a message to an existing Claude Code session on the user's Mac and return its answer "
+          "(read-only/plan mode unless the user allowed edits).",
+          {"session": {"type": "string", "description": "Session id or number from list_claude_sessions."},
+           "message": {"type": "string", "description": "What to tell Claude Code next."}},
+          ["session", "message"]),
     _tool("run_startup_meeting", "Run a team meeting",
           "Call the startup's team into a meeting now. It takes a few minutes; read the result with get_startup.",
           {"startup": STARTUP_REF}, ["startup"]),
@@ -253,6 +266,39 @@ class MCPServer:
         when = "The agents speaking next in this meeting will answer it." if result["live"] else \
             "The next meeting starts from it (or call run_startup_meeting)."
         return _text(f"Posted to the {target['name']} agents room. {when}")
+
+    def _claude_session_id(self, ref):
+        ref = str(ref).strip()
+        if ref.isdigit():
+            sessions = self.gateway.claude.list()
+            if not 1 <= int(ref) <= len(sessions):
+                raise ToolError("No session with that number. Try list_claude_sessions.")
+            return sessions[int(ref) - 1]["id"]
+        return ref
+
+    def tool_list_claude_sessions(self):
+        try:
+            sessions = self.gateway.claude.list()
+        except RuntimeError as e:
+            raise ToolError(str(e))
+        return _text([{"number": i, "id": s["id"], "title": s.get("title") or s.get("first_prompt"),
+                       "folder": s.get("cwd"), "messages": s.get("messages")}
+                      for i, s in enumerate(sessions, 1)] or "No Claude Code sessions in the allowed folders.")
+
+    def tool_read_claude_session(self, session):
+        try:
+            detail = self.gateway.claude.read(self._claude_session_id(session))
+        except RuntimeError as e:
+            raise ToolError(str(e))
+        return _text({"title": detail.get("title"), "folder": detail.get("cwd"),
+                      "messages": [{"role": m["role"], "text": m["text"]} for m in detail["messages_shown"]]})
+
+    def tool_continue_claude_session(self, session, message):
+        try:
+            result = self.gateway.claude.continue_session(self._claude_session_id(session), message)
+        except RuntimeError as e:
+            raise ToolError(str(e))
+        return _text(result["reply"])
 
     def tool_run_startup_meeting(self, startup):
         mode, target = self._startups(), self._startup(startup)

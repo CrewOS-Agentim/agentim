@@ -4,6 +4,7 @@ import re
 import threading
 from dataclasses import dataclass, field
 
+from .claude_sessions import ClaudeSessions
 from . import skills as skill_lib
 from .llm import LLMError
 from .router import NoModel, Router
@@ -37,6 +38,7 @@ class Gateway:
         self.config = config
         self.voice = voice  # agentim.voice.Voice, or None when voice isn't set up
         self.startup = None  # agentim.startup.StartupMode, attached by __main__
+        self.claude = ClaudeSessions(config)  # existing Claude Code sessions on the Mac (via the native runner)
         self.store = store
         self.llm = llm
         self.models_provider = models_provider  # () -> [Model]
@@ -131,6 +133,8 @@ class Gateway:
                 return Reply("🤔 Unknown model. Try /models.")
             self.store.set_pinned(key, model.alias)
             return Reply(f"📌 Pinned *@{model.alias}* for this chat. `/model auto` to undo.")
+        if cmd == "/claude":
+            return Reply(self.claude.command(arg))
         if cmd in ("/video", "/image"):
             if not arg:
                 return Reply(f"🎬 Tell me what to make, e.g. `{cmd} a cat surfing at sunset`.")

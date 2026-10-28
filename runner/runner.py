@@ -468,6 +468,116 @@ class LocalAgents:
 LOCAL_AGENTS = LocalAgents()
 
 
+class ClaudeSessions:
+    """Existing Claude Code sessions (~/.claude/projects/*/<session>.jsonl), only for folders in AGENTIM_WORKSPACES
+    and only when Claude Code is enabled as a local agent. Reads the conversation text (no tool output or thinking);
+    continuing a session runs `claude --resume <id>` in its folder with the local agents' permission mode."""
+
+    ID = re.compile(r"^[0-9a-f-]{8,64}$")
+
+    def __init__(self, agents=None, root=None):
+        self.agents = agents or LOCAL_AGENTS
+        self.root = root or os.path.expanduser("~/.claude/projects")
+
+    def enabled(self):
+        return "claude-code" in self.agents.available()
+
+    def in_workspace(self, cwd):
+        cwd = os.path.realpath(cwd or "")
+        return any(cwd == w or cwd.startswith(w + os.sep) for w in self.agents.workspaces())
+
+    def files(self):
+        try:
+            folders = [os.path.join(self.root, d) for d in os.listdir(self.root)]
+        except OSError:
+            return []
+        found = [os.path.join(f, n) for f in folders if os.path.isdir(f) for n in os.listdir(f) if n.endswith(".jsonl")]
+        return sorted(found, key=os.path.getmtime, reverse=True)
+
+    @staticmethod
+    def text_of(content):
+        if isinstance(content, str):
+            return content
+        return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+
+    def parse(self, path, keep_messages=False):
+        info = {"id": os.path.basename(path)[:-6], "cwd": None, "title": None, "updated": os.path.getmtime(path),
+                "messages": 0, "first_prompt": None, "branch": None}
+        messages = []
+        with open(path, errors="replace") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                kind = record.get("type")
+                info["cwd"] = info["cwd"] or record.get("cwd")
+                info["branch"] = record.get("gitBranch") or info["branch"]
+                if kind == "custom-title" and record.get("customTitle"):
+                    info["title"] = record["customTitle"]
+                elif kind == "ai-title" and record.get("aiTitle") and not info["title"]:
+                    info["title"] = record["aiTitle"]
+                if kind not in ("user", "assistant") or record.get("isSidechain") or record.get("isMeta"):
+                    continue
+                text = self.text_of((record.get("message") or {}).get("content")).strip()
+                if not text or text.startswith("<"):  # tool results, command wrappers, system reminders
+                    continue
+                info["messages"] += 1
+                if kind == "user" and not info["first_prompt"]:
+                    info["first_prompt"] = text[:200]
+                if keep_messages:
+                    messages.append({"role": kind, "text": text, "time": record.get("timestamp")})
+        return (info, messages) if keep_messages else info
+
+    def list(self, limit=20):
+        if not self.enabled():
+            raise RuntimeError("Enable Claude Code first: AGENTIM_LOCAL_AGENTS=claude-code and AGENTIM_WORKSPACES in .env.")
+        sessions = []
+        for path in self.files():
+            info = self.parse(path)
+            if info["messages"] and self.in_workspace(info["cwd"]):
+                sessions.append(info)
+                if len(sessions) >= limit:
+                    break
+        return sessions
+
+    def find(self, session_id):
+        if not self.ID.match(session_id or ""):
+            raise RuntimeError("That isn't a session id.")
+        path = next((p for p in self.files() if os.path.basename(p) == f"{session_id}.jsonl"), None)
+        if not path:
+            raise RuntimeError("No such Claude Code session.")
+        return path
+
+    def read(self, session_id, last=20, max_chars=1500):
+        if not self.enabled():
+            raise RuntimeError("Enable Claude Code first: AGENTIM_LOCAL_AGENTS=claude-code and AGENTIM_WORKSPACES in .env.")
+        info, messages = self.parse(self.find(session_id), keep_messages=True)
+        if not self.in_workspace(info["cwd"]):
+            raise RuntimeError("That session is outside AGENTIM_WORKSPACES.")
+        for m in messages:
+            m["text"] = m["text"][:max_chars] + ("…" if len(m["text"]) > max_chars else "")
+        return {**info, "messages_shown": messages[-last:]}
+
+    def continue_session(self, session_id, prompt, timeout=None):
+        session = self.read(session_id, last=1)
+        if not prompt.strip():
+            raise RuntimeError("Tell Claude Code what to do next.")
+        binary = self.agents.binary("claude-code")
+        mode = "acceptEdits" if self.agents.mode() == "edit" else "plan"
+        cmd = [binary, "-p", prompt, "--resume", session_id, "--permission-mode", mode, "--output-format", "text"]
+        timeout = timeout or int(self.agents.env.get("AGENTIM_LOCAL_AGENTS_TIMEOUT", "900"))
+        result = self.agents.run(cmd, cwd=session["cwd"], capture_output=True, text=True, timeout=timeout,
+                                 stdin=subprocess.DEVNULL)
+        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(f"Claude Code exited with {result.returncode}: {output[-800:]}")
+        return {"id": session_id, "cwd": session["cwd"], "reply": output}
+
+
+CLAUDE_SESSIONS = ClaudeSessions()
+
+
 def publish_file(path):
     """Copies a result into the files dir under an unguessable name and returns its URL path."""
     os.makedirs(FILES_DIR, exist_ok=True)
@@ -540,6 +650,16 @@ class Handler(BaseHTTPRequestHandler):
                 "gpus": gpus(), "backends": backend_status(), "ltx": LTX.available()})
         if path == "/v1/models":
             return self.send_json(200, {"object": "list", "data": list_models()})
+        if (path == "/v1/claude/sessions" or path.startswith("/v1/claude/sessions/")) and IN_CONTAINER:
+            return self.error(404, "Claude Code sessions are only on the Mac's native runner.")
+        if path == "/v1/claude/sessions" or path.startswith("/v1/claude/sessions/"):
+            session_id = path[len("/v1/claude/sessions/"):] if path.startswith("/v1/claude/sessions/") else ""
+            try:
+                if session_id:
+                    return self.send_json(200, CLAUDE_SESSIONS.read(session_id))
+                return self.send_json(200, {"sessions": CLAUDE_SESSIONS.list()})
+            except Exception as e:
+                return self.error(400, str(e))
         self.error(404, "Not found")
 
     def do_POST(self):
@@ -552,6 +672,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.error(400, "Body must be JSON.")
         if path == "/v1/chat/completions":
             return self.chat(body)
+        if path.startswith("/v1/claude/sessions/") and IN_CONTAINER:
+            return self.error(404, "Claude Code sessions are only on the Mac's native runner.")
+        if path.startswith("/v1/claude/sessions/") and path.endswith("/continue"):
+            session_id = path[len("/v1/claude/sessions/"):-len("/continue")]
+            try:
+                return self.send_json(200, CLAUDE_SESSIONS.continue_session(session_id, body.get("prompt", "")))
+            except Exception as e:
+                return self.error(400, str(e))
         if path == "/v1/models/check":
             return self.check(body)
         if path == "/v1/models/pull":

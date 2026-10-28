@@ -324,6 +324,8 @@ AGENTIM_LOCAL_AGENTS_MODE=read                  # read (default: plan/read-only 
 AGENTIM_LOCAL_AGENTS_TMUX=1                     # optional: watch each run with `tmux attach -t agentim-…`
 ```
 
+**Your existing Claude Code sessions** work too, once Claude Code is enabled: `/claude` lists the sessions from your workspaces (newest first, with their titles), `/claude 2` shows the latest messages, and `/claude 2 now write the fix` continues that session with `claude --resume` in its own folder. From Claude or ChatGPT, use the `list_claude_sessions`, `read_claude_session` and `continue_claude_session` tools. Only sessions inside `AGENTIM_WORKSPACES` are visible, and only their conversation text (no tool output).
+
 They run through the native runner on the Mac (the one that also drives LTX), with each tool's own safety settings: Claude Code in `plan` mode (or `acceptEdits` in edit mode) and Codex in a `read-only` sandbox (or `workspace-write`). The usual allow-list still decides who can talk to Tim at all.
 
 ## 🎬 Making videos
