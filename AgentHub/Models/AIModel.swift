@@ -2,7 +2,7 @@ import Foundation
 
 /// What a model is good at. The router matches these against the task.
 enum Capability: String, Codable, CaseIterable, Identifiable {
-    case coding, reasoning, creative, fast, longContext, general, video, image
+    case coding, reasoning, creative, fast, longContext, general, video, image, agent
 
     var id: String { rawValue }
 
@@ -16,11 +16,15 @@ enum Capability: String, Codable, CaseIterable, Identifiable {
         case .general: "General"
         case .video: "Video"
         case .image: "Image"
+        case .agent: "Local agent"
         }
     }
 
     /// Generates media instead of text; only chosen when the message asks for it.
     var isMedia: Bool { self == .video || self == .image }
+
+    /// Only used when the message names the model (@ltx-video, @claude-code): media and local coding agents.
+    var isExplicitOnly: Bool { isMedia || self == .agent }
 }
 
 enum ModelLocation: Codable, Hashable {
@@ -62,6 +66,7 @@ struct AIModel: Identifiable, Codable, Hashable {
     }
 
     var isMedia: Bool { !capabilities.isEmpty && capabilities.allSatisfy(\.isMedia) }
+    var isExplicitOnly: Bool { !capabilities.isEmpty && capabilities.allSatisfy(\.isExplicitOnly) }
 
     var locationSymbol: String {
         switch location {

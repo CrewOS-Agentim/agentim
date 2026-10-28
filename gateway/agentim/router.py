@@ -15,6 +15,8 @@ IMAGE = ["make an image", "generate an image", "create an image", "image of", "p
 SENSITIVE = ["password", "passcode", "ssn", "social security", "diagnosis", "medical", "my salary", "bank account",
              "private key", "api key", "secret", "confidential", "therapy"]
 MEDIA = {"video", "image"}
+# Never picked automatically: only when the message names them (@ltx-video, @claude-code, @codex).
+EXPLICIT_ONLY = MEDIA | {"agent"}
 
 
 @dataclass
@@ -33,6 +35,10 @@ class Model:
     @property
     def is_media(self):
         return bool(self.caps) and self.caps <= MEDIA
+
+    @property
+    def explicit_only(self):
+        return bool(self.caps) and self.caps <= EXPLICIT_ONLY
 
 
 @dataclass
@@ -100,6 +106,10 @@ def model_from_runner(info, runner_url):
     """Router metadata for a runner model, guessed from its name and size."""
     mid = info["id"]
     short = mid.split("/")[-1]
+    if info.get("kind") == "agent":
+        # A local coding agent (Claude Code, Codex…): @claude-code / @codex.
+        return Model(id=mid, alias=short, backend="runner", name=mid, caps={"agent"}, context=10_000_000,
+                     quality=5, runner_url=runner_url)
     if info.get("kind") in MEDIA:
         kind = info["kind"]
         return Model(id=mid, alias=f"ltx-{kind}", backend="runner", name=mid, caps={kind},
@@ -170,7 +180,7 @@ class Router:
     def candidates(self, profile):
         if profile.primary in MEDIA:
             return [m for m in self.models if profile.primary in m.caps]
-        return [m for m in self.models if not m.is_media]
+        return [m for m in self.models if not m.explicit_only]
 
     def ranked(self, profile):
         fitting = [m for m in self.candidates(profile) if m.context >= profile.tokens + 1024]

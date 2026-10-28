@@ -262,6 +262,63 @@ class PersonaAndPlaybookTests(unittest.TestCase):
         self.assertEqual(team_of({"team": [{"key": "a", "name": "Ana", "title": "PM", "emoji": "🙂", "owns": "x"}]})[0].persona, "")
 
 
+class MentionAndNotesTests(unittest.TestCase):
+    def test_mentions_are_found_by_first_name_or_key(self):
+        from agentim.startup import mentioned
+        team = [p for p in TEAM]
+        self.assertEqual([p.key for p in mentioned("@Sam come up with 2 designs, @leo help", team)], ["automation", "design"])
+        self.assertEqual([p.key for p in mentioned("@data what's the funnel?", team)], ["data"])
+        self.assertEqual(mentioned("email me at a@b.com, @nobody", team), [])
+        self.assertEqual(len(mentioned("@maya @leo @noah @ava", team)), 3, "at most three")
+
+    def test_tagged_agent_answers_directly(self):
+        llm = TeamLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = running(mode)
+        threads_before = threading.active_count()
+        result = mode.post_founder(startup["id"], "@Sam come up with 2 designs for the onboarding email")
+        self.assertEqual(result["mentioned"], ["automation"])
+        for thread in threading.enumerate():
+            if thread is not threading.current_thread() and thread.daemon:
+                thread.join(timeout=5)
+        self.assertGreaterEqual(threads_before, 1)
+        prompt = next(p for p in llm.prompts if p.startswith("You are Sam Rivera"))
+        self.assertIn('The founder just tagged you directly: "@Sam come up with 2 designs', prompt)
+        roles = [m["role"] for m in mode.store.messages(startup["id"])]
+        self.assertEqual(roles[-2:], ["founder", "automation"], "Sam answers right after the founder")
+        self.assertIsNone(mode.detail(startup["id"])["meeting"], "the direct reply doesn't leave a meeting open")
+
+    def test_meeting_notes(self):
+        gateway, mode = make_startup_mode(llm=TeamLLM())
+        startup = running(mode)
+        mode.run_round(startup["id"])
+        mode.post_founder(startup["id"], "Great work, focus on retention")
+        mode.run_round(startup["id"])
+        meetings = mode.meetings(startup["id"])
+        self.assertEqual([m["round"] for m in meetings], [2, 1], "newest first")
+        first = meetings[1]
+        self.assertLessEqual(first["started"], first["ended"])
+        self.assertIn("ceo", first["attendees"])
+        self.assertTrue(first["summary"])
+        notes = mode.meeting(startup["id"], 2)
+        self.assertEqual(notes["messages"][0]["role"], "founder", "the founder's note opens meeting 2")
+        self.assertEqual(notes["summary"], notes["messages"][-1]["content"])
+        self.assertIsNone(mode.meeting(startup["id"], 99))
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gateway, {}, lambda: [QWEN]))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_port}/v1/startups/{startup['id']}/meetings"
+        get = lambda url: json.loads(urllib.request.urlopen(urllib.request.Request(  # noqa: E731
+            url, headers={"Authorization": "Bearer tok"}), timeout=5).read())
+        try:
+            self.assertEqual(len(get(base)["meetings"]), 2)
+            self.assertEqual(get(base + "/1")["round"], 1)
+            with self.assertRaises(urllib.error.HTTPError):
+                get(base + "/42")
+        finally:
+            server.shutdown()
+
+
 class MigrationTests(unittest.TestCase):
     def test_old_database_gets_team_columns(self):
         db = sqlite3.connect(":memory:", check_same_thread=False)

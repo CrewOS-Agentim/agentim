@@ -33,6 +33,7 @@ struct ServerModelInfo: Decodable, Hashable {
     let size_bytes: Int64?
     let parameter_size: String?
     let loaded: Bool?
+    var name: String? = nil
 }
 
 extension AIModel {
@@ -45,6 +46,15 @@ extension AIModel {
         let pretty = name.replacingOccurrences(of: "-", with: " ")
         let shortName = tag.map { "\(pretty) \($0)" } ?? pretty
 
+        if info.kind == "agent" {
+            // A coding agent on the Mac (Claude Code, Codex): only when called by name, e.g. @claude-code.
+            let alias = String(info.id.split(separator: "/").last ?? Substring(info.id))
+            return AIModel(
+                id: "server-\(server.id.uuidString.prefix(8))/\(info.id)",
+                displayName: "\(info.name ?? alias) · \(server.name)", modelName: info.id,
+                location: .server(serverID: server.id), capabilities: [.agent],
+                contextWindow: 10_000_000, costTier: 0, qualityTier: 5, alias: alias)
+        }
         if info.kind == "video" || info.kind == "image" {
             let cap: Capability = info.kind == "video" ? .video : .image
             return AIModel(

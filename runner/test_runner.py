@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import tempfile
 import unittest
 import urllib.request
 
@@ -168,6 +169,73 @@ class LTXLaunchTests(unittest.TestCase):
                 bridge.ensure_running(wait=0, sleep=lambda s: None)
         finally:
             runner.subprocess.run = original
+
+
+class LocalAgentsTests(unittest.TestCase):
+    def agents(self, **env):
+        calls = []
+
+        class Done:
+            returncode, stdout, stderr = 0, "All tests pass. 3 files reviewed.", ""
+
+        def run(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return Done()
+
+        which = lambda name, path=None: f"/fake/bin/{name}" if name in ("claude", "codex") else None  # noqa: E731
+        return runner.LocalAgents(env=env, which=which, run=run), calls
+
+    def test_off_by_default(self):
+        agents, _ = self.agents()
+        self.assertEqual(agents.available(), [])
+        with self.assertRaisesRegex(RuntimeError, "isn't enabled"):
+            agents.run_task("claude-code", "review the repo")
+
+    def test_only_installed_and_allowed(self):
+        agents, _ = self.agents(AGENTIM_LOCAL_AGENTS="on")
+        self.assertEqual(agents.available(), ["claude-code", "codex"], "gemini isn't installed")
+        agents, _ = self.agents(AGENTIM_LOCAL_AGENTS="codex")
+        self.assertEqual(agents.available(), ["codex"])
+
+    def test_read_only_by_default_in_the_workspace(self):
+        with tempfile.TemporaryDirectory() as ws:
+            agents, calls = self.agents(AGENTIM_LOCAL_AGENTS="claude-code,codex", AGENTIM_WORKSPACES=ws)
+            output, cwd = agents.run_task("claude-code", "review the auth module")
+            self.assertEqual(output, "All tests pass. 3 files reviewed.")
+            cmd, kwargs = calls[-1]
+            self.assertEqual(cmd[:3], ["/fake/bin/claude", "-p", "review the auth module"])
+            self.assertIn("plan", cmd, "Claude Code plans, doesn't edit")
+            self.assertNotIn("bypassPermissions", cmd)
+            self.assertEqual(kwargs["cwd"], os.path.realpath(ws))
+            agents.run_task("codex", "explain the build")
+            self.assertEqual(calls[-1][0][:4], ["/fake/bin/codex", "exec", "--sandbox", "read-only"])
+
+    def test_edit_mode_is_opt_in(self):
+        with tempfile.TemporaryDirectory() as ws:
+            agents, calls = self.agents(AGENTIM_LOCAL_AGENTS="on", AGENTIM_WORKSPACES=ws, AGENTIM_LOCAL_AGENTS_MODE="edit")
+            agents.run_task("codex", "fix the failing test")
+            self.assertIn("workspace-write", calls[-1][0])
+            agents.run_task("claude-code", "fix the failing test")
+            self.assertIn("acceptEdits", calls[-1][0])
+
+    def test_needs_a_workspace_and_picks_the_named_one(self):
+        agents, _ = self.agents(AGENTIM_LOCAL_AGENTS="on")
+        with self.assertRaisesRegex(RuntimeError, "AGENTIM_WORKSPACES"):
+            agents.run_task("claude-code", "hi")
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as b:
+            agents, calls = self.agents(AGENTIM_LOCAL_AGENTS="on", AGENTIM_WORKSPACES=f"{a}:{b}")
+            agents.run_task("claude-code", f"look at {os.path.basename(b)} please")
+            self.assertEqual(calls[-1][1]["cwd"], os.path.realpath(b))
+
+    def test_failures_are_reported(self):
+        class Failed:
+            returncode, stdout, stderr = 1, "", "not logged in"
+
+        with tempfile.TemporaryDirectory() as ws:
+            agents = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "on", "AGENTIM_WORKSPACES": ws},
+                                        which=lambda n, path=None: f"/fake/{n}", run=lambda *a, **k: Failed())
+            with self.assertRaisesRegex(RuntimeError, "not logged in"):
+                agents.run_task("claude-code", "hi")
 
 
 if __name__ == "__main__":

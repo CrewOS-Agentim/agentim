@@ -134,9 +134,17 @@ def make_handler(gateway, channels, catalog):
         def startups_get(self, path):
             if not self.startup_mode():
                 return
-            parts = path.strip("/").split("/")  # v1/startups[/id]
+            parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) >= 4 and parts[3] == "meetings":
+                try:
+                    if len(parts) == 4:
+                        return self.send_json(200, {"meetings": gateway.startup.meetings(parts[2])})
+                    meeting = gateway.startup.meeting(parts[2], int(parts[4])) if parts[4].isdigit() else None
+                except KeyError:
+                    meeting = None
+                return self.send_json(200, meeting) if meeting else self.send_json(404, {"error": "no such meeting"})
             detail = gateway.startup.detail(parts[2]) if len(parts) == 3 else None
             self.send_json(200, detail) if detail else self.send_json(404, {"error": "no such startup"})
 

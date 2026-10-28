@@ -327,7 +327,7 @@ private struct RunningStartup: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(minWidth: 300, idealWidth: 400)
-                TeamRoom(model: model, detail: detail, stackRoot: stackRoot).frame(minWidth: 360)
+                RoomOrNotes(model: model, detail: detail, stackRoot: stackRoot).frame(minWidth: 360)
             }
         }
     }
@@ -396,8 +396,7 @@ private struct TeamRoom: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Label("Agents room", systemImage: "bubble.left.and.bubble.right.fill").font(.headline).foregroundStyle(.tint)
-                .padding([.horizontal, .top], 20).padding(.bottom, 10)
+            Spacer().frame(height: 12)
             if let meeting = detail.meeting {
                 LiveMeetingBar(detail: detail, meeting: meeting)
                     .padding(.horizontal, 20).padding(.bottom, 10)
@@ -432,27 +431,49 @@ private struct TeamRoom: View {
         }
     }
 
-    /// The founder's line into the meeting: Return sends, Shift+Return for a new line.
+    /// The founder's line into the meeting: Return sends, Shift+Return for a new line, @name tags an agent.
     private var founderComposer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            ComposerTextView(text: $model.founderDraft,
-                             placeholder: detail.meeting != nil ? "Jump into the meeting…" : "Message the agents…",
-                             minHeight: 44, maxHeight: 140, font: .systemFont(ofSize: NSFont.systemFontSize + 1),
-                             focusOnAppear: false, onSubmit: { send() }, height: $draftHeight)
-                .frame(height: draftHeight)
-                .padding(.horizontal, 6)
-                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
-                    .strokeBorder(Theme.accent.opacity(model.founderDraft.isEmpty ? 0.25 : 0.6), lineWidth: 1.5))
-            Button(action: send) {
-                Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(model.canSendToAgents ? Theme.accent : Color.secondary.opacity(0.35), in: Circle())
+        VStack(alignment: .leading, spacing: 8) {
+            let suggestions = model.mentionSuggestions()
+            if !suggestions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(suggestions) { person in
+                            Button { model.completeMention(person) } label: {
+                                HStack(spacing: 6) {
+                                    AvatarView(image: Avatars.teamMember(person.key, startup: detail.id), emoji: person.emoji, size: 22)
+                                    Text(person.name).font(.callout.weight(.medium))
+                                    Text(person.title).font(.caption).foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Theme.surface, in: Capsule())
+                                .overlay(Capsule().strokeBorder(Theme.border))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
             }
-            .buttonStyle(.plain)
-            .disabled(!model.canSendToAgents)
-            .accessibilityLabel("Send to the agents")
-            .padding(.bottom, 5)
+            HStack(alignment: .bottom, spacing: 8) {
+                ComposerTextView(text: $model.founderDraft,
+                                 placeholder: detail.meeting != nil ? "Jump into the meeting… (@name to tag)" : "Message the agents… (@name to tag one)",
+                                 minHeight: 44, maxHeight: 140, font: .systemFont(ofSize: NSFont.systemFontSize + 1),
+                                 focusOnAppear: false, onSubmit: { send() }, height: $draftHeight)
+                    .frame(height: draftHeight)
+                    .padding(.horizontal, 6)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                        .strokeBorder(Theme.accent.opacity(model.founderDraft.isEmpty ? 0.25 : 0.6), lineWidth: 1.5))
+                Button(action: send) {
+                    Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(model.canSendToAgents ? Theme.accent : Color.secondary.opacity(0.35), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.canSendToAgents)
+                .accessibilityLabel("Send to the agents")
+                .padding(.bottom, 5)
+            }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .overlay(alignment: .topLeading) {
@@ -615,5 +636,138 @@ struct DeleteStartupConfirmation: View {
         }
         .padding(Theme.s6)
         .frame(width: 420)
+    }
+}
+
+/// The right pane of a running startup: the live agents room, or the meeting notes.
+private struct RoomOrNotes: View {
+    @Bindable var model: StartupModel
+    let detail: StartupDetail
+    let stackRoot: URL?
+    @State private var tab = Tab.room
+
+    enum Tab: String, CaseIterable { case room = "Agents room", notes = "Meetings" }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("View", selection: $tab) {
+                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(.horizontal, 20).padding(.top, 14)
+            switch tab {
+            case .room: TeamRoom(model: model, detail: detail, stackRoot: stackRoot)
+            case .notes: MeetingNotesList(model: model, detail: detail, stackRoot: stackRoot)
+            }
+        }
+        .sheet(item: $model.openMeeting) { notes in
+            MeetingNotesView(notes: notes, startup: detail) { model.openMeeting = nil }
+        }
+    }
+}
+
+/// Every meeting with its date and time; click one to review it.
+private struct MeetingNotesList: View {
+    @Bindable var model: StartupModel
+    let detail: StartupDetail
+    let stackRoot: URL?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                if model.meetingList.isEmpty {
+                    ContentUnavailableView("No meetings yet", systemImage: "calendar",
+                                           description: Text("Notes from every meeting show up here, with the date and time."))
+                        .padding(.top, 40)
+                }
+                ForEach(model.meetingList) { meeting in
+                    Button { Task { await model.open(meeting, stackRoot: stackRoot) } } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("Meeting \(meeting.round)").font(.headline)
+                                Spacer()
+                                Label(meeting.when, systemImage: "calendar").font(.caption).foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: -6) {
+                                ForEach(meeting.attendees.filter { $0 != "founder" }, id: \.self) { key in
+                                    AvatarView(image: Avatars.teamMember(key, startup: detail.id), emoji: detail.person(key).emoji, size: 22)
+                                        .overlay(Circle().strokeBorder(Color(nsColor: .textBackgroundColor), lineWidth: 1.5))
+                                }
+                                Text("  \(meeting.messages) messages").font(.caption).foregroundStyle(.secondary)
+                            }
+                            if let summary = meeting.summary {
+                                Text(summary).font(.callout).foregroundStyle(.primary).lineLimit(3)
+                                    .multilineTextAlignment(.leading)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .card(radius: Theme.radius, padding: Theme.s3)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(20)
+        }
+        .task(id: detail.rounds) { await model.loadMeetings(stackRoot: stackRoot) }
+    }
+}
+
+/// One meeting to review: when it was, who was there, Tim's summary and the full conversation.
+private struct MeetingNotesView: View {
+    let notes: MeetingNotes
+    let startup: StartupDetail
+    let close: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(startup.name) · Meeting \(notes.round)").headlineStyle(22)
+                    let start = Date(timeIntervalSince1970: notes.started)
+                    let end = Date(timeIntervalSince1970: notes.ended)
+                    Label("\(start.formatted(date: .complete, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))",
+                          systemImage: "calendar")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done", action: close).keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let summary = notes.summary {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label("Summary", systemImage: "text.badge.checkmark").font(.headline).foregroundStyle(.tint)
+                            Text(LocalizedStringKey(summary)).font(.callout).textSelection(.enabled)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    Label("Conversation", systemImage: "bubble.left.and.bubble.right").font(.headline)
+                    ForEach(notes.messages) { message in
+                        let person = notes.person(message.role)
+                        HStack(alignment: .top, spacing: 10) {
+                            AvatarView(image: message.role == "founder" ? nil : Avatars.teamMember(message.role, startup: startup.id),
+                                       emoji: person.emoji, size: 32)
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(person.name).font(.callout.weight(.semibold))
+                                    Text(person.title).font(.caption).foregroundStyle(.secondary)
+                                    Text(Date(timeIntervalSince1970: message.ts).formatted(date: .omitted, time: .shortened))
+                                        .font(.caption).foregroundStyle(.tertiary)
+                                }
+                                Text(LocalizedStringKey(message.content)).font(.callout).textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+                .padding(20)
+            }
+        }
+        .frame(width: 640, height: 640)
     }
 }

@@ -268,6 +268,10 @@ Run **as many startups as you like**, each with its own team of agents who act l
 /startup off 2  ← pause              /startup on 2                   /startup delete 2
 ```
 
+**Talk to your agents.** Type in the agents room (or `/startup say <n> <message>` in chat). During a meeting, the agents who speak next answer you first; between meetings, the next one starts from your message. **Tag someone** with `@`: "@Sam come up with 2 designs for the welcome email" and Sam answers right away. Typing `@` suggests your agents.
+
+**Review every meeting.** The **Meetings** tab lists each meeting with its date and time, who was there and Tim's summary; open one to read the whole conversation.
+
 **Make the team yours.** That's the default team: every startup can have its own (1–12 agents plus Tim). In the Mac app, click **Agents** to rename anyone, change their title, emoji or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. Agents you remove keep their messages in the agents room, marked *former*; the current team stops seeing them. In chat:
 
 ```
@@ -301,6 +305,26 @@ Pick a voice model during onboarding (or set `COMPOSE_PROFILES=voice` in `.env`)
 - **Send a voice note** on Telegram or WhatsApp. Tim transcribes it locally (🎙️ "…"), answers, and **replies with a voice note**. Code and links stay in the text; they aren't read aloud.
 - Strangers' audio is never transcribed: the allow-list is checked first.
 - Turn spoken replies off with `AGENTIM_VOICE_REPLIES=false`, or change the voice with `AGENTIM_TTS_VOICE` (e.g. `af_heart`).
+
+## 🤖 Local coding agents (Claude Code, Codex)
+
+Agent Tim can hand a task to the coding agents already installed on your Mac, from any chat, the Mac app, or Claude/ChatGPT through the connector:
+
+```
+@claude-code review the auth module in my-app and list the riskiest bugs
+@codex explain how the build works
+```
+
+They're **off by default** and only used when a message names them (the router never picks them on its own). Turn them on in `.env`:
+
+```sh
+AGENTIM_LOCAL_AGENTS=claude-code,codex          # which ones (also: gemini, or "on" for all installed)
+AGENTIM_WORKSPACES=/Users/you/code/my-app       # the only folders they may work in (":"-separated)
+AGENTIM_LOCAL_AGENTS_MODE=read                  # read (default: plan/read-only sandbox) or edit
+AGENTIM_LOCAL_AGENTS_TMUX=1                     # optional: watch each run with `tmux attach -t agentim-…`
+```
+
+They run through the native runner on the Mac (the one that also drives LTX), with each tool's own safety settings: Claude Code in `plan` mode (or `acceptEdits` in edit mode) and Codex in a `read-only` sandbox (or `workspace-write`). The usual allow-list still decides who can talk to Tim at all.
 
 ## 🎬 Making videos
 

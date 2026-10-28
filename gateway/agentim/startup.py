@@ -206,6 +206,17 @@ def parse_questions(text, limit=10):
     return questions[:limit]
 
 
+def mentioned(text, team, limit=3):
+    """Agents the founder tagged with @FirstName (or @key), in order, at most `limit`."""
+    names = [n.lower() for n in re.findall(r"@([\w-]+)", text)]
+    found = []
+    for name in names:
+        person = next((p for p in team if name in (p.first.lower(), p.key.lower())), None)
+        if person and person not in found:
+            found.append(person)
+    return found[:limit]
+
+
 def pick_speakers(last_spoke, count=3, rng=random, team=None):
     """Whoever spoke least recently goes first; ties broken randomly."""
     team = list(team or TEAM)
@@ -351,6 +362,23 @@ class StartupStore:
                 ORDER BY ts DESC, rowid DESC LIMIT ?""", (startup_id, limit)).fetchall()
         return [{"round": r, "role": role, "content": c, "ts": ts} for r, role, c, ts in reversed(rows)]
 
+    def round_messages(self, startup_id, round_no):
+        with self.lock:
+            rows = self.db.execute("""SELECT round, role, content, ts FROM startup_team_messages
+                WHERE startup_id = ? AND round = ? ORDER BY ts, rowid""", (startup_id, round_no)).fetchall()
+        return [{"round": r, "role": role, "content": c, "ts": ts} for r, role, c, ts in rows]
+
+    def meetings(self, startup_id):
+        """One row per meeting: when it started and ended, who spoke, how many messages."""
+        with self.lock:
+            rows = self.db.execute("""SELECT round, MIN(ts), MAX(ts), COUNT(*), GROUP_CONCAT(DISTINCT role)
+                FROM startup_team_messages WHERE startup_id = ? GROUP BY round ORDER BY round DESC""",
+                                   (startup_id,)).fetchall()
+            summaries = dict(self.db.execute("""SELECT round, content FROM startup_team_messages
+                WHERE startup_id = ? AND role = 'ceo'""", (startup_id,)).fetchall())
+        return [{"round": r, "started": start, "ended": end, "messages": count,
+                 "attendees": (roles or "").split(","), "summary": summaries.get(r)} for r, start, end, count, roles in rows]
+
     def last_spoke(self, startup_id):
         with self.lock:
             rows = self.db.execute("SELECT role, MAX(round) FROM startup_team_messages WHERE startup_id = ? GROUP BY role",
@@ -477,7 +505,54 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         live = self.live.get(startup_id)
         round_no = live["round"] if live else startup["rounds"] + 1
         self.store.add_message(startup_id, round_no, FOUNDER.key, text)
-        return {"posted": True, "live": bool(live), "round": round_no}
+        tagged = mentioned(text, team_of(startup))
+        for person in tagged:
+            threading.Thread(target=self.reply_directly, args=(startup_id, person, text, round_no), daemon=True).start()
+        return {"posted": True, "live": bool(live), "round": round_no, "mentioned": [p.key for p in tagged]}
+
+    def reply_directly(self, startup_id, person, text, round_no):
+        """A tagged agent answers the founder right away (outside the meeting order)."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            return None
+        team, people = team_of(startup), people_of(startup)
+        current = {p.key for p in team} | {CEO.key, FOUNDER.key}
+        discussion = "\n".join(f"{people[m['role']].name}: {m['content']}"
+                               for m in self.store.messages(startup_id, limit=14) if m["role"] in current)
+        owns_live = startup_id not in self.live
+        if owns_live:
+            self.live[startup_id] = {"round": round_no, "speaking": person.key, "started": self.clock(),
+                                     "speakers": [person.key], "direct": True}
+        try:
+            prompt = person_prompt(person, startup, discussion, team, self.playbook(person)) + f"""
+
+The founder just tagged you directly: "{text}"
+Answer the founder now, as {person.first}: do what they asked in your area (concrete output, not a promise), \
+under 180 words, start with "{person.first} here:"."""
+            reply = self._ask(prompt)
+            if reply:
+                self.store.add_message(startup_id, round_no, person.key, reply)
+            return reply
+        finally:
+            if owns_live and self.live.get(startup_id, {}).get("direct"):
+                self.live.pop(startup_id, None)
+
+    def meetings(self, startup_id):
+        if not self.store.get(startup_id):
+            raise KeyError(startup_id)
+        return self.store.meetings(startup_id)
+
+    def meeting(self, startup_id, round_no):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        messages = self.store.round_messages(startup_id, round_no)
+        if not messages:
+            return None
+        people = {k: {"name": p.name, "title": p.title, "emoji": p.emoji} for k, p in people_of(startup).items()}
+        summary = next((m["content"] for m in reversed(messages) if m["role"] == CEO.key), None)
+        return {"round": round_no, "started": messages[0]["ts"], "ended": messages[-1]["ts"],
+                "summary": summary, "messages": messages, "people": people}
 
     # ---- the team: edit, hire, fire
 

@@ -128,6 +128,16 @@ struct StartupClient {
         _ = try await raw("v1/startups/\(id)/run", method: "POST", body: [:])
     }
 
+    func meetings(_ id: String) async throws -> [MeetingSummary] {
+        let data = try await raw("v1/startups/\(id)/meetings", method: "GET", body: nil)
+        return try JSONDecoder().decode(MeetingList.self, from: data).meetings
+    }
+
+    func meeting(_ id: String, round: Int) async throws -> MeetingNotes {
+        let data = try await raw("v1/startups/\(id)/meetings/\(round)", method: "GET", body: nil)
+        return try JSONDecoder().decode(MeetingNotes.self, from: data)
+    }
+
     /// The founder posts into the agents room (during a meeting or before the next one).
     func postMessage(_ id: String, text: String) async throws -> StartupDetail {
         try await send("v1/startups/\(id)/messages", body: ["text": text])
@@ -473,6 +483,59 @@ final class StartupModel {
         await act("Calling the agents in…", stackRoot) { client in try await client.meetNow(id) }
     }
 
+    // MARK: - Meeting notes
+
+    var meetingList: [MeetingSummary] = []
+    var openMeeting: MeetingNotes?
+
+    func loadMeetings(stackRoot: URL?) async {
+        guard let detail else { return }
+        if isDemo {
+            meetingList = MeetingSummary.fromMessages(detail.messages)
+            return
+        }
+        guard let client = Self.client(stackRoot: stackRoot) else { return }
+        meetingList = (try? await client.meetings(detail.id)) ?? []
+    }
+
+    func open(_ meeting: MeetingSummary, stackRoot: URL?) async {
+        guard let detail else { return }
+        if isDemo {
+            openMeeting = MeetingNotes.fromMessages(detail.messages.filter { $0.round == meeting.round },
+                                                     round: meeting.round, people: detail.people)
+            return
+        }
+        guard let client = Self.client(stackRoot: stackRoot) else { return }
+        do {
+            openMeeting = try await client.meeting(detail.id, round: meeting.round)
+        } catch {
+            self.error = "Couldn't open meeting \(meeting.round): \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - @mentions
+
+    /// The partial "@na" at the end of the draft, if the founder is typing a mention.
+    static func mentionQuery(in text: String) -> String? {
+        guard let range = text.range(of: #"(^|\s)@([\w-]*)$"#, options: .regularExpression) else { return nil }
+        return String(text[range]).trimmingCharacters(in: .whitespaces).dropFirst().lowercased()
+    }
+
+    /// Agents matching what's typed after "@".
+    func mentionSuggestions() -> [StartupPerson] {
+        guard let query = Self.mentionQuery(in: founderDraft), let team = detail?.team else { return [] }
+        return team.filter { person in
+            query.isEmpty || person.name.lowercased().hasPrefix(query) || person.key.lowercased().hasPrefix(query)
+        }
+    }
+
+    /// Replaces the partial "@na" with "@Nina ".
+    func completeMention(_ person: StartupPerson) {
+        guard let query = Self.mentionQuery(in: founderDraft) else { return }
+        let first = person.name.split(separator: " ").first.map(String.init) ?? person.name
+        founderDraft = String(founderDraft.dropLast(query.count + 1)) + "@\(first) "
+    }
+
     // MARK: - Talking to the agents
 
     var founderDraft = ""
@@ -688,5 +751,63 @@ enum LTXAvatar {
               let range = content.range(of: #"\(https?://[^)\s]+\)"#, options: .regularExpression)
         else { return nil }
         return URL(string: String(content[range].dropFirst().dropLast()))
+    }
+}
+
+// MARK: - Meeting notes
+
+struct MeetingList: Decodable { let meetings: [MeetingSummary] }
+
+/// One meeting in the notes list (GET /v1/startups/{id}/meetings).
+struct MeetingSummary: Decodable, Equatable, Identifiable {
+    let round: Int
+    let started: Double
+    let ended: Double
+    let messages: Int
+    let attendees: [String]
+    let summary: String?
+    var id: Int { round }
+
+    var startDate: Date { Date(timeIntervalSince1970: started) }
+    var endDate: Date { Date(timeIntervalSince1970: ended) }
+
+    /// "Tue, Oct 28 · 2:14 – 2:19 PM"
+    var when: String {
+        let day = startDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+        let start = startDate.formatted(date: .omitted, time: .shortened)
+        let end = endDate.formatted(date: .omitted, time: .shortened)
+        return start == end ? "\(day) · \(start)" : "\(day) · \(start) – \(end)"
+    }
+
+    /// Demo mode: group the demo messages by meeting.
+    static func fromMessages(_ messages: [StartupDetail.Message]) -> [MeetingSummary] {
+        Dictionary(grouping: messages, by: \.round).map { round, items in
+            MeetingSummary(round: round, started: items.map(\.ts).min() ?? 0, ended: items.map(\.ts).max() ?? 0,
+                           messages: items.count, attendees: Array(Set(items.map(\.role))).sorted(),
+                           summary: items.last { $0.role == "ceo" }?.content)
+        }
+        .sorted { $0.round > $1.round }
+    }
+}
+
+/// A full meeting to review (GET /v1/startups/{id}/meetings/{round}).
+struct MeetingNotes: Decodable, Identifiable {
+    let round: Int
+    let started: Double
+    let ended: Double
+    let summary: String?
+    let messages: [StartupDetail.Message]
+    let people: [String: StartupDetail.PersonInfo]
+    var id: Int { round }
+
+    func person(_ key: String) -> StartupDetail.PersonInfo {
+        if key == "founder" { return .init(name: "You", title: "Founder", emoji: "🧑‍🚀") }
+        return people[key] ?? .init(name: key.capitalized, title: "", emoji: "🤖")
+    }
+
+    static func fromMessages(_ messages: [StartupDetail.Message], round: Int,
+                             people: [String: StartupDetail.PersonInfo]) -> MeetingNotes {
+        MeetingNotes(round: round, started: messages.first?.ts ?? 0, ended: messages.last?.ts ?? 0,
+                     summary: messages.last { $0.role == "ceo" }?.content, messages: messages, people: people)
     }
 }

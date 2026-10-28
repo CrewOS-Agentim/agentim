@@ -268,6 +268,47 @@ final class StartupTests: XCTestCase {
     }
 
     @MainActor
+    func testMentionQuery() {
+        XCTAssertEqual(StartupModel.mentionQuery(in: "@sa"), "sa")
+        XCTAssertEqual(StartupModel.mentionQuery(in: "hey @"), "")
+        XCTAssertNil(StartupModel.mentionQuery(in: "mail me at a@b"), "not after a word")
+        XCTAssertNil(StartupModel.mentionQuery(in: "@sam do this"), "only while typing the name")
+    }
+
+    @MainActor
+    func testMentionSuggestionsAndCompletion() {
+        let model = StartupModel(demo: true)
+        model.founderDraft = "Great work. @ni"
+        XCTAssertEqual(model.mentionSuggestions().map(\.name), ["Nina Shah"])
+        model.completeMention(model.mentionSuggestions()[0])
+        XCTAssertEqual(model.founderDraft, "Great work. @Nina ")
+        XCTAssertTrue(model.mentionSuggestions().isEmpty, "done typing the mention")
+        model.founderDraft = "@"
+        XCTAssertEqual(model.mentionSuggestions().count, model.detail?.team.count, "everyone after a bare @")
+    }
+
+    @MainActor
+    func testMeetingNotesInDemo() async {
+        let model = StartupModel(demo: true)
+        await model.loadMeetings(stackRoot: nil)
+        let meeting = try? XCTUnwrap(model.meetingList.first)
+        XCTAssertEqual(meeting?.round, 6)
+        XCTAssertNotNil(meeting?.summary, "Tim's summary is the meeting's headline")
+        XCTAssertTrue(meeting?.when.contains("·") ?? false, "date · time")
+        await model.open(meeting!, stackRoot: nil)
+        XCTAssertEqual(model.openMeeting?.round, 6)
+        XCTAssertEqual(model.openMeeting?.messages.last?.role, "ceo")
+        XCTAssertEqual(model.openMeeting?.person("founder").name, "You")
+    }
+
+    func testDecodesMeetingNotes() throws {
+        let list = #"{"meetings":[{"round":2,"started":1000,"ended":1300,"messages":4,"attendees":["sales","ceo"],"summary":"Ship it."}]}"#
+        let meetings = try JSONDecoder().decode(MeetingList.self, from: Data(list.utf8)).meetings
+        XCTAssertEqual(meetings.first?.attendees, ["sales", "ceo"])
+        XCTAssertEqual(meetings.first?.endDate.timeIntervalSince1970, 1300)
+    }
+
+    @MainActor
     func testDemoHasManyStartupsAndNamedPeople() {
         let demo = StartupModel(demo: true)
         XCTAssertEqual(demo.listing?.startups.count, 3)

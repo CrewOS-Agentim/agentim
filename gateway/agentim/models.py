@@ -74,7 +74,7 @@ class Catalog:
             try:
                 # Older runners may list speech/embedding models; they can't chat.
                 models += [model_from_runner(info, api.url) for info in api.models()
-                           if info.get("kind") in ("video", "image") or not NOT_CHAT.search(info["id"])]
+                           if info.get("kind") in ("video", "image", "agent") or not NOT_CHAT.search(info["id"])]
             except Exception as e:
                 log.warning("runner %s unavailable: %s", api.url, e)
         seen, unique = set(), []

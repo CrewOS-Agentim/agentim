@@ -51,6 +51,15 @@ final class BuiltInsTests: XCTestCase {
         XCTAssertEqual(store.agents.count, before)
     }
 
+    func testLocalCodingAgentsAreOnlyUsedByName() throws {
+        let server = LocalServer(name: "This Mac (LTX)", baseURL: URL(string: "http://localhost:8766")!)
+        let claude = AIModel.server(ServerModelInfo(id: "local/claude-code", kind: "agent", size_bytes: nil,
+                                                    parameter_size: nil, loaded: nil, name: "Claude Code"), on: server)
+        XCTAssertEqual(claude.alias, "claude-code")
+        XCTAssertTrue(claude.isExplicitOnly)
+        XCTAssertTrue(claude.displayName.hasPrefix("Claude Code"))
+    }
+
     func testAvatarSlugs() {
         XCTAssertEqual(Avatars.slug("QA Engineer"), "qa-engineer")
         XCTAssertEqual(Avatars.slug("YouTube Creator"), "youtube-creator")

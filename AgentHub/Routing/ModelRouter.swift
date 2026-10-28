@@ -148,7 +148,7 @@ struct ModelRouter {
     /// Media requests only go to media models; text requests never do.
     private func candidates(for profile: TaskProfile) -> [AIModel] {
         if profile.primary.isMedia { return available.filter { $0.capabilities.contains(profile.primary) } }
-        return available.filter { !$0.isMedia }
+        return available.filter { !$0.isExplicitOnly }
     }
 
     private func bestLocal(_ locals: [AIModel], _ profile: TaskProfile) -> AIModel? {
