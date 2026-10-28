@@ -80,6 +80,12 @@ struct SettingsView: View {
                     LabeledContent("Models available", value: "\(store.availableModels.count)")
                     LabeledContent("Device memory", value: MemoryAssessment.format(DeviceMemory.physicalBytes))
                     LabeledContent("Network", value: store.isOnline ? "Online" : "Offline")
+                    HStack {
+                        Button("Report an issue", systemImage: "ladybug") { IssueReporter.open(kind: .bug) }
+                        Button("Request a feature", systemImage: "lightbulb") { IssueReporter.open(kind: .feature) }
+                    }
+                    Text("Opens GitHub with your app and Mac details filled in. Nothing is sent until you submit it there.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Settings")

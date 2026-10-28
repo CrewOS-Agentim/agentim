@@ -22,6 +22,12 @@ struct AgentimApp: App {
                 }
         }
         .defaultSize(width: 1180, height: 780)
+        .commands {
+            CommandGroup(after: .help) {
+                Button("Report an Issue on GitHub…") { IssueReporter.open(kind: .bug) }
+                Button("Request a Feature…") { IssueReporter.open(kind: .feature) }
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             guard !AppStore.isDemo else { return }
             if phase == .background { store.saveNow() }

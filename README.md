@@ -42,6 +42,7 @@
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
 - 🔌 **stays up**: the lid closes, the Mac is on the charger, and Tim is still answering. Anything that stops gets started again.
 - 🖥️ ships with a **native macOS app** (Swift/SwiftUI) whose onboarding installs Docker and your models for you
+- 🔗 **plugs into Claude and ChatGPT** as a connector (MCP), so they can use your local models, agents, LTX and startups
 - ☁️ and if you *want* the cloud, Claude, GPT and Gemini plug in too
 
 <br clear="right">
@@ -174,6 +175,40 @@ xcodegen generate && open agentim.xcodeproj     # ⌘R
 
 The app can also run Hugging Face **MLX** models directly on your Mac's GPU, after the same memory check. Use **Models → Browse Hugging Face**.
 
+**Chatting:** press **Enter** to send (**Shift+Enter** for a new line). **Drag files** into a chat, or click 📎: text, code and PDFs are read into the prompt (up to 10 files, 20 MB and 100k characters each); images and other files are passed by name, since the chat models only read text.
+
+**Found a bug?** **Help → Report an Issue on GitHub…** (also in Settings and the menu bar) opens a new GitHub issue with your app version, macOS, chip and memory filled in. Nothing is sent until you submit it.
+
+## 🔗 Use agentim from Claude & ChatGPT
+
+agentim is also an [MCP](https://modelcontextprotocol.io) server, so Claude and ChatGPT can add it as a connector. They get 11 tools:
+
+| Tool | What it does |
+|---|---|
+| `ask_agentim` | Answer with your local models (auto-routed), an agent, `@model` or a `/skill` |
+| `generate_image`, `generate_video` | Make media with LTX on your Mac (opens LTX Desktop if needed) |
+| `list_agents`, `list_skills`, `list_models` | See what's available |
+| `list_startups`, `get_startup`, `create_startup`, `answer_startup_questions`, `run_startup_meeting` | Run Startup Mode from the chat |
+
+**Claude Desktop and Claude Code** (stays on your Mac): **This Mac → Add to Claude** in the app, or
+
+```sh
+~/Library/Application\ Support/agentim/stack/deploy/macos/connect-claude.sh   # then restart Claude
+```
+
+It adds a local server (`deploy/mcp/agentim_mcp.py`) that talks to the gateway on localhost with your token.
+
+**ChatGPT** needs an HTTPS address it can reach, so agentim opens a temporary [Cloudflare quick tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/do-more-with-tunnels/trycloudflare/): **This Mac → Connect ChatGPT**, or
+
+```sh
+~/Library/Application\ Support/agentim/stack/deploy/macos/connect-chatgpt.sh        # prints the connector URL
+~/Library/Application\ Support/agentim/stack/deploy/macos/connect-chatgpt.sh stop   # closes it
+```
+
+In ChatGPT: **Settings → Apps & Connectors → Advanced → Developer mode**, then **Create**, paste the URL and pick **No authentication**. The URL ends in a long random secret (`AGENTIM_MCP_SECRET`) and is the key to your agentim, so keep it private. A quick tunnel gets a new address each time it starts.
+
+Any other MCP client can use `POST http://localhost:8780/mcp` with `Authorization: Bearer <AGENTIM_API_TOKEN or RUNNER_TOKEN>`.
+
 ## 🪄 Skills
 
 Skills are plain `SKILL.md` files in [`gateway/skills/`](gateway/skills). They're shared by the gateway and the Mac app. An agent uses a skill when a message contains one of its trigger words, or when anyone types `/skill-name`.
@@ -242,7 +277,7 @@ Pick a voice model during onboarding (or set `COMPOSE_PROFILES=voice` in `.env`)
 
 ## 🎬 Making videos
 
-With [LTX Desktop](https://ltx.studio) open on the Mac, the native runner (installed by `install.sh`) adds `ltx/video` and `ltx/image`. In any chat:
+With [LTX Desktop](https://ltx.studio) installed on the Mac, the native runner (installed by `install.sh`) adds `ltx/video` and `ltx/image`, and the router sends "make a video of…" and "an image of…" there, from the Mac app, your chat apps, Claude or ChatGPT. If LTX Desktop is closed, the runner opens it and waits for it to load. In any chat:
 
 ```
 /video a tiny purple cartoon octopus in sunglasses surfing a wave made of chat bubbles
@@ -281,6 +316,8 @@ CI runs all four on every push.
 ## 🤝 Contributing
 
 PRs are welcome, especially new skills, channels and model backends. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Found a bug or want a feature? [Open an issue](https://github.com/doron2402/agentim/issues/new/choose), or use **Help → Report an Issue on GitHub…** in the app.
 
 ## 📄 License
 
