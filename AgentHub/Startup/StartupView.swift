@@ -10,7 +10,10 @@ struct StartupView: View {
             StartupList(model: model, stackRoot: host.stackRoot)
                 .frame(minWidth: 230, idealWidth: 260, maxWidth: 320)
             Group {
-                if model.composing || (model.listing?.startups.isEmpty ?? false) && model.detail == nil {
+                if model.editingTeam {
+                    // Full page, not a modal: the agents' cards and an editor.
+                    TeamEditor(model: model, presets: model.detail?.presets ?? StartupModel.demoPresets, stackRoot: host.stackRoot)
+                } else if model.composing || (model.listing?.startups.isEmpty ?? false) && model.detail == nil {
                     NewStartup(model: model, team: model.listing?.team ?? StartupModel.demoTeam, stackRoot: host.stackRoot)
                 } else if let detail = model.detail, detail.isInterview {
                     Interview(model: model, detail: detail, stackRoot: host.stackRoot)
@@ -28,9 +31,6 @@ struct StartupView: View {
             DeleteStartupConfirmation(startup: startup,
                                       onCancel: { model.askToDelete(nil) },
                                       onDelete: { Task { await model.confirmDelete(stackRoot: host.stackRoot) } })
-        }
-        .sheet(isPresented: $model.editingTeam) {
-            TeamEditor(model: model, presets: model.detail?.presets ?? StartupModel.demoPresets, stackRoot: host.stackRoot)
         }
         .onAppear { model.startPolling(stackRoot: host.stackRoot) }
         .task {
