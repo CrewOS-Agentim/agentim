@@ -85,6 +85,20 @@ final class HostControllerTests: XCTestCase {
         XCTAssertEqual(HostController.validStackRoot(dir.path)?.standardizedFileURL, dir.standardizedFileURL)
     }
 
+    /// Regression: chatty commands (docker pulling gigabytes) used to deadlock on a full pipe.
+    func testShellHandlesLotsOfOutput() async {
+        let result = await Shell.run(["sh", "-c", "yes agentim | head -c 2000000; echo done >&2"])
+        XCTAssertTrue(result.ok)
+        XCTAssertGreaterThan(result.output.count, 2_000_000)
+        XCTAssertTrue(result.output.hasSuffix("done\n"))
+    }
+
+    func testShellReportsFailure() async {
+        let result = await Shell.run(["sh", "-c", "echo nope; exit 3"])
+        XCTAssertEqual(result.status, 3)
+        XCTAssertEqual(result.output, "nope\n")
+    }
+
     func testMacMemoryIsSane() {
         XCTAssertGreaterThan(DeviceMemory.availableToAppBytes, 0)
         XCTAssertLessThanOrEqual(DeviceMemory.availableToAppBytes, DeviceMemory.physicalBytes)

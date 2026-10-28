@@ -90,7 +90,7 @@ final class OnboardingModel {
 
             // 2. Core containers first; voice starts in its own step so a voice problem can't block chat.
             update("start", .running(nil))
-            let up = await Shell.run(["docker", "compose", "up", "-d", "--build"] + Self.coreServices, in: root)
+            let up = await Shell.run(["docker", "compose", "--progress", "quiet", "up", "-d", "--build"] + Self.coreServices, in: root)
             guard up.ok else { throw SetupError(Self.explainDockerFailure(up.output)) }
             append(up.output)
             update("start", .done)
@@ -105,7 +105,7 @@ final class OnboardingModel {
             if case .voice(let stt, let tts) = plan.voice.kind {
                 update("voice", .running(nil))
                 do {
-                    let voiceUp = await Shell.run(["docker", "compose", "up", "-d", "voice"], in: root)
+                    let voiceUp = await Shell.run(["docker", "compose", "--progress", "quiet", "up", "-d", "voice"], in: root)
                     guard voiceUp.ok else { throw SetupError(Self.explainDockerFailure(voiceUp.output)) }
                     try await waitFor(URL(string: "http://localhost:8000/health")!, timeout: 600)
                     for model in [stt, tts] { try await downloadVoiceModel(model) }
