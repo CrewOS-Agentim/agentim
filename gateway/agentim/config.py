@@ -20,6 +20,7 @@ class Agent:
     skills: list = field(default_factory=list)
     model: str = "auto"
     prefer_local: bool = True
+    avatar: str = ""  # image path relative to the config folder (the Mac app shows it)
 
     @property
     def slug(self):

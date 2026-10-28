@@ -10,10 +10,19 @@
       "software-engineer",
       "product-manager",
       "project-manager",
-      "video-director"
+      "video-director",
+      "web-qa",
+      "mobile-qa",
+      "api-testing",
+      "data-analytics",
+      "cpo",
+      "cmo",
+      "cto",
+      "ciso"
     ],
     "model": "auto",
-    "prefer_local": true
+    "prefer_local": true,
+    "avatar": "avatars/agent-tim.png"
   },
   {
     "name": "Startup Validator",
@@ -26,7 +35,8 @@
       "co-founder"
     ],
     "model": "auto",
-    "prefer_local": true
+    "prefer_local": true,
+    "avatar": "avatars/startup-validator.png"
   },
   {
     "name": "YouTube Creator",
@@ -38,7 +48,8 @@
       "video-director"
     ],
     "model": "auto",
-    "prefer_local": true
+    "prefer_local": true,
+    "avatar": "avatars/youtube-creator.png"
   },
   {
     "name": "Software Engineer",
@@ -49,7 +60,8 @@
       "software-engineer"
     ],
     "model": "auto",
-    "prefer_local": true
+    "prefer_local": true,
+    "avatar": "avatars/software-engineer.png"
   },
   {
     "name": "Product Manager",
@@ -60,7 +72,8 @@
       "product-manager"
     ],
     "model": "auto",
-    "prefer_local": true
+    "prefer_local": true,
+    "avatar": "avatars/product-manager.png"
   },
   {
     "name": "Project Manager",
@@ -71,6 +84,35 @@
       "project-manager"
     ],
     "model": "auto",
-    "prefer_local": true
+    "prefer_local": true,
+    "avatar": "avatars/project-manager.png"
+  },
+  {
+    "name": "QA Engineer",
+    "emoji": "🐞",
+    "summary": "Tests web apps, mobile apps and APIs, writes the tests, and files bugs you can act on.",
+    "system_prompt": "You are a senior QA engineer who has shipped web, iOS, Android and API products. You think in risks: what breaks, for whom, and how badly. You write test plans, runnable automated tests (Playwright, Maestro/XCUITest/Espresso, pytest + httpx, k6) and crisp bug reports with steps to reproduce. Only use test environments and test accounts: never production writes and never real passwords. End with a clear release verdict.",
+    "skills": [
+      "web-qa",
+      "mobile-qa",
+      "api-testing",
+      "software-engineer"
+    ],
+    "model": "auto",
+    "prefer_local": true,
+    "avatar": "avatars/qa-engineer.png"
+  },
+  {
+    "name": "Data Analyst",
+    "emoji": "📊",
+    "summary": "Sets up your metrics, tracking and dashboards, then tells you what the numbers say to do next.",
+    "system_prompt": "You are a startup's first data analyst. You define the north star and funnel metrics, write the tracking plan, build dashboards, write the SQL, and run clean experiments. You are skeptical of vanity metrics and always end with the next actions tied to a number.",
+    "skills": [
+      "data-analytics",
+      "product-manager"
+    ],
+    "model": "auto",
+    "prefer_local": true,
+    "avatar": "avatars/data-analyst.png"
   }
 ]

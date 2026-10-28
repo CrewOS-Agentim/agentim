@@ -339,7 +339,24 @@ final class AppStore {
         router = snapshot.router
         servers = snapshot.servers ?? []
         serverModels = snapshot.serverModels ?? []
+        addNewBuiltIns()
         isLoading = false
+    }
+
+    /// Adds built-in skills and agents shipped after this Mac first ran agentim (e.g. QA Engineer),
+    /// once: ones the user deleted aren't brought back.
+    func addNewBuiltIns(defaults: UserDefaults = .standard) {
+        let seenKey = "seenBuiltIns"
+        var seen = Set(defaults.stringArray(forKey: seenKey) ?? (agents.map { "agent:\($0.name)" } + skills.map { "skill:\($0.slug)" }))
+        for skill in Skill.builtIn where !seen.contains("skill:\(skill.slug)") && !skills.contains(where: { $0.slug == skill.slug }) {
+            skills.append(skill)
+        }
+        for agent in Agent.starters(skills: skills) where !seen.contains("agent:\(agent.name)") && !agents.contains(where: { $0.name == agent.name }) {
+            agents.append(agent)
+        }
+        seen.formUnion(Skill.builtIn.map { "skill:\($0.slug)" })
+        seen.formUnion(Agent.starters(skills: skills).map { "agent:\($0.name)" })
+        defaults.set(Array(seen).sorted(), forKey: seenKey)
     }
 
     private func scheduleSave() {

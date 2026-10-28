@@ -184,11 +184,171 @@ final class StartupTests: XCTestCase {
     }
 
     @MainActor
+    func testFounderTalksToTheAgents() async {
+        let model = StartupModel(demo: true)
+        XCTAssertFalse(model.canSendToAgents, "nothing to send")
+        model.founderDraft = "   "
+        XCTAssertFalse(model.canSendToAgents)
+        model.founderDraft = String(repeating: "x", count: StartupModel.maxFounderMessage + 1)
+        XCTAssertFalse(model.canSendToAgents, "too long")
+        model.founderDraft = "Focus on enterprise pilots"
+        XCTAssertTrue(model.canSendToAgents)
+        let before = model.detail?.messages.count ?? 0
+        await model.sendToAgents(stackRoot: nil)
+        XCTAssertEqual(model.founderDraft, "", "cleared after sending")
+        XCTAssertEqual(model.detail?.messages.count, before + 1)
+        XCTAssertEqual(model.detail?.messages.last?.role, "founder")
+        XCTAssertEqual(model.detail?.messages.last?.content, "Focus on enterprise pilots")
+    }
+
+    func testPostMessageRequest() throws {
+        let request = try StartupClient(token: "t").request("v1/startups/a1/messages", method: "POST", body: ["text": "Hi agents"])
+        XCTAssertEqual(request.url?.path, "/v1/startups/a1/messages")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: String], ["text": "Hi agents"])
+    }
+
+    @MainActor
+    func testDeleteNeedsConfirmation() async {
+        let model = StartupModel(demo: true)
+        let leafy = model.listing!.startups.first { $0.id == "leafy" }!
+        model.askToDelete(leafy)
+        XCTAssertEqual(model.pendingDelete?.id, "leafy", "the confirmation screen is showing")
+        XCTAssertEqual(model.listing?.startups.count, 3, "nothing deleted yet")
+        model.askToDelete(nil)  // Cancel
+        XCTAssertNil(model.pendingDelete)
+        XCTAssertEqual(model.listing?.startups.count, 3)
+        model.askToDelete(leafy)
+        await model.confirmDelete(stackRoot: nil)
+        XCTAssertNil(model.pendingDelete)
+        XCTAssertFalse(model.listing!.startups.contains { $0.id == "leafy" })
+        XCTAssertNotEqual(model.selection, "leafy", "selection moves off the deleted startup")
+    }
+
+    @MainActor
+    func testPersonaAndAvatarEdits() throws {
+        CustomAvatars.root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = StartupModel(demo: true)
+        model.beginTeamEdit()
+        model.teamDraft[0].persona = "Ex-Stripe PM, blunt, loves data"
+        let size = NSSize(width: 40, height: 20)
+        let image = NSImage(size: size, flipped: false) { rect in NSColor.purple.setFill(); rect.fill(); return true }
+        model.setAvatar(image, for: model.teamDraft[0])
+        XCTAssertTrue(model.editorAvatar(for: model.teamDraft[0]) === image, "preview shows the pending avatar")
+        let key = model.teamDraft[0].key
+        model.applyAvatarEdits(model.avatarEdits, draftKeys: [key], savedKeys: [key], startup: "leafy")
+        let saved = try XCTUnwrap(CustomAvatars.image(startup: "leafy", key: key))
+        XCTAssertEqual(saved.size.width, saved.size.height, "center-cropped to a square")
+        XCTAssertTrue(model.avatarEdits.isEmpty)
+
+        model.resetAvatar(for: model.teamDraft[0])
+        model.applyAvatarEdits(model.avatarEdits, draftKeys: [key], savedKeys: [key], startup: "leafy")
+        XCTAssertNil(CustomAvatars.image(startup: "leafy", key: key), "back to the default")
+    }
+
+    func testNewHireAvatarFollowsTheRealKey() throws {
+        CustomAvatars.root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let image = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in NSColor.red.setFill(); rect.fill(); return true }
+        let edits: [String: StartupModel.AvatarEdit] = ["new-abc": .image(image)]
+        MainActor.assumeIsolated {
+            StartupModel(demo: true).applyAvatarEdits(edits, draftKeys: ["product", "new-abc"],
+                                                      savedKeys: ["product", "jordan-customer-success"], startup: "s1")
+        }
+        XCTAssertNotNil(CustomAvatars.image(startup: "s1", key: "jordan-customer-success"))
+        XCTAssertNil(CustomAvatars.image(startup: "s1", key: "new-abc"))
+    }
+
+    func testLTXAvatarPromptAndReplyParsing() {
+        let person = StartupPerson(key: "cto", name: "Kai Mori", title: "CTO", emoji: "🧠", owns: nil, persona: "dry humour")
+        let prompt = LTXAvatar.prompt(for: person)
+        XCTAssertTrue(prompt.contains("Kai Mori, a CTO (dry humour)"))
+        XCTAssertTrue(prompt.contains("no text"))
+        let reply = #"{"choices":[{"message":{"content":"Rendered.\n\n[image](http://localhost:8766/files/abc.png)"}}]}"#
+        XCTAssertEqual(LTXAvatar.imageURL(in: Data(reply.utf8))?.absoluteString, "http://localhost:8766/files/abc.png")
+        XCTAssertNil(LTXAvatar.imageURL(in: Data("{}".utf8)))
+    }
+
+    @MainActor
+    func testMentionQuery() {
+        XCTAssertEqual(StartupModel.mentionQuery(in: "@sa"), "sa")
+        XCTAssertEqual(StartupModel.mentionQuery(in: "hey @"), "")
+        XCTAssertNil(StartupModel.mentionQuery(in: "mail me at a@b"), "not after a word")
+        XCTAssertNil(StartupModel.mentionQuery(in: "@sam do this"), "only while typing the name")
+    }
+
+    @MainActor
+    func testMentionSuggestionsAndCompletion() {
+        let model = StartupModel(demo: true)
+        model.founderDraft = "Great work. @ni"
+        XCTAssertEqual(model.mentionSuggestions().map(\.name), ["Nina Shah"])
+        model.completeMention(model.mentionSuggestions()[0])
+        XCTAssertEqual(model.founderDraft, "Great work. @Nina ")
+        XCTAssertTrue(model.mentionSuggestions().isEmpty, "done typing the mention")
+        model.founderDraft = "@"
+        XCTAssertEqual(model.mentionSuggestions().count, model.detail?.team.count, "everyone after a bare @")
+    }
+
+    @MainActor
+    func testMeetingNotesInDemo() async {
+        let model = StartupModel(demo: true)
+        await model.loadMeetings(stackRoot: nil)
+        let meeting = try? XCTUnwrap(model.meetingList.first)
+        XCTAssertEqual(meeting?.round, 6)
+        XCTAssertNotNil(meeting?.summary, "Tim's summary is the meeting's headline")
+        XCTAssertTrue(meeting?.when.contains("·") ?? false, "date · time")
+        await model.open(meeting!, stackRoot: nil)
+        XCTAssertEqual(model.openMeeting?.round, 6)
+        XCTAssertEqual(model.openMeeting?.messages.last?.role, "ceo")
+        XCTAssertEqual(model.openMeeting?.person("founder").name, "You")
+    }
+
+    func testDecodesMeetingNotes() throws {
+        let list = #"{"meetings":[{"round":2,"started":1000,"ended":1300,"messages":4,"attendees":["sales","ceo"],"summary":"Ship it."}]}"#
+        let meetings = try JSONDecoder().decode(MeetingList.self, from: Data(list.utf8)).meetings
+        XCTAssertEqual(meetings.first?.attendees, ["sales", "ceo"])
+        XCTAssertEqual(meetings.first?.endDate.timeIntervalSince1970, 1300)
+    }
+
+    func testMentionsAreBoldInMessages() {
+        let names = ["Sam", "Leo", "automation"]
+        XCTAssertEqual(StartupDetail.boldMentions("@Sam come up with 2 designs, @leo help", names: names),
+                       "**@Sam** come up with 2 designs, **@leo** help")
+        XCTAssertEqual(StartupDetail.boldMentions("**@Sam** already bold", names: names), "**@Sam** already bold")
+        XCTAssertEqual(StartupDetail.boldMentions("mail sam@leo.com or @Samantha", names: names),
+                       "mail sam@leo.com or @Samantha", "no partial names or emails")
+    }
+
+    func testMentionRangesForHighlighting() {
+        let text = "Hi @Nina and @nina, not @Ninja"
+        let ranges = ComposerTextView.mentionRanges(in: text, names: ["Nina"])
+        XCTAssertEqual(ranges.map { (text as NSString).substring(with: $0) }, ["@Nina", "@nina"])
+    }
+
+    @MainActor
+    func testTabCompletesTheMention() {
+        let model = StartupModel(demo: true)
+        model.founderDraft = "@Le"
+        XCTAssertTrue(model.completeMentionWithTab())
+        XCTAssertEqual(model.founderDraft, "@Leo ")
+        XCTAssertFalse(model.completeMentionWithTab(), "nothing left to complete: Tab acts normally")
+        XCTAssertTrue(model.mentionNames.contains("Leo"))
+    }
+
+    @MainActor
+    func testTabKeyGoesToTheOwnerFirst() {
+        let view = SubmitTextView()
+        var handled = 0
+        view.onTab = { handled += 1; return true }
+        view.insertTab(nil)
+        XCTAssertEqual(handled, 1)
+        XCTAssertEqual(view.string, "", "a handled Tab doesn't insert a tab character")
+    }
+
+    @MainActor
     func testDemoHasManyStartupsAndNamedPeople() {
         let demo = StartupModel(demo: true)
         XCTAssertEqual(demo.listing?.startups.count, 3)
         XCTAssertEqual(Set(demo.listing?.startups.map(\.status) ?? []), ["running", "paused", "interview"])
-        XCTAssertEqual(demo.detail?.team.count, 8)
+        XCTAssertEqual(demo.detail?.team.count, 9)
         XCTAssertEqual(demo.detail?.person("ceo").name, "Agent Tim")
     }
 }

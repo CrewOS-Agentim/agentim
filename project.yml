@@ -35,6 +35,10 @@ targets:
         buildPhase: resources
       - path: gateway/config/agents.json
         buildPhase: resources
+      # Agent and startup-team avatars (made locally with LTX).
+      - path: gateway/config/avatars
+        type: folder
+        buildPhase: resources
     postCompileScripts:
       # Ship the Docker stack inside the app so onboarding works without the repo.
       - name: Bundle Docker stack

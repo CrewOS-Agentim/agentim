@@ -38,7 +38,8 @@
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
 - 🚀 **Startup Mode**: pitch any number of startups; Tim interviews you (10 YC + co-founder questions), then a team of agent employees works on each one every 10–30 minutes
-- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director
+- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics
+- 🐞 ships **agents with their own cartoon avatars** (made locally with LTX), including a **QA Engineer** that tests web apps, mobile apps and APIs and a **Data Analyst** that sets up your metrics
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
 - 🔌 **stays up**: the lid closes, the Mac is on the charger, and Tim is still answering. Anything that stops gets started again.
 - 🖥️ ships with a **native macOS app** (Swift/SwiftUI) whose onboarding installs Docker and your models for you
@@ -154,15 +155,24 @@ Before any download, the runner looks up the real file sizes from the Ollama reg
 
 ## 🖥 The Mac app
 
-<p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: chats" width="90%"></p>
+<p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: a chat with Agent Tim, the big message box and the routing note under each reply" width="90%"></p>
+<p align="center"><b>Chats</b>: a roomy message box (Enter sends, Shift+Enter for a new line), drag in files, and every reply says which model answered and why</p>
 
 <table>
+  <tr>
+    <td><img src="docs/assets/screenshots/agents.png" alt="Agents with their cartoon avatars, including QA Engineer and Data Analyst"></td>
+    <td><img src="docs/assets/screenshots/skills.png" alt="Built-in skills including Web QA, Mobile QA, API Testing and Data Analytics"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Agents</b>: each with its own avatar, skills and model preference</td>
+    <td align="center"><b>Skills</b>: QA, data analytics, startup, product, video and more</td>
+  </tr>
   <tr>
     <td><img src="docs/assets/screenshots/host.png" alt="This Mac control center"></td>
     <td><img src="docs/assets/screenshots/models.png" alt="Models: Hugging Face in Docker and LTX"></td>
   </tr>
   <tr>
-    <td align="center"><b>This Mac</b>: start the stack, keep it awake, launch at login</td>
+    <td align="center"><b>This Mac</b>: start the stack, keep it awake, connect Claude and ChatGPT</td>
     <td align="center"><b>Models</b>: Hugging Face in Docker, LTX, on-Mac MLX, cloud</td>
   </tr>
 </table>
@@ -221,6 +231,10 @@ Skills are plain `SKILL.md` files in [`gateway/skills/`](gateway/skills). They'r
 | 🧭 **Product Manager**: one-page PRDs, RICE, metrics | `/product-manager PRD for dark mode` |
 | 📋 **Project Manager**: plans, critical path, risks, status updates | `/project-manager plan a launch in 6 weeks` |
 | 🎥 **Video Director**: idea → on-model shot prompts → LTX clips | `/video-director a 20 s teaser for my app` |
+| 🌐 **Web QA**: risk-based test plans, Playwright tests, accessibility, flaky-test hygiene, bug reports | `/web-qa test the checkout on staging.example.com` |
+| 📱 **Mobile QA**: device matrix, Maestro/XCUITest/Espresso flows, interruptions, offline, store readiness | `/mobile-qa test our iOS onboarding` |
+| 🔌 **API Testing**: contract, negative and OWASP API Top 10 checks, pytest + httpx suites, k6 load tests | `/api-testing here's our openapi.yaml` |
+| 📊 **Data Analytics**: north star, funnel, retention, tracking plan, dashboards, SQL, experiments | `/data-analytics what should we measure?` |
 
 Adding your own is as easy as dropping a markdown file in that folder:
 
@@ -239,13 +253,14 @@ Run **as many startups as you like**, each with its own team of agents who act l
 
 1. **Pitch it.** Write the pitch in the Mac app (Startups → New startup) or in any chat: `/startup new <your pitch>`.
 2. **Get interviewed.** Agent Tim asks **10 follow-up questions**: five as a 🟧 *YC partner* (who desperately needs it, how do you know, why now, what's the insight, how you make money) and five as a 🤝 *co-founder* (why you, commitment and runway, roles, the first 90 days, kill criteria). They come from the `yc-partner` and `co-founder` skills; swap in your own with `AGENTIM_STARTUP_SKILLS`. In the Mac app they come one at a time, with **Back**, **Skip** and **Next** (Return moves on), and a progress bar.
-3. **The team gets to work.** Every 10–30 minutes, at a random time, the team meets. The people who spoke least recently report what they did, propose next moves in their own area, and ask colleagues for help by name ("@Leo, can you mock the ROI page?"). Tim (CEO) updates the living plan and sends you a two-line summary in your chat.
+3. **The agents get to work.** Every 10–30 minutes, at a random time, the team of agents meets. You can watch the meeting live in the **Agents room**: who's in it, who's typing, and each message as it lands. Their standing goals: **launch fast, measure, improve**; sales and marketing grow revenue and weekly active users; design ships one improvement every meeting; and Nina (Data Analyst) reports the numbers. The people who spoke least recently report what they did, propose next moves in their own area, and ask colleagues for help by name ("@Leo, can you mock the ROI page?"). Tim (CEO) updates the living plan and sends you a two-line summary in your chat.
 
 | | The team |
 |---|---|
 | 🧭 Maya Chen, Product Manager | 🎨 Leo Park, Designer · 🛠️ Noah Patel, Engineering Lead |
 | 📣 Ava Brooks, Marketing & Social | ⚙️ Sam Rivera, Marketing Automation · 💼 Zoe Kim, Head of Sales |
-| 🤝 Omar Haddad, Business Development | 💰 Grace Liu, Finance & Fundraising · 🐙 Agent Tim, CEO |
+| 🤝 Omar Haddad, Business Development | 💰 Grace Liu, Finance & Fundraising · 📊 Nina Shah, Data Analyst |
+| 🐙 Agent Tim, CEO | |
 
 ```
 /startup new Leafy: a monthly subscription that swaps office plants   ← pitch (then answer Tim's 10 questions)
@@ -253,7 +268,11 @@ Run **as many startups as you like**, each with its own team of agents who act l
 /startup off 2  ← pause              /startup on 2                   /startup delete 2
 ```
 
-**Make the team yours.** That's the default team: every startup can have its own (1–12 people plus Tim). In the Mac app, click **Team** to rename anyone, change their title, emoji or what they own, **Hire** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community) or anyone you describe, and let people go. People who leave keep their messages in the team room, marked *former*; the current team stops seeing them. In chat:
+**Talk to your agents.** Type in the agents room (or `/startup say <n> <message>` in chat). During a meeting, the agents who speak next answer you first; between meetings, the next one starts from your message. **Tag someone** with `@`: "@Sam come up with 2 designs for the welcome email" and Sam answers right away. Typing `@` suggests your agents.
+
+**Review every meeting.** The **Meetings** tab lists each meeting with its date and time, who was there and Tim's summary; open one to read the whole conversation.
+
+**Make the team yours.** That's the default team: every startup can have its own (1–12 agents plus Tim). In the Mac app, click **Agents** to rename anyone, change their title, emoji or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. Agents you remove keep their messages in the agents room, marked *former*; the current team stops seeing them. In chat:
 
 ```
 /startup team 2                                                    ← who works on #2
@@ -261,11 +280,23 @@ Run **as many startups as you like**, each with its own team of agents who act l
 /startup fire 2 Omar                                               ← let someone go
 ```
 
-<p align="center"><img src="docs/assets/screenshots/startup-team.png" alt="agentim Startup Mode: editing a startup's team" width="70%"></p>
+<p align="center"><img src="docs/assets/screenshots/startup-team.png" alt="agentim Startup Mode: editing a startup's agents, each with an avatar" width="80%"></p>
 
 It runs in the always-on gateway, so the teams keep working with the app closed, and uses your local models (routed to the strongest reasoning model you have).
 
-<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: startups, the living plan and the team room" width="85%"></p>
+<table>
+  <tr>
+    <td><img src="docs/assets/screenshots/startup-interview.png" alt="Startup interview: one question at a time with Back, Skip and Next"></td>
+    <td><img src="docs/assets/screenshots/startup-meeting.png" alt="A live meeting in the agents room: who's in the room and who's typing"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>The interview</b>: one question at a time, Back / Skip / Next</td>
+    <td align="center"><b>A live meeting</b>: watch the agents talk as it happens</td>
+  </tr>
+</table>
+
+<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: startups, the living plan and the agents room" width="85%"></p>
+<p align="center"><b>Your startups</b>: the living plan (priorities, metrics, owners) next to the agents room</p>
 
 ## 🎙️ Voice
 
@@ -274,6 +305,28 @@ Pick a voice model during onboarding (or set `COMPOSE_PROFILES=voice` in `.env`)
 - **Send a voice note** on Telegram or WhatsApp. Tim transcribes it locally (🎙️ "…"), answers, and **replies with a voice note**. Code and links stay in the text; they aren't read aloud.
 - Strangers' audio is never transcribed: the allow-list is checked first.
 - Turn spoken replies off with `AGENTIM_VOICE_REPLIES=false`, or change the voice with `AGENTIM_TTS_VOICE` (e.g. `af_heart`).
+
+## 🤖 Local coding agents (Claude Code, Codex)
+
+Agent Tim can hand a task to the coding agents already installed on your Mac, from any chat, the Mac app, or Claude/ChatGPT through the connector:
+
+```
+@claude-code review the auth module in my-app and list the riskiest bugs
+@codex explain how the build works
+```
+
+They're **off by default** and only used when a message names them (the router never picks them on its own). Turn them on in `.env`:
+
+```sh
+AGENTIM_LOCAL_AGENTS=claude-code,codex          # which ones (also: gemini, or "on" for all installed)
+AGENTIM_WORKSPACES=/Users/you/code/my-app       # the only folders they may work in (":"-separated)
+AGENTIM_LOCAL_AGENTS_MODE=read                  # read (default: plan/read-only sandbox) or edit
+AGENTIM_LOCAL_AGENTS_TMUX=1                     # optional: watch each run with `tmux attach -t agentim-…`
+```
+
+**Your existing Claude Code sessions** work too, once Claude Code is enabled: `/claude` lists the sessions from your workspaces (newest first, with their titles), `/claude 2` shows the latest messages, and `/claude 2 now write the fix` continues that session with `claude --resume` in its own folder. From Claude or ChatGPT, use the `list_claude_sessions`, `read_claude_session` and `continue_claude_session` tools. Only sessions inside `AGENTIM_WORKSPACES` are visible, and only their conversation text (no tool output).
+
+They run through the native runner on the Mac (the one that also drives LTX), with each tool's own safety settings: Claude Code in `plan` mode (or `acceptEdits` in edit mode) and Codex in a `read-only` sandbox (or `workspace-write`). The usual allow-list still decides who can talk to Tim at all.
 
 ## 🎬 Making videos
 

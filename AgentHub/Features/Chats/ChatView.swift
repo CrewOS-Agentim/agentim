@@ -50,7 +50,8 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Theme.s4) {
                     ForEach(conversation.messages) { message in
-                        MessageRow(message: message, model: store.model(id: message.modelID))
+                        MessageRow(message: message, model: store.model(id: message.modelID),
+                                   agent: store.agent(for: conversation))
                             .id(message.id)
                     }
                 }
@@ -246,12 +247,13 @@ private struct RoutePreview: View {
 struct MessageRow: View {
     let message: ChatMessage
     let model: AIModel?
+    var agent: Agent?
 
     private var isUser: Bool { message.role == .user }
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.s3) {
-            if isUser { Spacer(minLength: 60) } else { TimAvatar(size: 30).padding(.top, 2) }
+            if isUser { Spacer(minLength: 60) } else { AvatarView(agent: agent, size: 32).padding(.top, 2) }
             VStack(alignment: isUser ? .trailing : .leading, spacing: Theme.s1 + 2) {
                 if !(isUser && message.content.isEmpty) {
                     Group {

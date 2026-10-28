@@ -208,7 +208,7 @@ final class SkillTests: XCTestCase {
         }
         let agents = Agent.starters(skills: Skill.defaults)
         XCTAssertEqual(agents.first?.name, "Agent Tim")
-        XCTAssertEqual(agents.first?.skillIDs.count, 6)
+        XCTAssertEqual(agents.first?.skillIDs.count, Skill.builtIn.count - 2, "Tim knows every skill but the interview lenses")
         XCTAssertTrue(agents.contains { $0.name == "YouTube Creator" })
     }
 }

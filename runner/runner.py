@@ -14,6 +14,7 @@ import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -239,6 +240,9 @@ def list_models():
         except Exception as e:
             print(f"[runner] listing {name} failed: {e}", file=sys.stderr)
     models = [m for m in models if is_chat_model(m["id"])]
+    for name in LOCAL_AGENTS.available():
+        models.append({"id": f"local/{name}", "object": "model", "owned_by": name, "backend": "local", "kind": "agent",
+                       "name": LocalAgents.COMMANDS[name]["name"]})
     if LTX.available() or LTX.installed():
         models += [
             {"id": "ltx/video", "object": "model", "owned_by": "ltx", "backend": "ltx", "kind": "video"},
@@ -342,6 +346,238 @@ class LTXBridge:
 LTX = LTXBridge()
 
 
+# ---------------------------------------------------------------- local coding agents
+
+class LocalAgents:
+    """Hands a task to a coding agent installed on this Mac (Claude Code, OpenAI Codex, Gemini CLI).
+
+    Off unless AGENTIM_LOCAL_AGENTS lists the ones to allow (e.g. "claude-code,codex"). They only run in
+    folders listed in AGENTIM_WORKSPACES (":"-separated), read-only unless AGENTIM_LOCAL_AGENTS_MODE=edit,
+    and each agent keeps its own permission system. With AGENTIM_LOCAL_AGENTS_TMUX=1 (and tmux installed)
+    each run happens in a tmux session you can watch: `tmux attach -t agentim-…`.
+    """
+
+    # {prompt} is replaced by the task; the agent's own sandbox/permission flags do the enforcing.
+    COMMANDS = {
+        "claude-code": {"bin": "claude", "name": "Claude Code",
+                        "read": ["-p", "{prompt}", "--permission-mode", "plan", "--output-format", "text"],
+                        "edit": ["-p", "{prompt}", "--permission-mode", "acceptEdits", "--output-format", "text"]},
+        "codex": {"bin": "codex", "name": "OpenAI Codex",
+                  "read": ["exec", "--sandbox", "read-only", "--skip-git-repo-check", "{prompt}"],
+                  "edit": ["exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "{prompt}"]},
+        "gemini": {"bin": "gemini", "name": "Gemini CLI",
+                   "read": ["-p", "{prompt}"], "edit": ["-p", "{prompt}", "--approval-mode", "auto_edit"]},
+    }
+    SEARCH_PATH = [os.path.expanduser("~/.local/bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+
+    ENV_FILE = os.environ.get("AGENTIM_ENV_FILE") or os.path.expanduser(
+        "~/Library/Application Support/agentim/stack/.env")
+    KEYS = ("AGENTIM_LOCAL_AGENTS", "AGENTIM_WORKSPACES", "AGENTIM_LOCAL_AGENTS_MODE", "AGENTIM_LOCAL_AGENTS_TMUX",
+            "AGENTIM_LOCAL_AGENTS_TIMEOUT")
+
+    def __init__(self, env=None, which=shutil.which, run=subprocess.run, clock=time.time):
+        self.fixed_env, self.which, self.run, self.clock = env, which, run, clock
+
+    @property
+    def env(self):
+        """Settings from the process environment, overridden by the stack's .env (so edits apply right away)."""
+        if self.fixed_env is not None:
+            return self.fixed_env
+        values = {k: os.environ[k] for k in self.KEYS if k in os.environ}
+        try:
+            with open(self.ENV_FILE) as f:
+                for line in f:
+                    key, sep, value = line.strip().partition("=")
+                    if sep and key in self.KEYS:
+                        values[key] = value.strip().strip('"').strip("'")
+        except OSError:
+            pass
+        return values
+
+    def allowed(self):
+        raw = self.env.get("AGENTIM_LOCAL_AGENTS", "").strip().lower()
+        if raw in ("", "off", "0", "false", "no"):
+            return []
+        names = list(self.COMMANDS) if raw in ("on", "all", "1", "true", "yes") else [n.strip() for n in raw.split(",")]
+        return [n for n in names if n in self.COMMANDS]
+
+    def binary(self, name):
+        return self.which(self.COMMANDS[name]["bin"], path=os.pathsep.join(self.SEARCH_PATH))
+
+    def available(self):
+        if IN_CONTAINER:
+            return []
+        return [n for n in self.allowed() if self.binary(n)]
+
+    def workspaces(self):
+        return [os.path.realpath(os.path.expanduser(w)) for w in self.env.get("AGENTIM_WORKSPACES", "").split(":") if w.strip()]
+
+    def workspace_for(self, prompt):
+        """The workspace named in the prompt (by folder name or path), else the first one."""
+        spaces = self.workspaces()
+        if not spaces:
+            raise RuntimeError("No workspace set. Add AGENTIM_WORKSPACES=/path/to/project to .env.")
+        for space in spaces:
+            if space in prompt or os.path.basename(space) in prompt.split():
+                return space
+        return spaces[0]
+
+    def mode(self):
+        return "edit" if self.env.get("AGENTIM_LOCAL_AGENTS_MODE", "read").lower() == "edit" else "read"
+
+    def command(self, name, prompt):
+        spec = self.COMMANDS[name]
+        return [self.binary(name)] + [prompt if part == "{prompt}" else part for part in spec[self.mode()]]
+
+    def run_task(self, name, prompt, timeout=None):
+        if name not in self.available():
+            raise RuntimeError(f"{name} isn't enabled on this Mac (AGENTIM_LOCAL_AGENTS) or isn't installed.")
+        if not prompt.strip():
+            raise RuntimeError("Tell the agent what to do.")
+        cwd = self.workspace_for(prompt)
+        timeout = timeout or int(self.env.get("AGENTIM_LOCAL_AGENTS_TIMEOUT", "900"))
+        cmd = self.command(name, prompt)
+        if self.env.get("AGENTIM_LOCAL_AGENTS_TMUX") in ("1", "true", "yes") and self.which("tmux"):
+            return self.run_in_tmux(name, cmd, cwd, timeout)
+        result = self.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(f"{self.COMMANDS[name]['name']} exited with {result.returncode}: {output[-800:]}")
+        return output, cwd
+
+    def run_in_tmux(self, name, cmd, cwd, timeout):
+        session = f"agentim-{name}-{uuid.uuid4().hex[:6]}"
+        log_file = os.path.join(FILES_DIR, f"{session}.log")
+        os.makedirs(FILES_DIR, exist_ok=True)
+        quoted = " ".join(shlex.quote(c) for c in cmd)
+        script = f"{quoted} > {shlex.quote(log_file)} 2>&1; echo $? > {shlex.quote(log_file)}.exit"
+        self.run(["tmux", "new-session", "-d", "-s", session, "-c", cwd, script], check=True)
+        deadline = self.clock() + timeout
+        while self.clock() < deadline:
+            if os.path.exists(log_file + ".exit"):
+                output = open(log_file).read().strip()
+                code = open(log_file + ".exit").read().strip()
+                if code != "0":
+                    raise RuntimeError(f"{self.COMMANDS[name]['name']} exited with {code}: {output[-800:]}")
+                return output, cwd
+            time.sleep(2)
+        self.run(["tmux", "kill-session", "-t", session])
+        raise RuntimeError(f"{self.COMMANDS[name]['name']} didn't finish in {timeout} s (tmux session {session}).")
+
+
+LOCAL_AGENTS = LocalAgents()
+
+
+class ClaudeSessions:
+    """Existing Claude Code sessions (~/.claude/projects/*/<session>.jsonl), only for folders in AGENTIM_WORKSPACES
+    and only when Claude Code is enabled as a local agent. Reads the conversation text (no tool output or thinking);
+    continuing a session runs `claude --resume <id>` in its folder with the local agents' permission mode."""
+
+    ID = re.compile(r"^[0-9a-f-]{8,64}$")
+
+    def __init__(self, agents=None, root=None):
+        self.agents = agents or LOCAL_AGENTS
+        self.root = root or os.path.expanduser("~/.claude/projects")
+
+    def enabled(self):
+        return "claude-code" in self.agents.available()
+
+    def in_workspace(self, cwd):
+        cwd = os.path.realpath(cwd or "")
+        return any(cwd == w or cwd.startswith(w + os.sep) for w in self.agents.workspaces())
+
+    def files(self):
+        try:
+            folders = [os.path.join(self.root, d) for d in os.listdir(self.root)]
+        except OSError:
+            return []
+        found = [os.path.join(f, n) for f in folders if os.path.isdir(f) for n in os.listdir(f) if n.endswith(".jsonl")]
+        return sorted(found, key=os.path.getmtime, reverse=True)
+
+    @staticmethod
+    def text_of(content):
+        if isinstance(content, str):
+            return content
+        return "\n".join(b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+
+    def parse(self, path, keep_messages=False):
+        info = {"id": os.path.basename(path)[:-6], "cwd": None, "title": None, "updated": os.path.getmtime(path),
+                "messages": 0, "first_prompt": None, "branch": None}
+        messages = []
+        with open(path, errors="replace") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                kind = record.get("type")
+                info["cwd"] = info["cwd"] or record.get("cwd")
+                info["branch"] = record.get("gitBranch") or info["branch"]
+                if kind == "custom-title" and record.get("customTitle"):
+                    info["title"] = record["customTitle"]
+                elif kind == "ai-title" and record.get("aiTitle") and not info["title"]:
+                    info["title"] = record["aiTitle"]
+                if kind not in ("user", "assistant") or record.get("isSidechain") or record.get("isMeta"):
+                    continue
+                text = self.text_of((record.get("message") or {}).get("content")).strip()
+                if not text or text.startswith("<"):  # tool results, command wrappers, system reminders
+                    continue
+                info["messages"] += 1
+                if kind == "user" and not info["first_prompt"]:
+                    info["first_prompt"] = text[:200]
+                if keep_messages:
+                    messages.append({"role": kind, "text": text, "time": record.get("timestamp")})
+        return (info, messages) if keep_messages else info
+
+    def list(self, limit=20):
+        if not self.enabled():
+            raise RuntimeError("Enable Claude Code first: AGENTIM_LOCAL_AGENTS=claude-code and AGENTIM_WORKSPACES in .env.")
+        sessions = []
+        for path in self.files():
+            info = self.parse(path)
+            if info["messages"] and self.in_workspace(info["cwd"]):
+                sessions.append(info)
+                if len(sessions) >= limit:
+                    break
+        return sessions
+
+    def find(self, session_id):
+        if not self.ID.match(session_id or ""):
+            raise RuntimeError("That isn't a session id.")
+        path = next((p for p in self.files() if os.path.basename(p) == f"{session_id}.jsonl"), None)
+        if not path:
+            raise RuntimeError("No such Claude Code session.")
+        return path
+
+    def read(self, session_id, last=20, max_chars=1500):
+        if not self.enabled():
+            raise RuntimeError("Enable Claude Code first: AGENTIM_LOCAL_AGENTS=claude-code and AGENTIM_WORKSPACES in .env.")
+        info, messages = self.parse(self.find(session_id), keep_messages=True)
+        if not self.in_workspace(info["cwd"]):
+            raise RuntimeError("That session is outside AGENTIM_WORKSPACES.")
+        for m in messages:
+            m["text"] = m["text"][:max_chars] + ("…" if len(m["text"]) > max_chars else "")
+        return {**info, "messages_shown": messages[-last:]}
+
+    def continue_session(self, session_id, prompt, timeout=None):
+        session = self.read(session_id, last=1)
+        if not prompt.strip():
+            raise RuntimeError("Tell Claude Code what to do next.")
+        binary = self.agents.binary("claude-code")
+        mode = "acceptEdits" if self.agents.mode() == "edit" else "plan"
+        cmd = [binary, "-p", prompt, "--resume", session_id, "--permission-mode", mode, "--output-format", "text"]
+        timeout = timeout or int(self.agents.env.get("AGENTIM_LOCAL_AGENTS_TIMEOUT", "900"))
+        result = self.agents.run(cmd, cwd=session["cwd"], capture_output=True, text=True, timeout=timeout,
+                                 stdin=subprocess.DEVNULL)
+        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(f"Claude Code exited with {result.returncode}: {output[-800:]}")
+        return {"id": session_id, "cwd": session["cwd"], "reply": output}
+
+
+CLAUDE_SESSIONS = ClaudeSessions()
+
+
 def publish_file(path):
     """Copies a result into the files dir under an unguessable name and returns its URL path."""
     os.makedirs(FILES_DIR, exist_ok=True)
@@ -414,6 +650,16 @@ class Handler(BaseHTTPRequestHandler):
                 "gpus": gpus(), "backends": backend_status(), "ltx": LTX.available()})
         if path == "/v1/models":
             return self.send_json(200, {"object": "list", "data": list_models()})
+        if (path == "/v1/claude/sessions" or path.startswith("/v1/claude/sessions/")) and IN_CONTAINER:
+            return self.error(404, "Claude Code sessions are only on the Mac's native runner.")
+        if path == "/v1/claude/sessions" or path.startswith("/v1/claude/sessions/"):
+            session_id = path[len("/v1/claude/sessions/"):] if path.startswith("/v1/claude/sessions/") else ""
+            try:
+                if session_id:
+                    return self.send_json(200, CLAUDE_SESSIONS.read(session_id))
+                return self.send_json(200, {"sessions": CLAUDE_SESSIONS.list()})
+            except Exception as e:
+                return self.error(400, str(e))
         self.error(404, "Not found")
 
     def do_POST(self):
@@ -426,6 +672,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.error(400, "Body must be JSON.")
         if path == "/v1/chat/completions":
             return self.chat(body)
+        if path.startswith("/v1/claude/sessions/") and IN_CONTAINER:
+            return self.error(404, "Claude Code sessions are only on the Mac's native runner.")
+        if path.startswith("/v1/claude/sessions/") and path.endswith("/continue"):
+            session_id = path[len("/v1/claude/sessions/"):-len("/continue")]
+            try:
+                return self.send_json(200, CLAUDE_SESSIONS.continue_session(session_id, body.get("prompt", "")))
+            except Exception as e:
+                return self.error(400, str(e))
         if path == "/v1/models/check":
             return self.check(body)
         if path == "/v1/models/pull":
@@ -453,6 +707,8 @@ class Handler(BaseHTTPRequestHandler):
         backend, _, name = model.partition("/")
         if backend == "ltx":
             return self.ltx_chat(name, body)
+        if backend == "local":
+            return self.local_agent_chat(name, body)
         if backend not in BACKENDS or not name:
             return self.error(400, f"Unknown model '{model}'. Use an id from GET /v1/models.")
         body["model"] = name
@@ -485,6 +741,24 @@ class Handler(BaseHTTPRequestHandler):
             return f"Rendered your {kind} with LTX Desktop.\n\n[{kind}]({url})"
         except Exception as e:
             return f"Couldn't render the {kind}: {e}"
+
+    def local_agent_chat(self, name, body):
+        """Runs the task with a local coding agent and returns its final answer as a chat completion."""
+        prompt = next((m["content"] for m in reversed(body.get("messages", [])) if m.get("role") == "user"), "")
+        try:
+            output, cwd = LOCAL_AGENTS.run_task(name, prompt)
+            mode = "read-only" if LOCAL_AGENTS.mode() == "read" else "can edit files"
+            text = f"{output}\n\n_— {LocalAgents.COMMANDS[name]['name']} in {cwd} ({mode})_"
+        except subprocess.TimeoutExpired:
+            text = f"{LocalAgents.COMMANDS[name]['name']} took too long and was stopped."
+        except Exception as e:
+            text = f"Couldn't run {name}: {e}"
+        if not body.get("stream"):
+            return self.send_json(200, {"object": "chat.completion", "model": f"local/{name}", "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
+        self.start_sse()
+        self.sse({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})
+        self.wfile.write(b"data: [DONE]\n\n")
 
     def ltx_chat(self, kind, body):
         if not body.get("stream"):

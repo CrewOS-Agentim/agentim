@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -9,6 +10,8 @@ struct StartupPerson: Codable, Equatable, Identifiable {
     var title: String
     var emoji: String
     var owns: String?
+    /// Personality, background and how they talk (the agent stays in character).
+    var persona: String?
     var id: String { key }
 }
 
@@ -34,7 +37,7 @@ struct StartupSummary: Decodable, Equatable, Identifiable {
 struct StartupListing: Decodable, Equatable {
     let now: Double
     let team: [StartupPerson]
-    let startups: [StartupSummary]
+    var startups: [StartupSummary]
 }
 
 struct StartupDetail: Decodable, Equatable {
@@ -68,9 +71,41 @@ struct StartupDetail: Decodable, Equatable {
     let team: [StartupPerson]
     let people: [String: PersonInfo]
     var presets: [RolePreset]? = nil
-    let messages: [Message]
+    var messages: [Message]
+    /// Set while the agents are meeting (gateway `StartupMode.live`).
+    var meeting: Meeting? = nil
+
+    struct Meeting: Decodable, Equatable {
+        let round: Int
+        let speaking: String?
+        var speakers: [String]? = nil
+    }
 
     var isInterview: Bool { status == "interview" }
+
+    /// Makes "@Name" bold (markdown) for agents of this startup, in any message.
+    func boldMentions(_ text: String) -> String {
+        let names = people.values.map { StartupModel.firstName($0.name) } + Array(people.keys)
+        return Self.boldMentions(text, names: names)
+    }
+
+    static func boldMentions(_ text: String, names: [String]) -> String {
+        var result = text
+        for range in ComposerTextView.mentionRanges(in: text, names: names).reversed() {
+            guard let swiftRange = Range(range, in: result) else { continue }
+            // Already bold ("**@Leo**")? Leave it.
+            let before = result[..<swiftRange.lowerBound].suffix(2)
+            if before == "**" { continue }
+            result.replaceSubrange(swiftRange, with: "**\(result[swiftRange])**")
+        }
+        return result
+    }
+
+    /// Demo mode: show the founder's message without a gateway.
+    mutating func appendDemoFounderMessage(_ text: String) {
+        messages.append(Message(round: meeting?.round ?? rounds + 1, role: "founder", content: text,
+                                ts: Date().timeIntervalSince1970))
+    }
     var isRunning: Bool { status == "running" }
 
     /// Minutes until the next meeting, on the gateway's clock.
@@ -102,12 +137,28 @@ struct StartupClient {
     func setEnabled(_ id: String, _ on: Bool) async throws -> StartupDetail { try await send("v1/startups/\(id)", body: ["enabled": on]) }
 
     func setTeam(_ id: String, _ team: [StartupPerson]) async throws -> StartupDetail {
-        let members = team.map { ["key": $0.key, "name": $0.name, "title": $0.title, "emoji": $0.emoji, "owns": $0.owns ?? ""] }
+        let members = team.map { ["key": $0.key, "name": $0.name, "title": $0.title, "emoji": $0.emoji, "owns": $0.owns ?? "",
+                                  "persona": $0.persona ?? ""] }
         return try await send("v1/startups/\(id)/team", body: ["team": members])
     }
 
     func meetNow(_ id: String) async throws {
         _ = try await raw("v1/startups/\(id)/run", method: "POST", body: [:])
+    }
+
+    func meetings(_ id: String) async throws -> [MeetingSummary] {
+        let data = try await raw("v1/startups/\(id)/meetings", method: "GET", body: nil)
+        return try JSONDecoder().decode(MeetingList.self, from: data).meetings
+    }
+
+    func meeting(_ id: String, round: Int) async throws -> MeetingNotes {
+        let data = try await raw("v1/startups/\(id)/meetings/\(round)", method: "GET", body: nil)
+        return try JSONDecoder().decode(MeetingNotes.self, from: data)
+    }
+
+    /// The founder posts into the agents room (during a meeting or before the next one).
+    func postMessage(_ id: String, text: String) async throws -> StartupDetail {
+        try await send("v1/startups/\(id)/messages", body: ["text": text])
     }
 
     func delete(_ id: String) async throws {
@@ -142,7 +193,7 @@ struct StartupClient {
 @MainActor
 @Observable
 final class StartupModel {
-    private(set) var listing: StartupListing?
+    var listing: StartupListing?
     var detail: StartupDetail?
     private(set) var error: String?
     private(set) var busy: String?
@@ -165,6 +216,10 @@ final class StartupModel {
             listing = Self.demoListing
             selection = Self.demoDetail.id
             detail = Self.demoDetail
+            // `-demoMeeting YES` shows Leafy's agents mid-meeting (screenshots).
+            if UserDefaults.standard.bool(forKey: "demoMeeting") {
+                detail?.meeting = .init(round: 7, speaking: "data", speakers: ["sales", "design", "data"])
+            }
             // `-demoInterview YES` opens Tutorly mid-interview (screenshots).
             if UserDefaults.standard.bool(forKey: "demoInterview") {
                 selection = Self.demoInterview.id
@@ -190,8 +245,16 @@ final class StartupModel {
     func startPolling(stackRoot: URL?) {
         guard !isDemo, timer == nil else { return }
         Task { await refresh(stackRoot: stackRoot) }
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            Task { await self?.refresh(stackRoot: stackRoot) }
+        // Every 3 s while the agents are meeting (to show the chat live), otherwise every 15 s.
+        var ticks = 0
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                ticks += 1
+                if self.detail?.meeting != nil || self.meetingRequested || ticks % 5 == 0 {
+                    await self.refresh(stackRoot: stackRoot)
+                }
+            }
         }
     }
 
@@ -283,14 +346,14 @@ final class StartupModel {
     func submitAnswers(stackRoot: URL?) async {
         guard let id = detail?.id else { return }
         let answers = draftAnswers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        await act("Hiring the team…", stackRoot) { client in
+        await act("Starting the agents…", stackRoot) { client in
             self.detail = try await client.answer(id, answers: answers)
         }
     }
 
     func skipQuestions(stackRoot: URL?) async {
         guard let id = detail?.id else { return }
-        await act("Hiring the team…", stackRoot) { client in self.detail = try await client.skip(id) }
+        await act("Starting the agents…", stackRoot) { client in self.detail = try await client.skip(id) }
     }
 
     func setEnabled(_ on: Bool, stackRoot: URL?) async {
@@ -304,6 +367,8 @@ final class StartupModel {
     var teamDraft: [StartupPerson] = []
 
     func beginTeamEdit() {
+        avatarEdits = [:]
+        avatarError = nil
         teamDraft = detail?.team ?? []
         editingTeam = true
     }
@@ -333,11 +398,83 @@ final class StartupModel {
             if person.key.hasPrefix("new-") { person.key = "" }
             return person
         }
-        await act("Updating the team…", stackRoot) { client in
-            self.detail = try await client.setTeam(id, team)
+        let draftKeys = teamDraft.map(\.key)
+        let edits = avatarEdits
+        await act("Updating the agents…", stackRoot) { client in
+            let saved = try await client.setTeam(id, team)
+            // The gateway keeps the order, so draft i is saved member i (new hires get their real key here).
+            self.applyAvatarEdits(edits, draftKeys: draftKeys, savedKeys: saved.team.map(\.key), startup: id)
+            self.detail = saved
             self.editingTeam = false
         }
-        if isDemo { editingTeam = false }
+        if isDemo {
+            applyAvatarEdits(edits, draftKeys: draftKeys, savedKeys: draftKeys, startup: id)
+            editingTeam = false
+        }
+    }
+
+    // MARK: - Avatars in the agents editor
+
+    enum AvatarEdit { case image(NSImage), useDefault }
+
+    /// Pending avatar changes in the editor, by draft key (saved with the team).
+    var avatarEdits: [String: AvatarEdit] = [:]
+    var generatingAvatars: Set<String> = []
+    var avatarError: String?
+
+    /// What the editor shows for this agent: the pending change, else the saved custom/bundled avatar.
+    func editorAvatar(for person: StartupPerson) -> NSImage? {
+        switch avatarEdits[person.key] {
+        case .image(let image): return image
+        case .useDefault: return Avatars.teamMember(person.key)
+        case nil: return Avatars.teamMember(person.key, startup: detail?.id)
+        }
+    }
+
+    func setAvatar(_ image: NSImage, for person: StartupPerson) {
+        avatarEdits[person.key] = .image(image)
+    }
+
+    func resetAvatar(for person: StartupPerson) {
+        avatarEdits[person.key] = .useDefault
+    }
+
+    func chooseAvatar(for person: StartupPerson) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.message = "Choose a picture for \(person.name)"
+        if panel.runModal() == .OK, let url = panel.url, let image = NSImage(contentsOf: url) {
+            setAvatar(image, for: person)
+        }
+    }
+
+    /// Asks LTX (through the runner on this Mac) for a cartoon portrait matching the agent.
+    func generateAvatar(for person: StartupPerson, stackRoot: URL?) async {
+        guard !isDemo else { return }
+        guard let stackRoot,
+              let env = try? String(contentsOf: stackRoot.appendingPathComponent(".env"), encoding: .utf8),
+              let token = HostController.parseEnv(env)["RUNNER_TOKEN"], !token.isEmpty
+        else { avatarError = "agentim isn't set up yet."; return }
+        generatingAvatars.insert(person.key)
+        defer { generatingAvatars.remove(person.key) }
+        avatarError = nil
+        do {
+            let image = try await LTXAvatar.generate(prompt: LTXAvatar.prompt(for: person), token: token)
+            setAvatar(image, for: person)
+        } catch {
+            avatarError = "Couldn't make an avatar: \(error.localizedDescription)"
+        }
+    }
+
+    func applyAvatarEdits(_ edits: [String: AvatarEdit], draftKeys: [String], savedKeys: [String], startup: String) {
+        for (index, draftKey) in draftKeys.enumerated() where index < savedKeys.count {
+            switch edits[draftKey] {
+            case .image(let image): try? CustomAvatars.save(image, startup: startup, key: savedKeys[index])
+            case .useDefault: CustomAvatars.remove(startup: startup, key: savedKeys[index])
+            case nil: break
+            }
+        }
+        avatarEdits = [:]
     }
 
     static let firstNames = ["Jordan", "Riley", "Kai", "Nina", "Theo", "Priya", "Marco", "Elena", "Sami", "Lena"]
@@ -351,17 +488,148 @@ final class StartupModel {
         return "New Hire \(team.count + 1)"
     }
 
+    /// "Meet now" was pressed: poll fast until the meeting shows up (and while it runs).
+    var meetingRequested = false
+
     func meetNow(stackRoot: URL?) async {
+        meetingRequested = true
+        Task {
+            try? await Task.sleep(for: .seconds(20))
+            self.meetingRequested = false
+        }
         guard let id = detail?.id else { return }
-        await act("Calling the team in…", stackRoot) { client in try await client.meetNow(id) }
+        await act("Calling the agents in…", stackRoot) { client in try await client.meetNow(id) }
     }
 
-    func delete(stackRoot: URL?) async {
-        guard let id = detail?.id else { return }
-        await act(nil, stackRoot) { client in
-            try await client.delete(id)
-            self.selection = nil
-            self.detail = nil
+    // MARK: - Meeting notes
+
+    var meetingList: [MeetingSummary] = []
+    var openMeeting: MeetingNotes?
+
+    func loadMeetings(stackRoot: URL?) async {
+        guard let detail else { return }
+        if isDemo {
+            meetingList = MeetingSummary.fromMessages(detail.messages)
+            return
+        }
+        guard let client = Self.client(stackRoot: stackRoot) else { return }
+        meetingList = (try? await client.meetings(detail.id)) ?? []
+    }
+
+    func open(_ meeting: MeetingSummary, stackRoot: URL?) async {
+        guard let detail else { return }
+        if isDemo {
+            openMeeting = MeetingNotes.fromMessages(detail.messages.filter { $0.round == meeting.round },
+                                                     round: meeting.round, people: detail.people)
+            return
+        }
+        guard let client = Self.client(stackRoot: stackRoot) else { return }
+        do {
+            openMeeting = try await client.meeting(detail.id, round: meeting.round)
+        } catch {
+            self.error = "Couldn't open meeting \(meeting.round): \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - @mentions
+
+    /// The partial "@na" at the end of the draft, if the founder is typing a mention.
+    static func mentionQuery(in text: String) -> String? {
+        guard let range = text.range(of: #"(^|\s)@([\w-]*)$"#, options: .regularExpression) else { return nil }
+        return String(text[range]).trimmingCharacters(in: .whitespaces).dropFirst().lowercased()
+    }
+
+    /// Agents matching what's typed after "@".
+    func mentionSuggestions() -> [StartupPerson] {
+        guard let query = Self.mentionQuery(in: founderDraft), let team = detail?.team else { return [] }
+        return team.filter { person in
+            query.isEmpty || person.name.lowercased().hasPrefix(query) || person.key.lowercased().hasPrefix(query)
+        }
+    }
+
+    /// First names (and keys) of the agents you can tag, for highlighting.
+    var mentionNames: [String] {
+        (detail?.team ?? []).flatMap { [Self.firstName($0.name), $0.key] }
+    }
+
+    nonisolated static func firstName(_ name: String) -> String {
+        name.split(separator: " ").first.map(String.init) ?? name
+    }
+
+    /// Tab: complete the mention being typed with the first suggestion. Returns whether it did.
+    func completeMentionWithTab() -> Bool {
+        guard let first = mentionSuggestions().first else { return false }
+        completeMention(first)
+        return true
+    }
+
+    /// Replaces the partial "@na" with "@Nina ".
+    func completeMention(_ person: StartupPerson) {
+        guard let query = Self.mentionQuery(in: founderDraft) else { return }
+        let first = person.name.split(separator: " ").first.map(String.init) ?? person.name
+        founderDraft = String(founderDraft.dropLast(query.count + 1)) + "@\(first) "
+    }
+
+    // MARK: - Talking to the agents
+
+    var founderDraft = ""
+    static let maxFounderMessage = 2000
+
+    var canSendToAgents: Bool {
+        let text = founderDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.isEmpty && text.count <= Self.maxFounderMessage && busy == nil
+    }
+
+    func sendToAgents(stackRoot: URL?) async {
+        guard canSendToAgents, let id = detail?.id else { return }
+        let text = founderDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        founderDraft = ""
+        if isDemo {
+            detail?.appendDemoFounderMessage(text)
+            return
+        }
+        meetingRequested = true  // poll fast for the agents' answers
+        Task {
+            try? await Task.sleep(for: .seconds(20))
+            self.meetingRequested = false
+        }
+        await act(nil, stackRoot) { client in self.detail = try await client.postMessage(id, text: text) }
+        if error != nil { founderDraft = text }  // don't lose what they wrote
+    }
+
+    // MARK: - Deleting (always behind the confirmation screen)
+
+    /// The startup waiting for "Delete" on the confirmation screen.
+    var pendingDelete: StartupSummary?
+
+    func askToDelete(_ startup: StartupSummary?) {
+        pendingDelete = startup
+    }
+
+    /// The selected startup as a summary (for the confirmation screen).
+    var selectedSummary: StartupSummary? {
+        listing?.startups.first { $0.id == selection }
+    }
+
+    func confirmDelete(stackRoot: URL?) async {
+        guard let target = pendingDelete else { return }
+        pendingDelete = nil
+        if isDemo {
+            removeLocally(target.id)
+            return
+        }
+        await act("Deleting \(target.name)…", stackRoot) { client in
+            try await client.delete(target.id)
+            self.removeLocally(target.id)
+        }
+        await refresh(stackRoot: stackRoot)
+    }
+
+    private func removeLocally(_ id: String) {
+        listing?.startups.removeAll { $0.id == id }
+        if selection == id {
+            selection = listing?.startups.last?.id
+            detail = nil
         }
     }
 
@@ -389,6 +657,7 @@ final class StartupModel {
         .init(key: "sales", name: "Zoe Kim", title: "Head of Sales", emoji: "💼", owns: "the first 10 customers, pricing and pipeline"),
         .init(key: "bizdev", name: "Omar Haddad", title: "Business Development", emoji: "🤝", owns: "partnerships and distribution"),
         .init(key: "finance", name: "Grace Liu", title: "Finance & Fundraising", emoji: "💰", owns: "unit economics, runway and fundraising"),
+        .init(key: "data", name: "Nina Shah", title: "Data Analyst", emoji: "📊", owns: "metrics, tracking, dashboards and experiments"),
     ]
 
     static let demoHire = StartupPerson(key: "jordan", name: "Jordan Lee", title: "Customer Success", emoji: "🫶",
@@ -479,5 +748,100 @@ final class StartupModel {
                 .init(round: 6, role: "finance", content: "Ran the pilot math: 50% off month one still clears 31% margin. Let's cap pilots at 3 so we don't train customers on discounts. @Zoe, push annual prepay at signing.", ts: now - 1_250),
                 .init(round: 6, role: "ceo", content: "We're going after coworking landlords with per-floor pricing. Next: Zoe books 3 paid pilots by Friday using Leo's ROI page.", ts: now - 1_100),
             ])
+    }
+}
+
+/// Cartoon avatars from LTX via the native runner (http://localhost:8766), the same style as the built-in ones.
+enum LTXAvatar {
+    static var runner = URL(string: "http://localhost:8766")!
+
+    static func prompt(for person: StartupPerson) -> String {
+        let persona = (person.persona ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return "A friendly cartoon portrait of \(person.name), a \(person.title)"
+            + (persona.isEmpty ? "" : " (\(persona.prefix(160)))")
+            + ". Flat vector sticker illustration, thick dark outlines, soft shading, centered head-and-shoulders, "
+            + "plain pastel background, square composition, no text, no letters, no watermark"
+    }
+
+    static func generate(prompt: String, token: String, session: URLSession = .shared) async throws -> NSImage {
+        var request = URLRequest(url: runner.appendingPathComponent("v1/chat/completions"), timeoutInterval: 900)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": "ltx/image", "stream": false, "messages": [["role": "user", "content": prompt]],
+        ])
+        let (data, _) = try await session.data(for: request)
+        guard let url = imageURL(in: data) else { throw URLError(.cannotParseResponse) }
+        let (imageData, _) = try await session.data(from: url)
+        guard let image = NSImage(data: imageData) else { throw URLError(.cannotDecodeContentData) }
+        return image
+    }
+
+    /// The `[image](http://…png)` link in the runner's reply.
+    static func imageURL(in data: Data) -> URL? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = ((json["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any])?["content"] as? String,
+              let range = content.range(of: #"\(https?://[^)\s]+\)"#, options: .regularExpression)
+        else { return nil }
+        return URL(string: String(content[range].dropFirst().dropLast()))
+    }
+}
+
+// MARK: - Meeting notes
+
+struct MeetingList: Decodable { let meetings: [MeetingSummary] }
+
+/// One meeting in the notes list (GET /v1/startups/{id}/meetings).
+struct MeetingSummary: Decodable, Equatable, Identifiable {
+    let round: Int
+    let started: Double
+    let ended: Double
+    let messages: Int
+    let attendees: [String]
+    let summary: String?
+    var id: Int { round }
+
+    var startDate: Date { Date(timeIntervalSince1970: started) }
+    var endDate: Date { Date(timeIntervalSince1970: ended) }
+
+    /// "Tue, Oct 28 · 2:14 – 2:19 PM"
+    var when: String {
+        let day = startDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+        let start = startDate.formatted(date: .omitted, time: .shortened)
+        let end = endDate.formatted(date: .omitted, time: .shortened)
+        return start == end ? "\(day) · \(start)" : "\(day) · \(start) – \(end)"
+    }
+
+    /// Demo mode: group the demo messages by meeting.
+    static func fromMessages(_ messages: [StartupDetail.Message]) -> [MeetingSummary] {
+        Dictionary(grouping: messages, by: \.round).map { round, items in
+            MeetingSummary(round: round, started: items.map(\.ts).min() ?? 0, ended: items.map(\.ts).max() ?? 0,
+                           messages: items.count, attendees: Array(Set(items.map(\.role))).sorted(),
+                           summary: items.last { $0.role == "ceo" }?.content)
+        }
+        .sorted { $0.round > $1.round }
+    }
+}
+
+/// A full meeting to review (GET /v1/startups/{id}/meetings/{round}).
+struct MeetingNotes: Decodable, Identifiable {
+    let round: Int
+    let started: Double
+    let ended: Double
+    let summary: String?
+    let messages: [StartupDetail.Message]
+    let people: [String: StartupDetail.PersonInfo]
+    var id: Int { round }
+
+    func person(_ key: String) -> StartupDetail.PersonInfo {
+        if key == "founder" { return .init(name: "You", title: "Founder", emoji: "🧑‍🚀") }
+        return people[key] ?? .init(name: key.capitalized, title: "", emoji: "🤖")
+    }
+
+    static func fromMessages(_ messages: [StartupDetail.Message], round: Int,
+                             people: [String: StartupDetail.PersonInfo]) -> MeetingNotes {
+        MeetingNotes(round: round, started: messages.first?.ts ?? 0, ended: messages.last?.ts ?? 0,
+                     summary: messages.last { $0.role == "ceo" }?.content, messages: messages, people: people)
     }
 }
