@@ -60,12 +60,19 @@ extension Skill {
             triggers: triggers, alwaysOn: fields["always"] == "true")
     }
 
-    /// Built-in skills: the same SKILL.md files the gateway ships (bundled from gateway/skills).
+    /// Built-in skills: the same SKILL.md files the gateway ships (bundled from gateway/skills),
+    /// plus your private ones from <stack>/private/skills (never part of the open-source repo).
     static let builtIn: [Skill] = {
-        let urls = Bundle.main.urls(forResourcesWithExtension: "md", subdirectory: "skills") ?? []
-        return urls.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let bundled = Bundle.main.urls(forResourcesWithExtension: "md", subdirectory: "skills") ?? []
+        let privateDir = PrivateContent.folder.appendingPathComponent("skills")
+        let privateFiles = ((try? FileManager.default.contentsOfDirectory(at: privateDir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "md" }
+        var seen = Set<String>()
+        return (bundled.sorted { $0.lastPathComponent < $1.lastPathComponent }
+                + privateFiles.sorted { $0.lastPathComponent < $1.lastPathComponent })
             .compactMap { try? String(contentsOf: $0, encoding: .utf8) }
             .compactMap(parse(markdown:))
+            .filter { seen.insert($0.slug).inserted }
     }()
 
     static let defaults: [Skill] = builtIn + extras

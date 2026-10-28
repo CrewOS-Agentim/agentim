@@ -60,16 +60,17 @@ def make_startup_mode(llm=None, seed=7, clock=None):
 class HelperTests(unittest.TestCase):
     def test_team_are_people_in_the_asked_roles(self):
         titles = " ".join(p.title for p in TEAM)
-        for role in ("Product Manager", "Designer", "Engineering", "Marketing & Social", "Marketing Automation",
-                     "Sales", "Business Development", "Finance"):
+        for role in ("CPO", "Designer", "CTO", "CMO", "Marketing Automation", "CRO", "Business Development",
+                     "CFO", "Data Analyst", "CISO", "COO"):
             self.assertIn(role, titles)
+        self.assertLessEqual(len(TEAM), 12, "fits the team cap")
         self.assertTrue(all(len(p.name.split()) == 2 for p in TEAM), "everyone has a first and last name")
         self.assertEqual(CEO.name, "Agent Tim")
 
     def test_rotation_covers_everyone(self):
         rng, last, spoken = random.Random(1), {}, []
         for round_no in range(1, 4):
-            picked = pick_speakers(last, 3, rng)
+            picked = pick_speakers(last, 4, rng)
             spoken += [p.key for p in picked]
             last.update({p.key: round_no for p in picked})
         self.assertEqual(len(set(spoken)), len(TEAM))
@@ -157,7 +158,7 @@ class MeetingTests(unittest.TestCase):
         self.assertIn("Pre-sell 3 pilots", after["plan"])
         self.assertTrue(clock.now + 10 * 60 <= after["next_run"] <= clock.now + 30 * 60)
         roles = [m["role"] for m in mode.store.messages(startup["id"])]
-        self.assertEqual((len(roles), roles[-1]), (4, "ceo"))
+        self.assertEqual((len(roles), roles[-1]), (5, "ceo"), "four agents speak, then Tim")
         self.assertIn("meeting 1", text)
         self.assertEqual(sent[0][:2], ("telegram", "42"))
         person_prompt = next(p for p in llm.prompts if p.startswith("You are Maya") or p.startswith("You are Leo")

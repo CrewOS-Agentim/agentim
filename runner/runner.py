@@ -346,6 +346,46 @@ class LTXBridge:
 LTX = LTXBridge()
 
 
+# ---------------------------------------------------------------- memory: what's loaded, unload, stop LTX
+
+def loaded_models():
+    """Models Ollama has in memory right now (they unload by themselves after OLLAMA_KEEP_ALIVE)."""
+    if "ollama" not in BACKENDS:
+        return []
+    try:
+        data = http_json(f"{BACKENDS['ollama']}/api/ps")
+    except Exception:
+        return []
+    return [{"id": f"ollama/{m['name']}", "name": m["name"], "size_bytes": m.get("size"),
+             "vram_bytes": m.get("size_vram"), "until": m.get("expires_at")} for m in data.get("models", [])]
+
+
+def unload_models(model=None):
+    """Frees memory now: asks Ollama to drop the model(s) (keep_alive 0). They load again on the next chat."""
+    unloaded = []
+    for m in loaded_models():
+        if model and model not in (m["id"], m["name"]):
+            continue
+        req = urllib.request.Request(f"{BACKENDS['ollama']}/api/generate", method="POST",
+                                     data=json.dumps({"model": m["name"], "keep_alive": 0}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(req, timeout=60).read()
+            unloaded.append(m["id"])
+        except Exception as e:
+            print(f"[runner] couldn't unload {m['name']}: {e}", file=sys.stderr)
+    return unloaded
+
+
+def stop_ltx(run=subprocess.run):
+    """Quits LTX Desktop to free its GPU memory (the runner opens it again when a video or image is asked for)."""
+    if IN_CONTAINER or platform.system() != "Darwin":
+        return False
+    was_running = LTX.available()
+    run(["osascript", "-e", 'tell application "LTX Desktop" to quit'], capture_output=True, timeout=30)
+    return was_running
+
+
 # ---------------------------------------------------------------- local coding agents
 
 class LocalAgents:
@@ -667,6 +707,8 @@ class Handler(BaseHTTPRequestHandler):
                 "gpus": gpus(), "backends": backend_status(), "ltx": LTX.available()})
         if path == "/v1/models":
             return self.send_json(200, {"object": "list", "data": list_models()})
+        if path == "/v1/models/loaded":
+            return self.send_json(200, {"models": loaded_models(), "ltx_running": LTX.available()})
         if (path == "/v1/claude/sessions" or path.startswith("/v1/claude/sessions/")) and IN_CONTAINER:
             return self.error(404, "Claude Code sessions are only on the Mac's native runner.")
         if path == "/v1/claude/sessions" or path.startswith("/v1/claude/sessions/"):
@@ -697,6 +739,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, CLAUDE_SESSIONS.continue_session(session_id, body.get("prompt", "")))
             except Exception as e:
                 return self.error(400, str(e))
+        if path == "/v1/models/unload":
+            return self.send_json(200, {"unloaded": unload_models(body.get("model"))})
+        if path == "/v1/ltx/stop":
+            return self.send_json(200, {"stopped": stop_ltx()})
         if path == "/v1/models/check":
             return self.check(body)
         if path == "/v1/models/pull":

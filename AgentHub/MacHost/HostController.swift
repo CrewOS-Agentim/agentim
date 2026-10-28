@@ -39,6 +39,20 @@ final class HostController {
     /// The ChatGPT connector URL while the tunnel is up (it contains the MCP secret: show, don't log).
     private(set) var chatGPTConnectorURL: String?
     private(set) var connectorNote: String?
+    /// Models in memory right now (from the Docker runner) and whether LTX Desktop is running (native runner).
+    private(set) var loadedModels: [LoadedModel] = []
+    private(set) var ltxRunning = false
+
+    struct LoadedModel: Decodable, Identifiable, Equatable {
+        let id: String
+        let name: String
+        let size_bytes: Int64?
+        var gigabytes: String { String(format: "%.1f GB", Double(size_bytes ?? 0) / 1_000_000_000) }
+    }
+
+    var memoryInUse: String {
+        String(format: "%.1f GB", Double(loadedModels.compactMap(\.size_bytes).reduce(0, +)) / 1_000_000_000)
+    }
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -89,11 +103,67 @@ final class HostController {
         } else {
             services = []
         }
+        await refreshMemory()
         power = Self.parsePower(await Shell.run(["pmset", "-g", "ps"]).output)
         lidSleepDisabled = Self.parseSleepDisabled(await Shell.run(["pmset", "-g"]).output)
         helpers = Self.helperPlists.mapValues {
             FileManager.default.fileExists(atPath: NSString(string: $0).expandingTildeInPath)
         }
+    }
+
+    // MARK: - Memory: models and LTX
+
+    private var runnerToken: String? {
+        guard let root = stackRoot,
+              let env = try? String(contentsOf: root.appendingPathComponent(".env"), encoding: .utf8)
+        else { return nil }
+        return Self.parseEnv(env)["RUNNER_TOKEN"]
+    }
+
+    private func runner(_ port: Int, _ path: String, post: Bool = false) async -> Data? {
+        guard let token = runnerToken, let url = URL(string: "http://localhost:\(port)/\(path)") else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: post ? 90 : 5)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if post {
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data("{}".utf8)
+        }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return data
+    }
+
+    struct LoadedResponse: Decodable { let models: [LoadedModel]; let ltx_running: Bool? }
+
+    func refreshMemory() async {
+        if let data = await runner(8765, "v1/models/loaded"),
+           let loaded = try? JSONDecoder().decode(LoadedResponse.self, from: data) {
+            loadedModels = loaded.models
+        } else {
+            loadedModels = []
+        }
+        if let data = await runner(8766, "v1/models/loaded"),
+           let native = try? JSONDecoder().decode(LoadedResponse.self, from: data) {
+            ltxRunning = native.ltx_running ?? false
+        }
+    }
+
+    /// Unloads every model from memory now; they load again on the next chat.
+    func freeMemory() async {
+        busy = "Freeing memory…"
+        defer { busy = nil }
+        _ = await runner(8765, "v1/models/unload", post: true)
+        await refreshMemory()
+    }
+
+    /// Quits LTX Desktop (it opens again by itself when someone asks for a video or image).
+    func stopLTX() async {
+        busy = "Stopping LTX…"
+        defer { busy = nil }
+        _ = await runner(8766, "v1/ltx/stop", post: true)
+        try? await Task.sleep(for: .seconds(2))
+        await refreshMemory()
     }
 
     // MARK: - Actions

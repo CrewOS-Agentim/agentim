@@ -149,7 +149,7 @@ class GoalsAndLiveMeetingTests(unittest.TestCase):
         mode.run_round(startup["id"])
         speaking = [s.get("speaking") for s in seen if s]
         self.assertEqual(speaking[-1], "ceo", "Tim speaks last")
-        self.assertEqual(len(set(speaking[:-1])), 3, "three agents take turns")
+        self.assertEqual(len(set(speaking[:-1])), 4, "four agents take turns")
         self.assertEqual(seen[0]["round"], 1)
         self.assertIsNone(mode.detail(startup["id"])["meeting"], "cleared after the meeting")
 
@@ -401,6 +401,32 @@ class MinutesTests(unittest.TestCase):
         self.assertEqual(mode.store.all_minutes(startup["id"]), {})
 
 
+class LeadershipTests(unittest.TestCase):
+    def test_c_level_agents_follow_their_playbooks(self):
+        from agentim import skills as skill_lib
+        llm = TeamLLM()
+        gateway, mode = make_startup_mode(llm=llm)
+        gateway.skills = skill_lib.load_dir(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills"))
+        startup = running(mode)
+        leaders = [person_dict(p) for p in TEAM if p.title in ("CRO", "CFO", "COO", "CISO")]
+        mode.set_team(startup["id"], leaders)
+        mode.run_round(startup["id"])
+        for first, marker in (("Zoe", "Your playbook as CRO"), ("Grace", "Your playbook as CFO"),
+                              ("Marcus", "Your playbook as COO"), ("Dana", "Your playbook as CISO")):
+            prompt = next(p for p in llm.prompts if p.startswith(f"You are {first} "))
+            self.assertIn(marker, prompt)
+
+    def test_presets_include_the_c_suite(self):
+        titles = {p["title"] for p in ROLE_PRESETS}
+        self.assertTrue({"CTO", "CPO", "CMO", "CRO", "CISO", "CFO", "COO", "CHRO", "CDO", "CCO", "CLO", "CAIO"} <= titles)
+
+    def test_every_c_level_title_has_a_playbook(self):
+        from agentim.startup import playbook_slug
+        for title, slug in (("CHRO", "chro"), ("Chief People Officer", "chro"), ("CDO", "cdo"), ("CCO", "cco"),
+                            ("General Counsel", "clo"), ("CAIO", "caio"), ("Chief AI Officer", "caio")):
+            self.assertEqual(playbook_slug(title), slug, title)
+
+
 class MigrationTests(unittest.TestCase):
     def test_old_database_gets_team_columns(self):
         db = sqlite3.connect(":memory:", check_same_thread=False)
@@ -422,7 +448,7 @@ class ChatTests(unittest.TestCase):
         self.assertIn("Maya Chen", say("/startup team 1"))
         self.assertIn("Jordan Lee* joined", say("/startup hire 1 Jordan Lee | Customer Success | onboarding and retention"))
         self.assertIn("Use `/startup hire", say("/startup hire 1 Jordan Lee"))
-        self.assertIn("has 9 people", say("/startup fire 1 Omar"))
+        self.assertIn(f"has {len(TEAM)} people", say("/startup fire 1 Omar"), "one hired, one fired")
         self.assertIn("No one called", say("/startup fire 1 Nobody"))
         self.assertIn("Which startup", say("/startup fire 9 Maya"))
 

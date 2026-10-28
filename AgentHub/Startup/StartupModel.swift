@@ -669,15 +669,17 @@ final class StartupModel {
     // MARK: - Demo (screenshots)
 
     static let demoTeam: [StartupPerson] = [
-        .init(key: "product", name: "Maya Chen", title: "Product Manager", emoji: "🧭", owns: "the problem, MVP scope and success metrics"),
+        .init(key: "product", name: "Maya Chen", title: "CPO", emoji: "🧭", owns: "product vision, MVP scope and success metrics"),
         .init(key: "design", name: "Leo Park", title: "Designer", emoji: "🎨", owns: "onboarding, key screens and brand"),
-        .init(key: "engineering", name: "Noah Patel", title: "Engineering Lead", emoji: "🛠️", owns: "architecture and the smallest shippable version"),
-        .init(key: "marketing", name: "Ava Brooks", title: "Marketing & Social Lead", emoji: "📣", owns: "positioning, content and launch"),
+        .init(key: "engineering", name: "Noah Patel", title: "CTO", emoji: "🛠️", owns: "architecture and the smallest shippable version"),
+        .init(key: "marketing", name: "Ava Brooks", title: "CMO", emoji: "📣", owns: "positioning, channels and launch"),
         .init(key: "automation", name: "Sam Rivera", title: "Marketing Automation", emoji: "⚙️", owns: "funnels, email sequences and lead scoring"),
-        .init(key: "sales", name: "Zoe Kim", title: "Head of Sales", emoji: "💼", owns: "the first 10 customers, pricing and pipeline"),
+        .init(key: "sales", name: "Zoe Kim", title: "CRO", emoji: "💼", owns: "the first 10 customers, pricing and pipeline"),
         .init(key: "bizdev", name: "Omar Haddad", title: "Business Development", emoji: "🤝", owns: "partnerships and distribution"),
-        .init(key: "finance", name: "Grace Liu", title: "Finance & Fundraising", emoji: "💰", owns: "unit economics, runway and fundraising"),
+        .init(key: "finance", name: "Grace Liu", title: "CFO", emoji: "💰", owns: "unit economics, runway and fundraising"),
         .init(key: "data", name: "Nina Shah", title: "Data Analyst", emoji: "📊", owns: "metrics, tracking, dashboards and experiments"),
+        .init(key: "security", name: "Dana Cohen", title: "CISO", emoji: "🛡️", owns: "security, trust and compliance"),
+        .init(key: "operations", name: "Marcus Reed", title: "COO", emoji: "⚙️", owns: "OKRs, operating rhythm and execution"),
     ]
 
     static let demoHire = StartupPerson(key: "jordan", name: "Jordan Lee", title: "Customer Success", emoji: "🫶",

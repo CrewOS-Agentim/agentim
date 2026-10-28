@@ -16,7 +16,8 @@ services:
     volumes:
       - ollama-models:/root/.ollama
     environment:
-      OLLAMA_KEEP_ALIVE: 30m
+      # How long a model stays in memory after its last use (This Mac → Free memory unloads right away).
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
     restart: unless-stopped
     # Linux + NVIDIA: uncomment to use the GPU.
     # deploy:
@@ -50,6 +51,8 @@ services:
       WAHA_API_KEY: ${WAHA_API_KEY:-}
     volumes:
       - gateway-data:/data
+      # Your private skills and agents (e.g. company playbooks): ./private/skills/*.md and ./private/agents.json.
+      - ./private:/private:ro
     ports:
       - "8780:8780"
     extra_hosts:

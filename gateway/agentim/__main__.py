@@ -43,7 +43,7 @@ def main():
     catalog = Catalog(config)
     voice = Voice(config.voice_url, config.stt_model, config.tts_model, config.tts_voice)
     store = Store(os.path.join(config.data_dir, "agentim.db"))
-    gateway = Gateway(config, store, LLM(config), catalog, skill_lib.load_dir(config.skills_dir),
+    gateway = Gateway(config, store, LLM(config), catalog, skill_lib.load_dirs(config.skills_dir, os.path.join(config.private_dir, "skills")),
                       voice if voice.enabled else None)
     channels = build_channels(config, gateway)
 

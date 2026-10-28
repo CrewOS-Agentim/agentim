@@ -104,4 +104,12 @@ final class HostControllerTests: XCTestCase {
         XCTAssertLessThanOrEqual(DeviceMemory.availableToAppBytes, DeviceMemory.physicalBytes)
         XCTAssertEqual(DeviceMemory.appCeilingBytes, Int64(Double(DeviceMemory.physicalBytes) * 0.75))
     }
+
+    func testDecodesModelsInMemory() throws {
+        let json = #"{"models":[{"id":"ollama/qwen3:4b","name":"qwen3:4b","size_bytes":5100000000,"vram_bytes":0}],"ltx_running":true}"#
+        let loaded = try JSONDecoder().decode(HostController.LoadedResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(loaded.models.first?.name, "qwen3:4b")
+        XCTAssertEqual(loaded.models.first?.gigabytes, "5.1 GB")
+        XCTAssertEqual(loaded.ltx_running, true)
+    }
 }

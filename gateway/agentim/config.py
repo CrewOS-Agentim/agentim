@@ -50,6 +50,7 @@ class Config:
     show_route: bool = True
     data_dir: str = "/data"
     skills_dir: str = ""
+    private_dir: str = ""  # private skills/ and agents.json (mounted read-only; never in the repo)
     agents: list = field(default_factory=list)
     port: int = 8780
     voice_url: str = ""
@@ -72,9 +73,15 @@ def parse_allowed(raw):
     return allowed
 
 
-def load_agents(path):
+def load_agents(path, private_path=None):
+    """Built-in agents, plus private ones (e.g. company-specific) from a file that's never committed."""
     with open(path) as f:
-        return [Agent(**entry) for entry in json.load(f)]
+        agents = [Agent(**entry) for entry in json.load(f)]
+    if private_path and os.path.exists(private_path):
+        with open(private_path) as f:
+            names = {a.name for a in agents}
+            agents += [Agent(**entry) for entry in json.load(f) if entry.get("name") not in names]
+    return agents
 
 
 def from_env(env=None):
@@ -104,7 +111,8 @@ def from_env(env=None):
         show_route=flag("AGENTIM_SHOW_ROUTE", True),
         data_dir=env.get("AGENTIM_DATA_DIR", "/data"),
         skills_dir=env.get("AGENTIM_SKILLS_DIR", os.path.join(here, "skills")),
-        agents=load_agents(agents_path),
+        private_dir=env.get("AGENTIM_PRIVATE_DIR", "/private"),
+        agents=load_agents(agents_path, os.path.join(env.get("AGENTIM_PRIVATE_DIR", "/private"), "agents.json")),
         port=int(env.get("AGENTIM_PORT", "8780")),
         voice_url=env.get("VOICE_URL", "").rstrip("/"),
         stt_model=env.get("AGENTIM_STT_MODEL", "Systran/faster-whisper-small"),

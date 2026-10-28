@@ -361,7 +361,7 @@ final class StartupTests: XCTestCase {
         let demo = StartupModel(demo: true)
         XCTAssertEqual(demo.listing?.startups.count, 3)
         XCTAssertEqual(Set(demo.listing?.startups.map(\.status) ?? []), ["running", "paused", "interview"])
-        XCTAssertEqual(demo.detail?.team.count, 9)
+        XCTAssertEqual(demo.detail?.team.count, 11)
         XCTAssertEqual(demo.detail?.person("ceo").name, "Agent Tim")
     }
 }

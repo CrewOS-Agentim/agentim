@@ -46,6 +46,19 @@ def parse(markdown):
         always=fields.get("always") == "true")
 
 
+def load_dirs(*paths):
+    """Skills from several folders (built-in first); a later folder can't shadow an existing slug."""
+    skills, seen = [], set()
+    for path in paths:
+        if not path or not os.path.isdir(path):
+            continue
+        for skill in load_dir(path):
+            if skill.slug not in seen:
+                seen.add(skill.slug)
+                skills.append(skill)
+    return skills
+
+
 def load_dir(path):
     skills = []
     if not os.path.isdir(path):

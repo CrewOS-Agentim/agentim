@@ -38,15 +38,17 @@ class Person:
 
 
 TEAM = [
-    Person("product", "Maya Chen", "Product Manager", "🧭", "the problem, the core user, MVP scope, success metrics and what to cut"),
+    Person("product", "Maya Chen", "CPO", "🧭", "the problem, the core user, MVP scope, success metrics and what to cut"),
     Person("design", "Leo Park", "Designer", "🎨", "first impression, onboarding, the key screens, brand and trust"),
-    Person("engineering", "Noah Patel", "Engineering Lead", "🛠️", "architecture, build vs. buy, the smallest shippable version, cost and risk"),
-    Person("marketing", "Ava Brooks", "Marketing & Social Lead", "📣", "positioning, messaging, content, social channels, community and launch"),
+    Person("engineering", "Noah Patel", "CTO", "🛠️", "architecture, build vs. buy, the smallest shippable version, cost and risk"),
+    Person("marketing", "Ava Brooks", "CMO", "📣", "positioning, messaging, content, social channels, community and launch"),
     Person("automation", "Sam Rivera", "Marketing Automation", "⚙️", "funnels, email/SMS sequences, lead scoring and tooling that runs on its own"),
-    Person("sales", "Zoe Kim", "Head of Sales", "💼", "the first 10 customers, the pitch, pricing, objections and the pipeline"),
+    Person("sales", "Zoe Kim", "CRO", "💼", "the first 10 customers, the pitch, pricing, objections and the pipeline"),
     Person("bizdev", "Omar Haddad", "Business Development", "🤝", "partnerships, distribution channels, integrations and deals"),
-    Person("finance", "Grace Liu", "Finance & Fundraising", "💰", "unit economics, runway, pricing math, and when and how to raise"),
+    Person("finance", "Grace Liu", "CFO", "💰", "unit economics, runway, pricing math, and when and how to raise"),
     Person("data", "Nina Shah", "Data Analyst", "📊", "the metrics: north star, funnel, retention, the tracking plan, dashboards and experiment results"),
+    Person("security", "Dana Cohen", "CISO", "🛡️", "security and trust: the risk register, SOC 2 / ISO 27001 readiness, customer security reviews and incident readiness"),
+    Person("operations", "Marcus Reed", "COO", "⚙️", "execution: OKRs, the operating rhythm, processes, hiring plan and vendors"),
 ]
 CEO = Person("ceo", "Agent Tim", "CEO", "🐙", "the plan, priorities and keeping the founder in the loop")
 FOUNDER = Person("founder", "Founder", "Founder", "🧑‍🚀", "the vision and the final call")
@@ -69,6 +71,14 @@ ROLE_PRESETS = [
     {"title": "Security Researcher", "emoji": "🔬", "owns": "vulnerability research, threat intelligence, new attack techniques and tooling"},
     {"title": "CPO", "emoji": "🧭", "owns": "product vision, strategy, roadmap and product-market fit"},
     {"title": "CMO", "emoji": "📣", "owns": "positioning, channels, launches and pipeline from marketing"},
+    {"title": "CRO", "emoji": "💼", "owns": "revenue: pipeline, sales process, pricing, forecast, expansion and retention"},
+    {"title": "CFO", "emoji": "💰", "owns": "runway, unit economics, budgets, fundraising and board reporting"},
+    {"title": "COO", "emoji": "⚙️", "owns": "OKRs, operating rhythm, processes, hiring plan and execution"},
+    {"title": "CHRO", "emoji": "🫂", "owns": "hiring plan, interviews, onboarding, performance and culture"},
+    {"title": "CDO", "emoji": "🗄️", "owns": "data strategy, platform, governance and data quality"},
+    {"title": "CCO", "emoji": "🤗", "owns": "customer onboarding, success, support and retention"},
+    {"title": "CLO", "emoji": "⚖️", "owns": "contracts, company structure, IP, privacy and regulatory risk"},
+    {"title": "CAIO", "emoji": "🤖", "owns": "AI strategy, use cases, evaluation, cost and AI governance"},
     {"title": "CISO", "emoji": "🛡️", "owns": "the security program, risk register, compliance and incident readiness"},
     {"title": "Compliance & GRC", "emoji": "🛡️", "owns": "SOC 2 / ISO 27001 / PCI readiness, policies, audits and what customers' security teams ask"},
 ]
@@ -87,6 +97,11 @@ MAX_PERSONA = 600
 
 # Agents whose title matches a C-level skill follow that skill's playbook in meetings.
 ROLE_PLAYBOOKS = {"cto": "cto", "chief technology": "cto", "cmo": "cmo", "chief marketing": "cmo",
+                  "cro": "cro", "chief revenue": "cro", "cfo": "cfo", "chief financial": "cfo",
+                  "coo": "coo", "chief operating": "coo",
+                  "chro": "chro", "chief human": "chro", "chief people": "chro", "cdo": "cdo", "chief data": "cdo",
+                  "cco": "cco", "chief customer": "cco", "clo": "clo", "chief legal": "clo", "general counsel": "clo",
+                  "caio": "caio", "chief ai": "caio",
                   "cpo": "cpo", "chief product": "cpo", "ciso": "ciso", "chief information security": "ciso",
                   "data analyst": "data-analytics", "qa": "web-qa"}
 
@@ -171,6 +186,8 @@ ROLE_GOALS = {
     "sales": "close revenue: pipeline, demos, pilots and paying customers; report deals and revenue",
     "bizdev": "open partnerships and channels that bring users and revenue",
     "finance": "keep pricing, unit economics and runway healthy as revenue grows",
+    "security": "make security a reason customers buy (trust page, questionnaires, SOC 2 path) without slowing launches",
+    "operations": "turn the plan into owners, dates and a weekly rhythm, and unblock whoever is stuck",
     "data": "set up the metrics and tracking, report the numbers each meeting, and say what they mean",
 }
 
@@ -464,7 +481,7 @@ class StartupStore:
 
 
 class StartupMode:
-    def __init__(self, gateway, store: StartupStore, rng=random, clock=time.time, speakers_per_round=3):
+    def __init__(self, gateway, store: StartupStore, rng=random, clock=time.time, speakers_per_round=4):
         self.gateway, self.store = gateway, store
         self.rng, self.clock = rng, clock
         self.speakers_per_round = speakers_per_round

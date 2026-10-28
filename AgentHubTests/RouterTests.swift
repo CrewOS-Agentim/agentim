@@ -208,7 +208,11 @@ final class SkillTests: XCTestCase {
         }
         let agents = Agent.starters(skills: Skill.defaults)
         XCTAssertEqual(agents.first?.name, "Agent Tim")
-        XCTAssertEqual(agents.first?.skillIDs.count, Skill.builtIn.count - 2, "Tim knows every skill but the interview lenses")
+        let timSkills = Set(Skill.defaults.filter { agents.first?.skillIDs.contains($0.id) ?? false }.map(\.slug))
+        for slug in ["cto", "cpo", "cmo", "cro", "ciso", "cfo", "coo", "chro", "cdo", "cco", "clo", "caio", "web-qa", "data-analytics"] {
+            XCTAssertTrue(timSkills.contains(slug), "Tim knows \(slug)")
+        }
+        XCTAssertFalse(timSkills.contains("yc-partner"), "the interview lenses are Startup Validator's")
         XCTAssertTrue(agents.contains { $0.name == "YouTube Creator" })
     }
 }

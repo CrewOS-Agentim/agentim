@@ -56,8 +56,14 @@ extension Agent {
     static func starters(skills: [Skill]) -> [Agent] {
         guard let url = Bundle.main.url(forResource: "agents", withExtension: "json"),
               let data = try? Data(contentsOf: url),
-              let bundled = try? JSONDecoder().decode([Bundled].self, from: data)
+              var bundled = try? JSONDecoder().decode([Bundled].self, from: data)
         else { return defaults }
+        // Your private agents (<stack>/private/agents.json), e.g. company-specific ones.
+        if let privateData = try? Data(contentsOf: PrivateContent.folder.appendingPathComponent("agents.json")),
+           let privateAgents = try? JSONDecoder().decode([Bundled].self, from: privateData) {
+            let names = Set(bundled.map(\.name))
+            bundled += privateAgents.filter { !names.contains($0.name) }
+        }
         return bundled.map { entry in
             Agent(name: entry.name, emoji: entry.emoji, summary: entry.summary, systemPrompt: entry.system_prompt,
                   skillIDs: skills.filter { entry.skills.contains($0.slug) }.map(\.id),

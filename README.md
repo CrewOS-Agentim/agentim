@@ -39,6 +39,7 @@
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
 - 🚀 **Startup Mode**: pitch any number of startups; Tim interviews you (10 YC + co-founder questions), then a team of agent employees works on each one every 10–30 minutes
 - 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics
+- 👔 a full **C-suite of agents** (CTO, CPO, CMO, CRO, CFO, COO, CISO, CHRO, CDO, CCO, CLO, CAIO) that also sit in your startup meetings
 - 🐞 ships **agents with their own cartoon avatars** (made locally with LTX), including a **QA Engineer** that tests web apps, mobile apps and APIs and a **Data Analyst** that sets up your metrics
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
 - 🔌 **stays up**: the lid closes, the Mac is on the charger, and Tim is still answering. Anything that stops gets started again.
@@ -185,6 +186,8 @@ xcodegen generate && open agentim.xcodeproj     # ⌘R
 
 The app can also run Hugging Face **MLX** models directly on your Mac's GPU, after the same memory check. Use **Models → Browse Hugging Face**.
 
+**Quick controls:** **This Mac** has one-click **Start / Restart / Stop** for all the Docker containers, shows which models are in memory, and **Free memory** unloads them now (they also unload by themselves 5 minutes after their last use, `OLLAMA_KEEP_ALIVE`). **Stop LTX** quits LTX Desktop to free its GPU memory; it opens again when you ask for a video or image. The same actions are in the menu bar.
+
 **Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line). **Drag files** into a chat, or click 📎: text, code and PDFs are read into the prompt (up to 10 files, 20 MB and 100k characters each); images and other files are passed by name, since the chat models only read text.
 
 **Found a bug?** **Help → Report an Issue on GitHub…** (also in Settings and the menu bar) opens a new GitHub issue with your app version, macOS, chip and memory filled in. Nothing is sent until you submit it.
@@ -234,6 +237,10 @@ Skills are plain `SKILL.md` files in [`gateway/skills/`](gateway/skills). They'r
 | 🌐 **Web QA**: risk-based test plans, Playwright tests, accessibility, flaky-test hygiene, bug reports | `/web-qa test the checkout on staging.example.com` |
 | 📱 **Mobile QA**: device matrix, Maestro/XCUITest/Espresso flows, interruptions, offline, store readiness | `/mobile-qa test our iOS onboarding` |
 | 🔌 **API Testing**: contract, negative and OWASP API Top 10 checks, pytest + httpx suites, k6 load tests | `/api-testing here's our openapi.yaml` |
+| 🧠 **CTO** · 🧭 **CPO** · 📣 **CMO** · 💼 **CRO**: tech, product, marketing and revenue leadership playbooks | `/cro build our Q3 revenue plan` |
+| 🛡️ **CISO** · 💰 **CFO** · ⚙️ **COO**: security program, runway and unit economics, OKRs and operating rhythm | `/cfo how long is our runway?` |
+| 🫂 **CHRO** · 🗄️ **CDO** · 🤗 **CCO**: hiring and culture, data platform and governance, customer success and retention | `/chro plan our next 5 hires` |
+| ⚖️ **CLO** · 🤖 **CAIO**: contracts, IP and privacy (not legal advice); AI strategy, evaluation and governance | `/caio which AI features should we ship?` |
 | 📊 **Data Analytics**: north star, funnel, retention, tracking plan, dashboards, SQL, experiments | `/data-analytics what should we measure?` |
 
 Adding your own is as easy as dropping a markdown file in that folder:
@@ -257,9 +264,10 @@ Run **as many startups as you like**, each with its own team of agents who act l
 
 | | The team |
 |---|---|
-| 🧭 Maya Chen, Product Manager | 🎨 Leo Park, Designer · 🛠️ Noah Patel, Engineering Lead |
-| 📣 Ava Brooks, Marketing & Social | ⚙️ Sam Rivera, Marketing Automation · 💼 Zoe Kim, Head of Sales |
-| 🤝 Omar Haddad, Business Development | 💰 Grace Liu, Finance & Fundraising · 📊 Nina Shah, Data Analyst |
+| 🧭 Maya Chen, CPO | 🎨 Leo Park, Designer · 🛠️ Noah Patel, CTO |
+| 📣 Ava Brooks, CMO | ⚙️ Sam Rivera, Marketing Automation · 💼 Zoe Kim, CRO |
+| 🤝 Omar Haddad, Business Development | 💰 Grace Liu, CFO · 📊 Nina Shah, Data Analyst |
+| 🛡️ Dana Cohen, CISO | ⚙️ Marcus Reed, COO |
 | 🐙 Agent Tim, CEO | |
 
 ```
@@ -305,6 +313,19 @@ Pick a voice model during onboarding (or set `COMPOSE_PROFILES=voice` in `.env`)
 - **Send a voice note** on Telegram or WhatsApp. Tim transcribes it locally (🎙️ "…"), answers, and **replies with a voice note**. Code and links stay in the text; they aren't read aloud.
 - Strangers' audio is never transcribed: the allow-list is checked first.
 - Turn spoken replies off with `AGENTIM_VOICE_REPLIES=false`, or change the voice with `AGENTIM_TTS_VOICE` (e.g. `af_heart`).
+
+## 🔐 Private skills and agents
+
+Keep company-specific playbooks out of the open-source repo: put them in your installed stack's `private/` folder (git-ignored, mounted read-only into the gateway, and read by the Mac app):
+
+```
+~/Library/Application Support/agentim/stack/private/
+├── skills/my-playbook.md      # same format as gateway/skills/*.md → /my-playbook
+├── agents.json                # extra agents, same format as gateway/config/agents.json
+└── avatars/my-agent.png       # optional avatar (file name = agent name in kebab-case)
+```
+
+Restart the gateway (**This Mac → Restart**) to load new ones.
 
 ## 🤖 Local coding agents (Claude Code, Codex)
 

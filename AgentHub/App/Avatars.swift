@@ -12,7 +12,7 @@ enum Avatars {
     static func agent(named name: String) -> NSImage? {
         let key = slug(name)
         if key == "agent-tim" { return NSApp.applicationIconImage }
-        return image("avatars/\(key)")
+        return image("avatars/\(key)") ?? privateImage(key)
     }
 
     /// A startup team member's avatar by role key (product, design, pentest, …).
@@ -21,6 +21,15 @@ enum Avatars {
     }
 
     private static var cache: [String: NSImage] = [:]
+
+    /// Avatars for private agents: <stack>/private/avatars/<slug>.png.
+    private static func privateImage(_ key: String) -> NSImage? {
+        let url = PrivateContent.folder.appendingPathComponent("avatars/\(key).png")
+        if let hit = cache[url.path] { return hit }
+        guard let image = NSImage(contentsOf: url) else { return nil }
+        cache[url.path] = image
+        return image
+    }
 
     private static func image(_ path: String) -> NSImage? {
         if let hit = cache[path] { return hit }
@@ -56,5 +65,14 @@ struct AvatarView: View {
 extension AvatarView {
     init(agent: Agent?, size: CGFloat = 36) {
         self.init(image: agent.flatMap { Avatars.agent(named: $0.name) }, emoji: agent?.emoji ?? "💬", size: size)
+    }
+}
+
+/// Your private skills, agents and avatars: <stack>/private (git-ignored, mounted read-only into the gateway).
+enum PrivateContent {
+    static var folder: URL {
+        let stack = UserDefaults.standard.string(forKey: "stackRoot").map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/agentim/stack")
+        return stack.appendingPathComponent("private", isDirectory: true)
     }
 }

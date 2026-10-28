@@ -6,3 +6,6 @@ xcuserdata/
 __pycache__/
 .env
 *.xcodeproj/
+
+# Private, company-specific skills and agents (see README: Private skills)
+private/
