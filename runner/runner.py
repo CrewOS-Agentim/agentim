@@ -210,6 +210,14 @@ def backend_status():
     return {name: status[name] for name in BACKENDS}
 
 
+NOT_CHAT = re.compile(r"whisper|kokoro|piper|\btts\b|-tts|embed|rerank|speaches|silero", re.I)
+
+
+def is_chat_model(model_id):
+    """Speech, embedding and reranking models can't hold a conversation; never offer them as chat."""
+    return not NOT_CHAT.search(model_id)
+
+
 def list_models():
     models = []
     for name, info in backend_status().items():
@@ -230,6 +238,7 @@ def list_models():
                                    "backend": name, "kind": "chat"})
         except Exception as e:
             print(f"[runner] listing {name} failed: {e}", file=sys.stderr)
+    models = [m for m in models if is_chat_model(m["id"])]
     if LTX.available():
         models += [
             {"id": "ltx/video", "object": "model", "owned_by": "ltx", "backend": "ltx", "kind": "video"},

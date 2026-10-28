@@ -11,9 +11,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agentim.llm import LLMError  # noqa: E402
 from agentim.server import make_handler  # noqa: E402
-from agentim.startup import (CHIEF, ROLES, TEAM, StartupMode, StartupStore, initial_plan, pick_speakers,  # noqa: E402
-                             split_chief)
+from agentim.startup import (CEO, FALLBACK_QUESTIONS, PEOPLE, TEAM, StartupMode, StartupStore, name_from_pitch,  # noqa: E402
+                             parse_questions, pick_speakers, split_ceo)
 from test_gateway import QWEN, make_gateway  # noqa: E402
+
+PITCH = "A monthly subscription that delivers and swaps office plants. Offices always look alive."
 
 
 class Clock:
@@ -24,8 +26,8 @@ class Clock:
         return self.now
 
 
-class TeamLLM:
-    """Answers as whichever role the prompt addresses; the chief returns a PLAN/SUMMARY."""
+class CompanyLLM:
+    """Plays every part: asks questions in interviews, answers as the person addressed, runs the CEO."""
 
     def __init__(self, fail=False):
         self.prompts = []
@@ -36,139 +38,197 @@ class TeamLLM:
         self.prompts.append(prompt)
         if self.fail:
             raise LLMError("down")
-        if prompt.startswith("You are the Chief of Staff"):
-            return "PLAN:\n# Dog walking\n## Top 3 priorities\n1. Pre-sell 10 walks\nSUMMARY:\nPre-sell 10 walks this week."
-        role = next(r for r in TEAM if prompt.startswith(f"You are the {r.name} lead"))
-        return f"{role.name} idea. @Design please mock the booking screen."
+        if "follow-up questions" in prompt:
+            return "1. Who manages plants at your target offices today?\n" + "\n".join(
+                f"{i}. Follow-up question number {i} about this pitch?" for i in range(2, 11))
+        if prompt.startswith("You are Agent Tim, CEO"):
+            return "PLAN:\n# Plants\n## Top 3 priorities\n1. Pre-sell 3 pilots (Zoe)\nSUMMARY:\nPre-sell 3 pilots; Zoe owns it."
+        person = next((p for p in TEAM if prompt.startswith(f"You are {p.name}")), None)
+        if person is None:
+            return f"answer from {model.alias}"  # ordinary chat
+        return f"I'm {person.first}. Shipped a draft. @Leo, can you mock the booking screen?"
 
 
-def make_startup(llm=None, seed=7, clock=None):
-    gateway = make_gateway(models=(QWEN,), llm=llm or TeamLLM())
-    store = StartupStore(gateway.store.db, gateway.store.lock)
-    startup = StartupMode(gateway, store, rng=random.Random(seed), clock=clock or Clock())
-    gateway.startup = startup
-    return gateway, startup
+def make_startup_mode(llm=None, seed=7, clock=None):
+    gateway = make_gateway(models=(QWEN,), llm=llm or CompanyLLM())
+    mode = StartupMode(gateway, StartupStore(gateway.store.db, gateway.store.lock), rng=random.Random(seed),
+                       clock=clock or Clock())
+    gateway.startup = mode
+    return gateway, mode
 
 
-class SpeakerTests(unittest.TestCase):
-    def test_everyone_gets_a_turn(self):
-        rng = random.Random(1)
-        last, spoken = {}, []
+class HelperTests(unittest.TestCase):
+    def test_team_are_people_in_the_asked_roles(self):
+        titles = " ".join(p.title for p in TEAM)
+        for role in ("Product Manager", "Designer", "Engineering", "Marketing & Social", "Marketing Automation",
+                     "Sales", "Business Development", "Finance"):
+            self.assertIn(role, titles)
+        self.assertTrue(all(len(p.name.split()) == 2 for p in TEAM), "everyone has a first and last name")
+        self.assertEqual(CEO.name, "Agent Tim")
+
+    def test_rotation_covers_everyone(self):
+        rng, last, spoken = random.Random(1), {}, []
         for round_no in range(1, 4):
             picked = pick_speakers(last, 3, rng)
-            spoken += [r.key for r in picked]
-            last.update({r.key: round_no for r in picked})
-        self.assertEqual(len(set(spoken)), 8, "8 roles covered in 3 rounds of 3")
+            spoken += [p.key for p in picked]
+            last.update({p.key: round_no for p in picked})
+        self.assertEqual(len(set(spoken)), 8)
 
-    def test_least_recent_first(self):
-        last = {r.key: 5 for r in TEAM}
-        last["design"] = 1
-        self.assertEqual(pick_speakers(last, 1, random.Random(0))[0].key, "design")
+    def test_parse_questions(self):
+        text = "Sure! Here are questions:\n1. Who pays for it today?\n2) How much?? really\n- Which offices first?\nThanks"
+        self.assertEqual(parse_questions(text), ["Who pays for it today?", "How much?? really", "Which offices first?"])
 
-    def test_team_covers_the_asked_areas(self):
-        names = " ".join(r.name for r in TEAM)
-        for area in ("Sales", "Business Development", "Marketing & Social", "Marketing Automation",
-                     "Engineering", "Product", "Design"):
-            self.assertIn(area, names)
+    def test_name_from_pitch(self):
+        self.assertEqual(name_from_pitch("Uber for dog walking. With GPS."), "Uber for dog walking")
+        self.assertTrue(name_from_pitch("one two three four five six seven eight").endswith("…"))
+
+    def test_split_ceo(self):
+        self.assertEqual(split_ceo("PLAN:\nP\nSUMMARY:\nS", "old"), ("P", "S"))
+        self.assertEqual(split_ceo("", "old"), ("old", ""))
 
 
-class RoundTests(unittest.TestCase):
-    def test_start_schedules_first_round_soon(self):
+class InterviewTests(unittest.TestCase):
+    def test_pitch_gets_follow_up_questions_from_the_skill(self):
+        llm = CompanyLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = mode.create(PITCH)
+        self.assertEqual(startup["status"], "interview")
+        self.assertEqual(len(startup["questions"]), 10)
+        prompt = llm.prompts[0]
+        self.assertIn("YC Partner", prompt)
+        self.assertIn("What's the insight?", prompt, "uses the YC Partner skill")
+        self.assertIn("Co-founder", prompt)
+        self.assertIn("Kill criteria", prompt, "uses the Co-founder skill")
+        self.assertIn("exactly 10", prompt)
+        self.assertIn(PITCH, prompt)
+
+    def test_falls_back_to_standard_questions(self):
+        _, mode = make_startup_mode(llm=CompanyLLM(fail=True))
+        self.assertEqual(mode.create(PITCH)["questions"], FALLBACK_QUESTIONS)
+        self.assertEqual(len(FALLBACK_QUESTIONS), 10)
+
+    def test_answers_launch_the_team(self):
         clock = Clock()
-        _, startup = make_startup(clock=clock)
-        state = startup.start("Uber for dog walking", "telegram", "42")
-        self.assertTrue(state["enabled"])
-        self.assertEqual(state["next_run"], clock.now + 60)
-        self.assertIn("Uber for dog walking", state["plan"])
-        self.assertFalse(startup.due())
-        clock.now += 61
-        self.assertTrue(startup.due())
+        _, mode = make_startup_mode(clock=clock)
+        startup = mode.create(PITCH)
+        startup = mode.answer(startup["id"], ["Office managers", "$300", "Austin coworkings"])
+        self.assertEqual(startup["status"], "interview", "7 questions still open")
+        startup = mode.answer(startup["id"], [f"answer {i}" for i in range(10)])
+        self.assertEqual(startup["status"], "running")
+        self.assertEqual(startup["next_run"], clock.now + 60)
 
-    def test_round_updates_plan_messages_and_reschedules_10_to_30_min(self):
-        clock = Clock()
-        llm = TeamLLM()
-        _, startup = make_startup(llm=llm, clock=clock)
+    def test_short_pitch_is_rejected(self):
+        _, mode = make_startup_mode()
+        with self.assertRaises(ValueError):
+            mode.create("plants")
+
+
+class MeetingTests(unittest.TestCase):
+    def running(self, mode, pitch=PITCH):
+        return mode.skip_questions(mode.create(pitch)["id"])
+
+    def test_meeting_updates_plan_rotates_and_reschedules(self):
+        clock, llm = Clock(), CompanyLLM()
+        _, mode = make_startup_mode(llm=llm, clock=clock)
         sent = []
-        startup.notify = lambda channel, chat, text: sent.append((channel, chat, text))
-        startup.start("Uber for dog walking", "telegram", "42")
-        text = startup.run_round()
-        state = startup.store.get()
-        self.assertEqual(state["rounds"], 1)
-        self.assertIn("Pre-sell 10 walks", state["plan"])
-        self.assertTrue(clock.now + 10 * 60 <= state["next_run"] <= clock.now + 30 * 60)
-        messages = startup.store.messages()
-        self.assertEqual([m["role"] for m in messages][-1], CHIEF.key)
-        self.assertEqual(len(messages), 4, "3 teammates + chief")
-        self.assertIn("Startup round 1", text)
+        mode.notify = lambda channel, chat, text: sent.append((channel, chat, text))
+        startup = mode.create(PITCH, channel="telegram", chat_id="42")
+        mode.answer(startup["id"], ["Office managers", "$300", "Austin"] + ["more"] * 7)
+        text = mode.run_round(startup["id"])
+        after = mode.store.get(startup["id"])
+        self.assertEqual(after["rounds"], 1)
+        self.assertIn("Pre-sell 3 pilots", after["plan"])
+        self.assertTrue(clock.now + 10 * 60 <= after["next_run"] <= clock.now + 30 * 60)
+        roles = [m["role"] for m in mode.store.messages(startup["id"])]
+        self.assertEqual((len(roles), roles[-1]), (4, "ceo"))
+        self.assertIn("meeting 1", text)
         self.assertEqual(sent[0][:2], ("telegram", "42"))
-        # Teammates see each other's posts within the round.
-        self.assertIn("idea. @Design", llm.prompts[1])
+        person_prompt = next(p for p in llm.prompts if p.startswith("You are Maya") or p.startswith("You are Leo")
+                             or p.startswith("You are Noah") or p.startswith("You are Ava") or p.startswith("You are Sam")
+                             or p.startswith("You are Zoe") or p.startswith("You are Omar") or p.startswith("You are Grace"))
+        self.assertIn("Founder's answers", person_prompt)
+        self.assertIn("Office managers", person_prompt)
+        mode.run_round(startup["id"])
+        first = {m["role"] for m in mode.store.messages(startup["id"]) if m["round"] == 1 and m["role"] != "ceo"}
+        second = {m["role"] for m in mode.store.messages(startup["id"]) if m["round"] == 2 and m["role"] != "ceo"}
+        self.assertTrue(first.isdisjoint(second), "new people speak in meeting 2")
 
-    def test_rounds_rotate_and_build_on_history(self):
-        llm = TeamLLM()
-        _, startup = make_startup(llm=llm)
-        startup.start("Uber for dog walking")
-        startup.run_round()
-        first = {m["role"] for m in startup.store.messages() if m["role"] != CHIEF.key}
-        startup.run_round()
-        second = {m["round"]: m["role"] for m in startup.store.messages() if m["round"] == 2 and m["role"] != CHIEF.key}
-        self.assertTrue(first.isdisjoint(set(second.values())), "new voices in round 2")
-        self.assertIn("Recent team discussion", llm.prompts[-2])
+    def test_many_startups_are_independent(self):
+        clock = Clock()
+        _, mode = make_startup_mode(clock=clock)
+        a = self.running(mode, PITCH)
+        b = self.running(mode, "Uber for dog walking in big cities, with GPS tracking.")
+        clock.now += 61
+        self.assertEqual({s["id"] for s in mode.due()}, {a["id"], b["id"]})
+        mode.run_round(a["id"])
+        self.assertEqual([s["id"] for s in mode.due()], [b["id"]])
+        self.assertEqual(mode.store.messages(b["id"]), [])
+        mode.set_enabled(b["id"], False)
+        self.assertEqual(mode.due(), [])
+
+    def test_interviewing_startups_dont_meet(self):
+        _, mode = make_startup_mode()
+        startup = mode.create(PITCH)
+        self.assertIsNone(mode.run_round(startup["id"]))
 
     def test_models_down_still_reschedules(self):
         clock = Clock()
-        _, startup = make_startup(llm=TeamLLM(fail=True), clock=clock)
-        startup.start("x")
-        self.assertIsNone(startup.run_round())
-        state = startup.store.get()
-        self.assertEqual(state["rounds"], 0)
-        self.assertGreaterEqual(state["next_run"], clock.now + 10 * 60)
+        _, mode = make_startup_mode(llm=CompanyLLM(fail=True), clock=clock)
+        startup = self.running(mode)
+        self.assertIsNone(mode.run_round(startup["id"]))
+        self.assertGreaterEqual(mode.store.get(startup["id"])["next_run"], clock.now + 10 * 60)
 
-    def test_new_idea_resets_but_same_idea_keeps_history(self):
-        _, startup = make_startup()
-        startup.start("Idea A")
-        startup.run_round()
-        startup.start("Idea A")
-        self.assertEqual(startup.store.get()["rounds"], 1)
-        startup.start("Idea B")
-        self.assertEqual((startup.store.get()["rounds"], startup.store.messages()), (0, []))
-
-    def test_stop(self):
-        _, startup = make_startup()
-        startup.start("x")
-        startup.stop()
-        self.assertFalse(startup.due())
-        self.assertFalse(startup.store.get()["enabled"])
-
-    def test_split_chief(self):
-        self.assertEqual(split_chief("PLAN:\nP\nSUMMARY:\nS", "old"), ("P", "S"))
-        self.assertEqual(split_chief("", "old"), ("old", ""))
-        self.assertIn("### 🎨 Design", initial_plan("An idea"))
+    def test_delete(self):
+        _, mode = make_startup_mode()
+        startup = self.running(mode)
+        mode.run_round(startup["id"])
+        mode.delete(startup["id"])
+        self.assertEqual((mode.store.all(), mode.store.messages(startup["id"])), ([], []))
 
 
-class CommandTests(unittest.TestCase):
-    def test_commands_through_the_gateway(self):
-        gateway, startup = make_startup()
-        handle = lambda text: gateway.handle("telegram", "c", "1", text)[0].text  # noqa: E731
-        self.assertIn("Start it with", handle("/startup"))
-        self.assertIn("Startup Mode is on", handle("/startup Uber for dog walking"))
-        self.assertEqual(startup.store.get()["notify_chat"], "c")
-        self.assertIn("0 rounds so far", handle("/startup"))
-        self.assertIn("paused", handle("/startup off"))
-        self.assertIn("back on", handle("/startup on"))
-        self.assertIn("/startup", handle("/help"))
+class ChatTests(unittest.TestCase):
+    def test_pitch_interview_and_list_in_chat(self):
+        gateway, mode = make_startup_mode()
+        say = lambda text: gateway.handle("telegram", "c", "1", text)[0].text  # noqa: E731
+        self.assertIn("/startup new", say("/startup"))
+        reply = say(f"/startup new {PITCH}")
+        self.assertIn("1/10", reply)
+        self.assertIn("Who manages plants", reply)
+        self.assertIn("2/10", say("Office managers, they hate watering"))
+        for n in range(3, 11):
+            self.assertIn(f"{n}/10", say(f"answer {n - 1}"))
+        self.assertIn("has a team now", say("10 coworkings in Austin"))
+        startup = mode.store.all()[0]
+        self.assertEqual(len(startup["answers"]), 10)
+        self.assertEqual(startup["answers"][0], "Office managers, they hate watering")
+        self.assertIn("1. *", say("/startup"))
+        self.assertIn("paused", say("/startup off 1"))
+        self.assertIn("back on", say("/startup on 1"))
+        self.assertIn("# ", say("/startup 1"))
+        # After the interview, normal chat goes to the model again.
+        self.assertIn("answer from", say("hello"))
 
-    def test_strangers_cannot_start_it(self):
-        gateway, startup = make_startup()
-        reply = gateway.handle("telegram", "c", "999", "/startup steal my mac")[0].text
-        self.assertIn("doesn't know you", reply)
-        self.assertIsNone(startup.store.get())
+    def test_skip(self):
+        gateway, mode = make_startup_mode()
+        gateway.handle("telegram", "c", "1", f"/startup new {PITCH}")
+        self.assertIn("Skipping", gateway.handle("telegram", "c", "1", "skip")[0].text)
+        self.assertEqual(mode.store.all()[0]["status"], "running")
+
+    def test_interview_is_per_chat(self):
+        gateway, _ = make_startup_mode()
+        gateway.handle("telegram", "c", "1", f"/startup new {PITCH}")
+        self.assertIn("answer from", gateway.handle("telegram", "other", "1", "hello")[0].text)
+
+    def test_strangers_cannot_create_startups(self):
+        gateway, mode = make_startup_mode()
+        self.assertIn("doesn't know you", gateway.handle("telegram", "c", "999", f"/startup new {PITCH}")[0].text)
+        self.assertEqual(mode.store.all(), [])
 
 
-class StartupAPITests(unittest.TestCase):
+class APITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.gateway, cls.startup = make_startup()
+        cls.gateway, cls.mode = make_startup_mode()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(cls.gateway, {}, lambda: [QWEN]))
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.base = f"http://127.0.0.1:{cls.server.server_port}"
@@ -177,10 +237,10 @@ class StartupAPITests(unittest.TestCase):
     def tearDownClass(cls):
         cls.server.shutdown()
 
-    def call(self, path, body=None, token="tok"):
+    def call(self, path, body=None, method=None, token="tok"):
         req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None,
                                      headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                                     method="POST" if body is not None else "GET")
+                                     method=method or ("POST" if body is not None else "GET"))
         try:
             with urllib.request.urlopen(req, timeout=5) as resp:
                 return resp.status, json.loads(resp.read())
@@ -188,28 +248,50 @@ class StartupAPITests(unittest.TestCase):
             return e.code, json.loads(e.read())
 
     def test_flow(self):
-        self.assertEqual(self.call("/v1/startup", token="nope")[0], 401)
-        status, body = self.call("/v1/startup", {"idea": ""})
-        self.assertEqual(status, 400)
-        status, body = self.call("/v1/startup", {"idea": "Uber for dog walking", "min_minutes": 15, "max_minutes": 20})
-        self.assertEqual((status, body["enabled"], body["min_minutes"], body["max_minutes"]), (200, True, 15, 20))
-        self.assertEqual(len(body["team"]), len(TEAM))
-        self.assertEqual(self.call("/v1/startup/run", {})[0], 202)
-        for _ in range(50):
-            if self.startup.store.get()["rounds"] >= 1:
+        self.assertEqual(self.call("/v1/startups", token="nope")[0], 401)
+        self.assertEqual(self.call("/v1/startups", {"pitch": "x"})[0], 400)
+        status, created = self.call("/v1/startups", {"pitch": PITCH, "name": "Leafy", "min_minutes": 15, "max_minutes": 20})
+        self.assertEqual((status, created["name"], created["status"], len(created["questions"])), (201, "Leafy", "interview", 10))
+        sid = created["id"]
+        answers = [f"a{i}" for i in range(10)]
+        status, body = self.call(f"/v1/startups/{sid}/answers", {"answers": answers})
+        self.assertEqual((status, body["status"], body["answers"]), (200, "running", answers))
+        self.assertEqual(self.call(f"/v1/startups/{sid}/run", {})[0], 202)
+        for _ in range(60):
+            if self.mode.store.get(sid)["rounds"] >= 1:
                 break
             threading.Event().wait(0.05)
-        status, body = self.call("/v1/startup")
-        self.assertGreaterEqual(body["rounds"], 1)
-        self.assertTrue(any(m["role"] == "chief" for m in body["messages"]))
-        self.assertIn("chief", body["roles"])
-        status, body = self.call("/v1/startup", {"enabled": False})
-        self.assertFalse(body["enabled"])
+        status, detail = self.call(f"/v1/startups/{sid}")
+        self.assertGreaterEqual(detail["rounds"], 1)
+        self.assertIn("ceo", detail["people"])
+        self.assertEqual(detail["people"]["product"]["name"], "Maya Chen")
+        status, listing = self.call("/v1/startups")
+        self.assertEqual([s["name"] for s in listing["startups"]], ["Leafy"])
+        self.assertEqual(len(listing["team"]), 8)
+        status, body = self.call(f"/v1/startups/{sid}", {"enabled": False})
+        self.assertEqual(body["status"], "paused")
+        self.assertEqual(self.call("/v1/startups/nope")[0], 404)
+        self.assertEqual(self.call(f"/v1/startups/{sid}", method="DELETE")[0], 200)
+        self.assertEqual(self.call("/v1/startups")[1]["startups"], [])
 
 
-class RolesTests(unittest.TestCase):
-    def test_roles_table(self):
-        self.assertEqual(set(ROLES), {r.key for r in TEAM} | {"chief"})
+class SkillConfigTests(unittest.TestCase):
+    def test_interview_skills_are_configurable(self):
+        from agentim import config as config_lib
+        default = config_lib.from_env({"AGENTIM_DATA_DIR": "/tmp"})
+        self.assertEqual((default.startup_skills, default.startup_questions), (["yc-partner", "co-founder"], 10))
+        custom = config_lib.from_env({"AGENTIM_DATA_DIR": "/tmp", "AGENTIM_STARTUP_SKILLS": "grill-me",
+                                      "AGENTIM_STARTUP_QUESTIONS": "5"})
+        self.assertEqual((custom.startup_skills, custom.startup_questions), (["grill-me"], 5))
+
+    def test_yc_and_cofounder_skills_ship(self):
+        gateway, _ = make_startup_mode()
+        self.assertTrue({"yc-partner", "co-founder"} <= {s.slug for s in gateway.skills})
+
+
+class PeopleTests(unittest.TestCase):
+    def test_people_table(self):
+        self.assertEqual(set(PEOPLE), {p.key for p in TEAM} | {"ceo"})
 
 
 if __name__ == "__main__":

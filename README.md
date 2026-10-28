@@ -37,7 +37,7 @@
 - 💬 answers you on **Telegram, WhatsApp and Slack**, in text or 🎙️ **voice notes**
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
-- 🚀 **Startup Mode**: a team of agents meets every 10–30 minutes to improve your startup idea
+- 🚀 **Startup Mode**: pitch any number of startups; Tim interviews you (10 YC + co-founder questions), then a team of agent employees works on each one every 10–30 minutes
 - 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
 - 🔌 **stays up**: the lid closes, the Mac is on the charger, and Tim is still answering. Anything that stops gets started again.
@@ -200,27 +200,27 @@ Group changes by user benefit, lead with the biggest one, keep it under 200 word
 
 ## 🚀 Startup Mode
 
-Turn it on, describe your idea, and a whole founding team of agents gets to work. **Every 10–30 minutes (at a random time) the team meets.** Three teammates who haven't spoken recently each:
+Run **as many startups as you like**, each with its own team of agents who act like real employees.
 
-- read the idea, the living plan and what the others said
-- post concrete improvements
-- hand a question to a teammate (`@Design, can you…`)
+1. **Pitch it.** Write the pitch in the Mac app (Startups → New startup) or in any chat: `/startup new <your pitch>`.
+2. **Get interviewed.** Agent Tim asks **10 follow-up questions**: five as a 🟧 *YC partner* (who desperately needs it, how do you know, why now, what's the insight, how you make money) and five as a 🤝 *co-founder* (why you, commitment and runway, roles, the first 90 days, kill criteria). They come from the `yc-partner` and `co-founder` skills; swap in your own with `AGENTIM_STARTUP_SKILLS`.
+3. **The team gets to work.** Every 10–30 minutes, at a random time, the team meets. The people who spoke least recently report what they did, propose next moves in their own area, and ask colleagues for help by name ("@Leo, can you mock the ROI page?"). Tim (CEO) updates the living plan and sends you a two-line summary in your chat.
 
-After each meeting the 🗂️ Chief of Staff updates the plan and sends you a two-line summary in your chat.
-
-| | Team |
+| | The team |
 |---|---|
-| 💼 Sales | 🤝 Business Development · 📣 Marketing & Social · ⚙️ Marketing Automation |
-| 🛠️ Engineering | 🧭 Product · 🎨 Design · 💰 Finance & Fundraising |
+| 🧭 Maya Chen, Product Manager | 🎨 Leo Park, Designer · 🛠️ Noah Patel, Engineering Lead |
+| 📣 Ava Brooks, Marketing & Social | ⚙️ Sam Rivera, Marketing Automation · 💼 Zoe Kim, Head of Sales |
+| 🤝 Omar Haddad, Business Development | 💰 Grace Liu, Finance & Fundraising · 🐙 Agent Tim, CEO |
 
 ```
-/startup A monthly subscription that delivers and swaps office plants   ← start (from Telegram, WhatsApp or Slack)
-/startup        ← see the plan       /startup now   ← meet right away       /startup off   ← pause
+/startup new Leafy: a monthly subscription that swaps office plants   ← pitch (then answer Tim's 10 questions)
+/startup        ← your startups      /startup 2   ← plan of #2      /startup now 2   ← meet right away
+/startup off 2  ← pause              /startup on 2                   /startup delete 2
 ```
 
-Or use **Startup** in the Mac app: write the idea, set how often they meet, watch the team room, and read the plan as it evolves. It runs in the always-on gateway, so the team keeps working with the app closed. Rounds use your local models (routed to the strongest reasoning model you have).
+It runs in the always-on gateway, so the teams keep working with the app closed, and uses your local models (routed to the strongest reasoning model you have).
 
-<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: the plan and the team room" width="85%"></p>
+<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: startups, the living plan and the team room" width="85%"></p>
 
 ## 🎙️ Voice
 

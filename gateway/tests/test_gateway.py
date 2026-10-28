@@ -322,6 +322,15 @@ class ModelBootstrapTests(unittest.TestCase):
         keyed = Catalog(make_config(ANTHROPIC_API_KEY="k"), api_factory=lambda url, token: FakeRunnerAPI({}))
         self.assertIn("anthropic/claude-sonnet-5-5", [m.id for m in keyed()])
 
+    def test_catalog_ignores_speech_models(self):
+        class Mixed(FakeRunnerAPI):
+            def models(self):
+                return [{"id": "ollama/llama3.1:8b"}, {"id": "vllm/faster-whisper-medium"},
+                        {"id": "vllm/whisper-large-v3-arabic-ct2-int8"}, {"id": "ltx/video", "kind": "video"}]
+
+        catalog = Catalog(make_config(), api_factory=lambda url, token: Mixed({}))
+        self.assertEqual(sorted(m.id for m in catalog()), ["ltx/video", "ollama/llama3.1:8b"])
+
     def test_strip_thinking(self):
         self.assertEqual(strip_thinking("<think>hmm\nlong</think>\nHello"), "Hello")
 

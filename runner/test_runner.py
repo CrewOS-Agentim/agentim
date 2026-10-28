@@ -62,6 +62,15 @@ class MemoryTests(unittest.TestCase):
         self.assertLessEqual(ceiling, total)
 
 
+class ChatModelFilterTests(unittest.TestCase):
+    def test_speech_and_embedding_models_are_not_chat(self):
+        for model in ("faster-whisper-medium", "Systran/faster-whisper-small", "speaches-ai/Kokoro-82M-v1.0-ONNX",
+                      "openai/tts-1", "nomic-embed-text", "bge-reranker-v2"):
+            self.assertFalse(runner.is_chat_model(model), model)
+        for model in ("hf.co/unsloth/Qwen3-4B-Instruct-2507-GGUF:Q4_K_M", "llama3.1:8b", "qwen2.5-coder:7b"):
+            self.assertTrue(runner.is_chat_model(model), model)
+
+
 class LTXChatTests(unittest.TestCase):
     """LTX through the chat API, with a fake LTX so nothing renders."""
 

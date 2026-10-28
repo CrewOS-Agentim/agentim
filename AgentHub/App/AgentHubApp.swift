@@ -43,7 +43,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .chats: "Chats"
-        case .startup: "Startup"
+        case .startup: "Startups"
         case .agents: "Agents"
         case .skills: "Skills"
         case .models: "Models"

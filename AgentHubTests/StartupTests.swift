@@ -2,37 +2,57 @@ import XCTest
 @testable import AgentHub
 
 final class StartupTests: XCTestCase {
-    /// Shape of `GET /v1/startup` from gateway/agentim/startup.py `snapshot()`.
-    private let gatewayJSON = """
-    {"configured": true, "idea": "Uber for dog walking", "enabled": true, "plan": "# Dogs",
-     "min_minutes": 10, "max_minutes": 30, "next_run": 1000600, "rounds": 2, "notify_channel": "telegram",
-     "notify_chat": "42", "updated": 1000000, "now": 1000000,
-     "team": [{"key": "sales", "name": "Sales", "emoji": "💼", "focus": "who buys first"}],
-     "roles": {"sales": {"name": "Sales", "emoji": "💼"}, "chief": {"name": "Chief of Staff", "emoji": "🗂️"}},
-     "messages": [{"round": 2, "role": "sales", "content": "Pre-sell 10 walks.", "ts": 999000},
-                  {"round": 2, "role": "chief", "content": "Do it.", "ts": 999100}]}
+    /// Shapes from gateway/agentim/startup.py `listing()` and `detail()`.
+    private let listingJSON = """
+    {"now": 1000000, "team": [{"key": "product", "name": "Maya Chen", "title": "Product Manager", "emoji": "🧭", "owns": "x"}],
+     "startups": [{"id": "a1", "name": "Leafy", "pitch": "Plants", "status": "running", "rounds": 2, "next_run": 1000600,
+                   "min_minutes": 10, "max_minutes": 30, "created": 1, "updated": 2},
+                  {"id": "b2", "name": "Walkies", "pitch": "Dogs", "status": "interview", "rounds": 0, "next_run": null,
+                   "min_minutes": 10, "max_minutes": 30, "created": 3, "updated": 4}]}
     """
 
-    func testDecodesTheGatewaySnapshot() throws {
-        let state = try JSONDecoder().decode(StartupState.self, from: Data(gatewayJSON.utf8))
-        XCTAssertEqual(state.idea, "Uber for dog walking")
-        XCTAssertEqual(state.rounds, 2)
-        XCTAssertEqual(state.messages?.count, 2)
-        XCTAssertEqual(state.role("chief").emoji, "🗂️")
-        XCTAssertEqual(state.role("unknown").emoji, "🤖")
-        XCTAssertEqual(state.minutesToNext, 10)
+    private let detailJSON = """
+    {"id": "a1", "name": "Leafy", "pitch": "Plants", "questions": ["Who pays?", "How much?"], "answers": ["Offices", "$300"],
+     "status": "running", "plan": "# Leafy", "min_minutes": 10, "max_minutes": 30, "next_run": 1000600, "rounds": 2,
+     "notify_channel": null, "notify_chat": null, "created": 1, "updated": 2, "now": 1000000,
+     "team": [{"key": "product", "name": "Maya Chen", "title": "Product Manager", "emoji": "🧭", "owns": "x"}],
+     "people": {"product": {"name": "Maya Chen", "title": "Product Manager", "emoji": "🧭"},
+                "ceo": {"name": "Agent Tim", "title": "CEO", "emoji": "🐙"}},
+     "messages": [{"round": 2, "role": "product", "content": "Cut scope.", "ts": 999000},
+                  {"round": 2, "role": "ceo", "content": "Ship it.", "ts": 999100}]}
+    """
+
+    func testDecodesTheListing() throws {
+        let listing = try JSONDecoder().decode(StartupListing.self, from: Data(listingJSON.utf8))
+        XCTAssertEqual(listing.startups.map(\.name), ["Leafy", "Walkies"])
+        XCTAssertNil(listing.startups[1].next_run)
+        XCTAssertEqual(listing.team.first?.name, "Maya Chen")
     }
 
-    func testUnconfiguredSnapshot() throws {
-        let state = try JSONDecoder().decode(StartupState.self, from: Data(#"{"configured": false, "team": []}"#.utf8))
-        XCTAssertFalse(state.configured)
-        XCTAssertNil(state.minutesToNext)
+    func testDecodesTheDetail() throws {
+        let detail = try JSONDecoder().decode(StartupDetail.self, from: Data(detailJSON.utf8))
+        XCTAssertTrue(detail.isRunning)
+        XCTAssertFalse(detail.isInterview)
+        XCTAssertEqual(detail.minutesToNext, 10)
+        XCTAssertEqual(detail.person("ceo").name, "Agent Tim")
+        XCTAssertEqual(detail.person("product").title, "Product Manager")
+        XCTAssertEqual(detail.person("ghost").emoji, "🤖")
+        XCTAssertEqual(detail.answers, ["Offices", "$300"])
     }
 
     func testPausedHasNoCountdown() throws {
-        var state = try JSONDecoder().decode(StartupState.self, from: Data(gatewayJSON.utf8))
-        state.enabled = false
-        XCTAssertNil(state.minutesToNext)
+        var detail = try JSONDecoder().decode(StartupDetail.self, from: Data(detailJSON.utf8))
+        detail.status = "paused"
+        XCTAssertNil(detail.minutesToNext)
+    }
+
+    func testClientBuildsRequests() throws {
+        let client = StartupClient(token: "t")
+        let create = try client.request("v1/startups", method: "POST", body: ["pitch": "Plants for offices"])
+        XCTAssertEqual(create.url?.absoluteString, "http://localhost:8780/v1/startups")
+        XCTAssertEqual(create.value(forHTTPHeaderField: "authorization"), "Bearer t")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: create.httpBody!) as? [String: String], ["pitch": "Plants for offices"])
+        XCTAssertEqual(try client.request("v1/startups/a1", method: "DELETE", body: nil).httpMethod, "DELETE")
     }
 
     @MainActor
@@ -47,11 +67,21 @@ final class StartupTests: XCTestCase {
     }
 
     @MainActor
-    func testDemoMatchesTheGatewayTeam() {
+    func testNewStartupResetsTheDraft() {
+        let model = StartupModel(demo: true)
+        model.draftPitch = "old"
+        model.newStartup()
+        XCTAssertTrue(model.composing)
+        XCTAssertNil(model.selection)
+        XCTAssertEqual(model.draftPitch, "")
+    }
+
+    @MainActor
+    func testDemoHasManyStartupsAndNamedPeople() {
         let demo = StartupModel(demo: true)
-        XCTAssertTrue(demo.isRunning)
-        XCTAssertEqual(demo.state?.team.count, 8)
-        XCTAssertEqual(Set(demo.state?.roles?.keys.map { $0 } ?? []),
-                       ["sales", "bizdev", "marketing", "automation", "engineering", "product", "design", "finance", "chief"])
+        XCTAssertEqual(demo.listing?.startups.count, 3)
+        XCTAssertEqual(Set(demo.listing?.startups.map(\.status) ?? []), ["running", "paused", "interview"])
+        XCTAssertEqual(demo.detail?.team.count, 8)
+        XCTAssertEqual(demo.detail?.person("ceo").name, "Agent Tim")
     }
 }

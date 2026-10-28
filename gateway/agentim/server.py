@@ -44,11 +44,9 @@ def make_handler(gateway, channels, catalog):
             path = urllib.parse.urlparse(self.path).path
             if path == "/health":
                 return self.send_json(200, {"ok": True, "version": __version__})
-            if path == "/v1/startup":
+            if path.startswith("/v1/startups"):
                 if self.authorized():
-                    if not gateway.startup:
-                        return self.send_json(404, {"error": "startup mode unavailable"})
-                    self.send_json(200, gateway.startup.snapshot())
+                    self.startups_get(path)
                 return
             if path != "/v1/status":
                 return self.send_json(404, {"error": "not found"})
@@ -70,27 +68,10 @@ def make_handler(gateway, channels, catalog):
                 channel = channels.get("whatsapp")
                 handled = channel.on_webhook(self.read_json()) if channel else False
                 return self.send_json(200, {"handled": handled})
-            if url.path in ("/v1/startup", "/v1/startup/run"):
-                if not self.authorized():
-                    return
-                startup = gateway.startup
-                if not startup:
-                    return self.send_json(404, {"error": "startup mode unavailable"})
-                if url.path == "/v1/startup/run":
-                    threading.Thread(target=startup.run_round, daemon=True).start()
-                    return self.send_json(202, {"started": True})
-                body = self.read_json()
-                try:
-                    if body.get("enabled") is False:
-                        startup.stop()
-                    else:
-                        current = startup.store.get() or {}
-                        startup.start(body.get("idea") or current.get("idea", ""),
-                                      min_minutes=body.get("min_minutes", current.get("min_minutes", 10)),
-                                      max_minutes=body.get("max_minutes", current.get("max_minutes", 30)))
-                except ValueError as e:
-                    return self.send_json(400, {"error": str(e)})
-                return self.send_json(200, startup.snapshot())
+            if url.path.startswith("/v1/startups"):
+                if self.authorized():
+                    self.startups_post(url.path)
+                return
             if url.path != "/v1/messages":
                 return self.send_json(404, {"error": "not found"})
             if self.authorized():
@@ -99,6 +80,61 @@ def make_handler(gateway, channels, catalog):
                 replies = gateway.handle("api", body.get("chat_id", "default"), "api", body.get("text", ""))
                 self.send_json(200, {"replies": [{"text": r.text, "media": [
                     {"kind": k, "url": u} for k, u in r.media]} for r in replies]})
+
+        def do_DELETE(self):
+            path = urllib.parse.urlparse(self.path).path
+            parts = path.strip("/").split("/")
+            if len(parts) != 3 or parts[:2] != ["v1", "startups"]:
+                return self.send_json(404, {"error": "not found"})
+            if self.authorized() and self.startup_mode():
+                gateway.startup.delete(parts[2])
+                self.send_json(200, {"deleted": parts[2]})
+
+        # ---- Startup Mode API (the Mac app's Startups section)
+
+        def startup_mode(self):
+            if gateway.startup:
+                return True
+            self.send_json(404, {"error": "startup mode unavailable"})
+            return False
+
+        def startups_get(self, path):
+            if not self.startup_mode():
+                return
+            parts = path.strip("/").split("/")  # v1/startups[/id]
+            if len(parts) == 2:
+                return self.send_json(200, gateway.startup.listing())
+            detail = gateway.startup.detail(parts[2]) if len(parts) == 3 else None
+            self.send_json(200, detail) if detail else self.send_json(404, {"error": "no such startup"})
+
+        def startups_post(self, path):
+            if not self.startup_mode():
+                return
+            startup, parts, body = gateway.startup, path.strip("/").split("/"), self.read_json()
+            try:
+                if len(parts) == 2:  # create: pitch → follow-up questions
+                    created = startup.create(body.get("pitch", ""), body.get("name"),
+                                             min_minutes=body.get("min_minutes", 10), max_minutes=body.get("max_minutes", 30))
+                    return self.send_json(201, startup.detail(created["id"]))
+                startup_id = parts[2]
+                if not startup.store.get(startup_id):
+                    return self.send_json(404, {"error": "no such startup"})
+                action = parts[3] if len(parts) == 4 else ""
+                if action == "answers":
+                    if body.get("skip"):
+                        startup.skip_questions(startup_id)
+                    else:
+                        startup.answer(startup_id, body.get("answers", []))
+                elif action == "run":
+                    threading.Thread(target=startup.run_round, args=(startup_id,), daemon=True).start()
+                    return self.send_json(202, {"started": True})
+                elif action == "":
+                    startup.update(startup_id, **body)
+                else:
+                    return self.send_json(404, {"error": "not found"})
+                self.send_json(200, startup.detail(startup_id))
+            except ValueError as e:
+                self.send_json(400, {"error": str(e)})
 
     return Handler
 

@@ -55,6 +55,9 @@ class Config:
     tts_model: str = "speaches-ai/Kokoro-82M-v1.0-ONNX"
     tts_voice: str = "af_heart"
     voice_replies: bool = True
+    # Skills Tim interviews founders with, and how many follow-up questions he asks.
+    startup_skills: list = field(default_factory=lambda: ["yc-partner", "co-founder"])
+    startup_questions: int = 10
 
 
 def parse_allowed(raw):
@@ -105,4 +108,6 @@ def from_env(env=None):
         tts_model=env.get("AGENTIM_TTS_MODEL", "speaches-ai/Kokoro-82M-v1.0-ONNX"),
         tts_voice=env.get("AGENTIM_TTS_VOICE", "af_heart"),
         voice_replies=flag("AGENTIM_VOICE_REPLIES", True),
+        startup_skills=[s.strip() for s in env.get("AGENTIM_STARTUP_SKILLS", "yc-partner,co-founder").split(",") if s.strip()],
+        startup_questions=int(env.get("AGENTIM_STARTUP_QUESTIONS", "10")),
     )

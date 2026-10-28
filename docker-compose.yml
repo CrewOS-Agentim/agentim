@@ -30,6 +30,8 @@ services:
     environment:
       RUNNER_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN in .env}
       OLLAMA_URL: http://ollama:11434
+      # Only the stack's own Ollama: other ports on the host (e.g. the voice server on :8000) aren't chat models.
+      RUNNER_DISABLE: lmstudio,llamacpp,vllm,docker
     volumes:
       - runner-data:/data
     ports:

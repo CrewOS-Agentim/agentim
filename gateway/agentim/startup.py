@@ -1,15 +1,21 @@
-"""Startup Mode: a team of agents that meets on a random 10–30 minute schedule to improve your startup.
+"""Startup Mode: run your startups with a team of agents who act like real employees.
 
-Each round a few teammates (least recently heard from) read the idea, the living plan and the recent
-team discussion, then post concrete improvements and hand questions to each other. The Chief of
-Staff folds everything into the plan and the owner gets a short summary in their chat.
+Each startup starts as a pitch. Agent Tim interviews the founder with follow-up questions
+(generated with the "Validate Your Startup" skill), then a team (PM, designer, engineer,
+marketer, sales, bizdev, automation, finance) meets on a random 10–30 minute schedule. The
+people who spoke least recently go first; each reads the pitch, the founder's answers, the plan
+and the recent discussion, does their job and hands off to colleagues by name. Tim (CEO) folds
+the meeting into a living plan and sends the founder a short summary.
 """
 
+import json
 import logging
 import random
+import re
 import sqlite3
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 
 from .llm import LLMError
@@ -18,160 +24,195 @@ log = logging.getLogger("agentim.startup")
 
 
 @dataclass(frozen=True)
-class Role:
+class Person:
     key: str
     name: str
+    title: str
     emoji: str
-    focus: str
+    owns: str
+
+    @property
+    def first(self):
+        return self.name.split()[0]
 
 
 TEAM = [
-    Role("sales", "Sales", "💼", "who buys first, the pitch, pricing, objections, the first 10 customers and the pipeline"),
-    Role("bizdev", "Business Development", "🤝", "partnerships, distribution channels, integrations and deals that unlock customers"),
-    Role("marketing", "Marketing & Social", "📣", "positioning, messaging, content, social channels, community and launch moments"),
-    Role("automation", "Marketing Automation", "⚙️", "funnels, email/SMS sequences, lead scoring, tooling and metrics that run on their own"),
-    Role("engineering", "Engineering", "🛠️", "architecture, build-vs-buy, the smallest shippable version, cost, risk and speed"),
-    Role("product", "Product", "🧭", "the problem, the core user, the MVP scope, success metrics and what to cut"),
-    Role("design", "Design", "🎨", "first impression, onboarding, the key screens, brand and trust"),
-    Role("finance", "Finance & Fundraising", "💰", "unit economics, runway, pricing math, and when and how to raise"),
+    Person("product", "Maya Chen", "Product Manager", "🧭", "the problem, the core user, MVP scope, success metrics and what to cut"),
+    Person("design", "Leo Park", "Designer", "🎨", "first impression, onboarding, the key screens, brand and trust"),
+    Person("engineering", "Noah Patel", "Engineering Lead", "🛠️", "architecture, build vs. buy, the smallest shippable version, cost and risk"),
+    Person("marketing", "Ava Brooks", "Marketing & Social Lead", "📣", "positioning, messaging, content, social channels, community and launch"),
+    Person("automation", "Sam Rivera", "Marketing Automation", "⚙️", "funnels, email/SMS sequences, lead scoring and tooling that runs on its own"),
+    Person("sales", "Zoe Kim", "Head of Sales", "💼", "the first 10 customers, the pitch, pricing, objections and the pipeline"),
+    Person("bizdev", "Omar Haddad", "Business Development", "🤝", "partnerships, distribution channels, integrations and deals"),
+    Person("finance", "Grace Liu", "Finance & Fundraising", "💰", "unit economics, runway, pricing math, and when and how to raise"),
 ]
-CHIEF = Role("chief", "Chief of Staff", "🗂️", "keeps the startup plan up to date")
-ROLES = {r.key: r for r in TEAM + [CHIEF]}
+CEO = Person("ceo", "Agent Tim", "CEO", "🐙", "the plan, priorities and keeping the founder in the loop")
+PEOPLE = {p.key: p for p in TEAM + [CEO]}
 
-PLAN_TEMPLATE = """# {idea_title}
-
-## Top 3 priorities
-1. (to be decided by the team)
-
-## By area
-{areas}
-
-## Experiments this week
-
-## Open questions
-"""
-
-
-def initial_plan(idea):
-    title = idea.strip().split("\n")[0][:80]
-    areas = "\n".join(f"### {r.emoji} {r.name}\n- …" for r in TEAM)
-    return PLAN_TEMPLATE.format(idea_title=title, areas=areas)
+# Used when no model answers: five YC-partner questions, then five co-founder questions.
+FALLBACK_QUESTIONS = [
+    "Who desperately needs this (a specific person and situation), and how do you know?",
+    "What do they do today instead, and what does that cost them?",
+    "What do you understand about this problem that most smart people don't?",
+    "Who pays, how much, how often, and what's the rough math to $1M a year?",
+    "What single metric will you grow every week, and what is it today?",
+    "Why are you the right founders for this: what's your unfair advantage?",
+    "Are you full-time on this? How many months of runway do you have?",
+    "Who builds, who sells, and who decides when you disagree?",
+    "What ships in the next 90 days, and who are the first 10 customers?",
+    "What would make you stop or pivot, and when will you check?",
+]
 
 
-class StartupStore:
-    """One startup per gateway: the idea, schedule, plan and the team's messages."""
+def initial_plan(name):
+    areas = "\n".join(f"### {p.emoji} {p.title} ({p.first})\n- …" for p in TEAM)
+    return f"# {name}\n\n## Top 3 priorities\n1. (the team will decide)\n\n## By area\n{areas}\n\n## Experiments this week\n\n## Open questions\n"
 
-    def __init__(self, db: sqlite3.Connection, lock: threading.Lock):
-        self.db, self.lock = db, lock
-        with self.lock, self.db:
-            self.db.execute("""CREATE TABLE IF NOT EXISTS startup (
-                id INTEGER PRIMARY KEY CHECK (id = 1), idea TEXT, enabled INTEGER, plan TEXT,
-                min_minutes INTEGER, max_minutes INTEGER, next_run REAL, rounds INTEGER,
-                notify_channel TEXT, notify_chat TEXT, updated REAL)""")
-            self.db.execute("""CREATE TABLE IF NOT EXISTS startup_messages (
-                round INTEGER, role TEXT, content TEXT, ts REAL)""")
 
-    def get(self):
-        with self.lock:
-            row = self.db.execute("""SELECT idea, enabled, plan, min_minutes, max_minutes, next_run, rounds,
-                notify_channel, notify_chat, updated FROM startup WHERE id = 1""").fetchone()
-        if not row:
-            return None
-        keys = ["idea", "enabled", "plan", "min_minutes", "max_minutes", "next_run", "rounds",
-                "notify_channel", "notify_chat", "updated"]
-        state = dict(zip(keys, row))
-        state["enabled"] = bool(state["enabled"])
-        return state
+def name_from_pitch(pitch):
+    first = re.split(r"[.!?\n]", pitch.strip(), maxsplit=1)[0]
+    words = first.split()
+    return " ".join(words[:6]) + ("…" if len(words) > 6 else "") or "Untitled startup"
 
-    def save(self, **fields):
-        state = self.get() or {"idea": "", "enabled": False, "plan": "", "min_minutes": 10, "max_minutes": 30,
-                               "next_run": None, "rounds": 0, "notify_channel": None, "notify_chat": None}
-        state.update(fields)
-        state["updated"] = time.time()
-        with self.lock, self.db:
-            self.db.execute("""INSERT OR REPLACE INTO startup (id, idea, enabled, plan, min_minutes, max_minutes,
-                next_run, rounds, notify_channel, notify_chat, updated) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (state["idea"], int(state["enabled"]), state["plan"], state["min_minutes"],
-                             state["max_minutes"], state["next_run"], state["rounds"], state["notify_channel"],
-                             state["notify_chat"], state["updated"]))
-        return state
 
-    def add_message(self, round_no, role, content):
-        with self.lock, self.db:
-            self.db.execute("INSERT INTO startup_messages VALUES (?, ?, ?, ?)", (round_no, role, content, time.time()))
-
-    def messages(self, limit=30):
-        with self.lock:
-            rows = self.db.execute("SELECT round, role, content, ts FROM startup_messages ORDER BY ts DESC, rowid DESC LIMIT ?",
-                                   (limit,)).fetchall()
-        return [{"round": r, "role": role, "content": c, "ts": ts} for r, role, c, ts in reversed(rows)]
-
-    def last_spoke(self):
-        """{role_key: last round it spoke in}."""
-        with self.lock:
-            rows = self.db.execute("SELECT role, MAX(round) FROM startup_messages GROUP BY role").fetchall()
-        return dict(rows)
-
-    def clear_messages(self):
-        with self.lock, self.db:
-            self.db.execute("DELETE FROM startup_messages")
+def parse_questions(text, limit=10):
+    """Numbered or bulleted lines → questions."""
+    questions = []
+    for line in text.splitlines():
+        match = re.match(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$", line)
+        if match and len(match.group(1)) > 8:
+            questions.append(match.group(1).strip())
+    return questions[:limit]
 
 
 def pick_speakers(last_spoke, count=3, rng=random):
-    """The teammates heard from least recently go first; ties are broken randomly."""
+    """Whoever spoke least recently goes first; ties broken randomly."""
     team = list(TEAM)
     rng.shuffle(team)
-    team.sort(key=lambda r: last_spoke.get(r.key, -1))
+    team.sort(key=lambda p: last_spoke.get(p.key, -1))
     return team[:count]
 
 
-def role_prompt(role, idea, plan, discussion):
-    return f"""You are the {role.name} lead on a small founding team. You care about {role.focus}.
+def brief(startup):
+    answers = "\n".join(f"Q: {q}\nA: {a}" for q, a in zip(startup["questions"], startup["answers"]) if a)
+    return f"Startup: {startup['name']}\nPitch: {startup['pitch']}" + (f"\n\nFounder's answers:\n{answers}" if answers else "")
 
-The startup idea:
-{idea}
+
+def person_prompt(person, startup, discussion):
+    colleagues = ", ".join(f"{p.first} ({p.title})" for p in TEAM if p is not person)
+    return f"""You are {person.name}, {person.title} at "{startup['name']}", an early-stage startup. You are a real, \
+experienced employee: you own {person.owns}. Your colleagues: {colleagues}. The CEO is Agent Tim.
+
+{brief(startup)}
 
 The current plan:
-{plan}
+{startup['plan']}
 
 Recent team discussion:
-{discussion or "(nobody has spoken yet)"}
+{discussion or "(this is the team's first meeting)"}
 
-Write your update for this round, under 180 words:
-1. One sharp observation about the idea that only a {role.name} lead would make.
-2. Two or three concrete improvements in YOUR area ({role.focus}): who, what, how to test it this week.
-3. One question or hand-off to another teammate, starting with @Role (e.g. @Design, @Sales).
-React to teammates (agree, push back, or build on one point), but never repeat or re-list their
-suggestions and don't repeat the plan back. Stay in your lane. Plain text with short bullets."""
+Post your update for this meeting, under 180 words, in first person like you would in the team Slack:
+1. What you did or decided since last time (be specific and realistic).
+2. Two or three concrete next moves in YOUR area: what, by when, how you'll know it worked.
+3. One ask for a colleague, by first name (e.g. "@Leo, can you…").
+React to colleagues (agree, push back, or build on one point) but never repeat or re-list their suggestions,
+and don't repeat the plan. Stay in your lane. Short bullets, no headings."""
 
 
-def chief_prompt(idea, plan, round_messages):
-    updates = "\n\n".join(f"{ROLES[m['role']].emoji} {ROLES[m['role']].name}:\n{m['content']}" for m in round_messages)
-    return f"""You are the Chief of Staff. Keep the startup plan short, concrete and current.
+def ceo_prompt(startup, posted):
+    updates = "\n\n".join(f"{PEOPLE[m['role']].name} ({PEOPLE[m['role']].title}):\n{m['content']}" for m in posted)
+    return f"""You are Agent Tim, CEO of "{startup['name']}". Keep the company plan short, concrete and current.
 
-Startup idea:
-{idea}
+{brief(startup)}
 
 Current plan:
-{plan}
+{startup['plan']}
 
-This round's updates from the team:
+Updates from this meeting:
 {updates}
 
 Reply with exactly two parts:
 PLAN:
-<the full updated plan in markdown with the sections: Top 3 priorities, By area (one short bullet list per area that changed), Experiments this week, Open questions. Keep what still holds, replace what changed, stay under 400 words.>
+<the full updated plan in markdown with: Top 3 priorities, By area (short bullets per area that changed, with the owner's first name), Experiments this week, Open questions. Keep what still holds, replace what changed, under 400 words.>
 SUMMARY:
-<2–3 sentences for the founder: what the team decided this round and the single next action.>"""
+<2–3 sentences for the founder: what the team decided and the single next action, with the owner's name.>"""
 
 
-def split_chief(output, fallback_plan):
-    if "SUMMARY:" in output:
-        plan_part, summary = output.split("SUMMARY:", 1)
-    else:
-        plan_part, summary = output, ""
+def split_ceo(output, fallback_plan):
+    plan_part, _, summary = output.partition("SUMMARY:")
     plan = plan_part.replace("PLAN:", "", 1).strip() or fallback_plan
     return plan, summary.strip()
+
+
+class StartupStore:
+    """Startups, their interviews, plans and team messages, in the gateway's SQLite."""
+
+    COLUMNS = ["id", "name", "pitch", "questions", "answers", "status", "plan", "min_minutes", "max_minutes",
+               "next_run", "rounds", "notify_channel", "notify_chat", "created", "updated"]
+
+    def __init__(self, db: sqlite3.Connection, lock: threading.Lock):
+        self.db, self.lock = db, lock
+        with self.lock, self.db:
+            self.db.execute("""CREATE TABLE IF NOT EXISTS startups (
+                id TEXT PRIMARY KEY, name TEXT, pitch TEXT, questions TEXT, answers TEXT, status TEXT, plan TEXT,
+                min_minutes INTEGER, max_minutes INTEGER, next_run REAL, rounds INTEGER,
+                notify_channel TEXT, notify_chat TEXT, created REAL, updated REAL)""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS startup_team_messages (
+                startup_id TEXT, round INTEGER, role TEXT, content TEXT, ts REAL)""")
+            self.db.execute("CREATE INDEX IF NOT EXISTS startup_team_messages_id ON startup_team_messages (startup_id, ts)")
+
+    def _row(self, row):
+        if not row:
+            return None
+        s = dict(zip(self.COLUMNS, row))
+        s["questions"] = json.loads(s["questions"] or "[]")
+        s["answers"] = json.loads(s["answers"] or "[]")
+        return s
+
+    def get(self, startup_id):
+        with self.lock:
+            row = self.db.execute(f"SELECT {', '.join(self.COLUMNS)} FROM startups WHERE id = ?", (startup_id,)).fetchone()
+        return self._row(row)
+
+    def all(self):
+        with self.lock:
+            rows = self.db.execute(f"SELECT {', '.join(self.COLUMNS)} FROM startups ORDER BY created").fetchall()
+        return [self._row(r) for r in rows]
+
+    def save(self, startup):
+        startup["updated"] = time.time()
+        values = [json.dumps(startup[c]) if c in ("questions", "answers") else startup[c] for c in self.COLUMNS]
+        with self.lock, self.db:
+            self.db.execute(f"INSERT OR REPLACE INTO startups ({', '.join(self.COLUMNS)}) VALUES ({', '.join('?' * len(self.COLUMNS))})",
+                            values)
+        return startup
+
+    def delete(self, startup_id):
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM startups WHERE id = ?", (startup_id,))
+            self.db.execute("DELETE FROM startup_team_messages WHERE startup_id = ?", (startup_id,))
+
+    def add_message(self, startup_id, round_no, role, content):
+        with self.lock, self.db:
+            self.db.execute("INSERT INTO startup_team_messages VALUES (?, ?, ?, ?, ?)",
+                            (startup_id, round_no, role, content, time.time()))
+
+    def messages(self, startup_id, limit=40):
+        with self.lock:
+            rows = self.db.execute("""SELECT round, role, content, ts FROM startup_team_messages WHERE startup_id = ?
+                ORDER BY ts DESC, rowid DESC LIMIT ?""", (startup_id, limit)).fetchall()
+        return [{"round": r, "role": role, "content": c, "ts": ts} for r, role, c, ts in reversed(rows)]
+
+    def last_spoke(self, startup_id):
+        with self.lock:
+            rows = self.db.execute("SELECT role, MAX(round) FROM startup_team_messages WHERE startup_id = ? GROUP BY role",
+                                   (startup_id,)).fetchall()
+        return dict(rows)
+
+    def interviewing(self, channel, chat_id):
+        """The startup whose follow-up questions are being answered in this chat, if any."""
+        return next((s for s in self.all() if s["status"] == "interview"
+                     and s["notify_channel"] == channel and s["notify_chat"] == str(chat_id)), None)
 
 
 class StartupMode:
@@ -179,90 +220,152 @@ class StartupMode:
         self.gateway, self.store = gateway, store
         self.rng, self.clock = rng, clock
         self.speakers_per_round = speakers_per_round
-        self.notify = None  # callable(channel, chat_id, text), set by __main__ once channels exist
-        self.running = threading.Lock()
+        self.notify = None  # callable(channel, chat_id, text), set by __main__
+        self.locks = {}
+        self.locks_guard = threading.Lock()
 
-    # ---- control
+    # ---- creating a startup: pitch → follow-up questions → team
 
-    def start(self, idea, channel=None, chat_id=None, min_minutes=10, max_minutes=30):
-        idea = idea.strip()
-        if not idea:
-            raise ValueError("Tell me the startup idea first.")
+    def create(self, pitch, name=None, channel=None, chat_id=None, min_minutes=10, max_minutes=30):
+        pitch = pitch.strip()
+        if len(pitch) < 10:
+            raise ValueError("Tell me the pitch in a sentence or two.")
         min_minutes, max_minutes = sorted((max(1, int(min_minutes)), max(1, int(max_minutes))))
-        current = self.store.get()
-        fresh = not current or current["idea"] != idea
-        if fresh:
-            self.store.clear_messages()
-        state = self.store.save(
-            idea=idea, enabled=True, plan=initial_plan(idea) if fresh else current["plan"],
-            min_minutes=min_minutes, max_minutes=max_minutes, rounds=0 if fresh else current["rounds"],
-            next_run=self.clock() + 60,  # first round about a minute from now
-            notify_channel=channel or (current or {}).get("notify_channel"),
-            notify_chat=chat_id or (current or {}).get("notify_chat"))
-        return state
+        name = (name or "").strip() or name_from_pitch(pitch)
+        startup = {
+            "id": uuid.uuid4().hex[:12], "name": name, "pitch": pitch, "questions": self.follow_up_questions(pitch),
+            "answers": [], "status": "interview", "plan": initial_plan(name), "min_minutes": min_minutes,
+            "max_minutes": max_minutes, "next_run": None, "rounds": 0, "notify_channel": channel,
+            "notify_chat": str(chat_id) if chat_id is not None else None, "created": self.clock(), "updated": self.clock(),
+        }
+        return self.store.save(startup)
 
-    def stop(self):
-        return self.store.save(enabled=False, next_run=None)
+    def follow_up_questions(self, pitch):
+        """Tim's interview: questions through the lens of each configured skill (YC partner + co-founder)."""
+        count = max(1, self.gateway.config.startup_questions)
+        skills = [s for slug in self.gateway.config.startup_skills for s in self.gateway.skills if s.slug == slug]
+        lenses = "\n\n".join(f"### {s.name}\n{s.instructions}" for s in skills)
+        split = " and ".join(f"about {count // max(1, len(skills))} as the {s.name}" for s in skills) or "from every angle"
+        prompt = f"""You are interviewing a founder before hiring a team for their startup. Use these perspectives:
 
-    def schedule_next(self, state=None):
-        state = state or self.store.get()
-        minutes = self.rng.uniform(state["min_minutes"], state["max_minutes"])
-        return self.store.save(next_run=self.clock() + minutes * 60)
+{lenses}
 
-    # ---- rounds
+The founder's pitch:
+{pitch}
+
+Ask exactly {count} follow-up questions ({split}). Each question must be specific to this pitch, short, \
+and something the pitch doesn't already answer. One question per line, numbered 1 to {count}. No preamble, no headings."""
+        questions = parse_questions(self._ask(prompt) or "", limit=count)
+        if len(questions) >= count // 2:
+            return questions
+        return (questions + [q for q in FALLBACK_QUESTIONS if q not in questions])[:count]
+
+    def answer(self, startup_id, answers):
+        """Records answers (all at once, or the next one). The team starts when every question has one."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        if isinstance(answers, str):
+            answers = startup["answers"] + [answers.strip()]
+        startup["answers"] = [str(a).strip() for a in answers][: len(startup["questions"])]
+        if len(startup["answers"]) >= len(startup["questions"]):
+            self._launch(startup)
+        return self.store.save(startup)
+
+    def skip_questions(self, startup_id):
+        startup = self.store.get(startup_id)
+        self._launch(startup)
+        return self.store.save(startup)
+
+    def _launch(self, startup):
+        startup["status"] = "running"
+        startup["next_run"] = self.clock() + 60  # first meeting in about a minute
+
+    def set_enabled(self, startup_id, enabled):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        if startup["status"] == "interview":
+            return startup
+        startup["status"] = "running" if enabled else "paused"
+        startup["next_run"] = self.clock() + 60 if enabled else None
+        return self.store.save(startup)
+
+    def update(self, startup_id, **fields):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        for key in ("name", "min_minutes", "max_minutes", "notify_channel", "notify_chat"):
+            if fields.get(key) is not None:
+                startup[key] = fields[key]
+        startup["min_minutes"], startup["max_minutes"] = sorted((int(startup["min_minutes"]), int(startup["max_minutes"])))
+        if fields.get("enabled") is not None:
+            self.store.save(startup)
+            return self.set_enabled(startup_id, bool(fields["enabled"]))
+        return self.store.save(startup)
+
+    def delete(self, startup_id):
+        self.store.delete(startup_id)
+
+    # ---- meetings
 
     def due(self):
-        state = self.store.get()
-        return bool(state and state["enabled"] and state["next_run"] and self.clock() >= state["next_run"])
+        now = self.clock()
+        return [s for s in self.store.all() if s["status"] == "running" and s["next_run"] and now >= s["next_run"]]
 
-    def run_round(self):
-        """Runs one meeting. Returns the summary text, or None when there's nothing to do."""
-        if not self.running.acquire(blocking=False):
+    def schedule_next(self, startup):
+        startup["next_run"] = self.clock() + self.rng.uniform(startup["min_minutes"], startup["max_minutes"]) * 60
+        return self.store.save(startup)
+
+    def _lock(self, startup_id):
+        with self.locks_guard:
+            return self.locks.setdefault(startup_id, threading.Lock())
+
+    def run_round(self, startup_id):
+        """One team meeting. Returns the founder's summary, or None if nothing happened."""
+        lock = self._lock(startup_id)
+        if not lock.acquire(blocking=False):
             return None
         try:
-            state = self.store.get()
-            if not state or not state["idea"]:
+            startup = self.store.get(startup_id)
+            if not startup or startup["status"] == "interview":
                 return None
-            round_no = state["rounds"] + 1
-            router = self.gateway.router()
-            discussion = "\n".join(f"{ROLES[m['role']].emoji} {ROLES[m['role']].name}: {m['content']}"
-                                   for m in self.store.messages(limit=12) if m["role"] in ROLES)
+            round_no = startup["rounds"] + 1
+            discussion = "\n".join(f"{PEOPLE[m['role']].name}: {m['content']}"
+                                   for m in self.store.messages(startup_id, limit=12) if m["role"] in PEOPLE)
             posted = []
-            for role in pick_speakers(self.store.last_spoke(), self.speakers_per_round, self.rng):
-                prompt = role_prompt(role, state["idea"], state["plan"], discussion)
-                reply = self._ask(router, prompt)
+            for person in pick_speakers(self.store.last_spoke(startup_id), self.speakers_per_round, self.rng):
+                reply = self._ask(person_prompt(person, startup, discussion))
                 if not reply:
                     continue
-                self.store.add_message(round_no, role.key, reply)
-                message = {"round": round_no, "role": role.key, "content": reply}
-                posted.append(message)
-                discussion += f"\n{role.emoji} {role.name}: {reply}"
+                self.store.add_message(startup_id, round_no, person.key, reply)
+                posted.append({"round": round_no, "role": person.key, "content": reply})
+                discussion += f"\n{person.name}: {reply}"
             if not posted:
-                self.schedule_next(state)
+                self.schedule_next(startup)
                 return None
-            chief = self._ask(router, chief_prompt(state["idea"], state["plan"], posted)) or ""
-            plan, summary = split_chief(chief, state["plan"])
+            plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted)) or "", startup["plan"])
             summary = summary or "The team posted new ideas; see the plan."
-            self.store.add_message(round_no, CHIEF.key, summary)
-            state = self.store.save(plan=plan, rounds=round_no)
-            self.schedule_next(state)
-            text = self.digest(round_no, posted, summary)
-            if self.notify and state.get("notify_channel") and state.get("notify_chat"):
+            self.store.add_message(startup_id, round_no, CEO.key, summary)
+            startup = self.store.get(startup_id) or startup
+            startup["plan"], startup["rounds"] = plan, round_no
+            self.schedule_next(startup)
+            text = self.digest(startup, posted, summary)
+            if self.notify and startup.get("notify_channel") and startup.get("notify_chat"):
                 try:
-                    self.notify(state["notify_channel"], state["notify_chat"], text)
+                    self.notify(startup["notify_channel"], startup["notify_chat"], text)
                 except Exception:
-                    log.exception("startup: couldn't send the round summary")
+                    log.exception("startup: couldn't send the meeting summary")
             return text
         finally:
-            self.running.release()
+            lock.release()
 
-    # Routed by what the work is, not by the prompt text: prompts mention teammates as @Role,
-    # which the router would otherwise read as "use the model called @Design".
+    # Routed by the kind of work, not the prompt text (prompts mention people as @Name).
     ROUTING_HINT = "Analyze the business strategy and plan the next steps step by step."
 
-    def _ask(self, router, prompt):
+    def _ask(self, prompt):
         try:
-            decision = router.route(self.ROUTING_HINT)
+            decision = self.gateway.router().route(self.ROUTING_HINT)
         except Exception as e:
             log.warning("startup: no model: %s", e)
             return None
@@ -274,66 +377,109 @@ class StartupMode:
         return None
 
     @staticmethod
-    def digest(round_no, posted, summary):
-        who = " ".join(ROLES[m["role"]].emoji for m in posted)
-        return f"🚀 *Startup round {round_no}* {who}\n\n{summary}\n\n_Send /startup to see the plan._"
-
-    # ---- scheduler
+    def digest(startup, posted, summary):
+        who = ", ".join(PEOPLE[m["role"]].first for m in posted)
+        return f"🚀 *{startup['name']}*, meeting {startup['rounds']} ({who})\n\n{summary}\n\n_/startup to see your startups and plans._"
 
     def loop(self, tick=30, sleep=time.sleep):
         while True:
-            try:
-                if self.due():
-                    log.info("startup: round starting")
-                    self.run_round()
-            except Exception:
-                log.exception("startup: round failed")
+            for startup in self.due():
                 try:
-                    self.schedule_next()
+                    log.info("startup: %s meeting", startup["name"])
+                    self.run_round(startup["id"])
                 except Exception:
-                    pass
+                    log.exception("startup: meeting failed")
+                    try:
+                        self.schedule_next(startup)
+                    except Exception:
+                        pass
             sleep(tick)
 
-    def snapshot(self):
-        state = self.store.get()
-        if not state:
-            return {"configured": False, "team": [r.__dict__ for r in TEAM]}
-        return {"configured": True, **state, "now": self.clock(), "team": [r.__dict__ for r in TEAM],
-                "roles": {k: {"name": r.name, "emoji": r.emoji} for k, r in ROLES.items()},
-                "messages": self.store.messages(limit=40)}
+    # ---- views
 
-    # ---- chat command: /startup [idea | now | off | plan]
+    def team(self):
+        return [{"key": p.key, "name": p.name, "title": p.title, "emoji": p.emoji, "owns": p.owns} for p in TEAM]
+
+    def summary(self, startup):
+        return {k: startup[k] for k in ("id", "name", "pitch", "status", "rounds", "next_run", "min_minutes", "max_minutes",
+                                        "created", "updated")}
+
+    def detail(self, startup_id):
+        startup = self.store.get(startup_id)
+        if not startup:
+            return None
+        people = {k: {"name": p.name, "title": p.title, "emoji": p.emoji} for k, p in PEOPLE.items()}
+        return {**startup, "now": self.clock(), "team": self.team(), "people": people,
+                "messages": self.store.messages(startup_id)}
+
+    def listing(self):
+        return {"now": self.clock(), "team": self.team(), "startups": [self.summary(s) for s in self.store.all()]}
+
+    # ---- chat: /startup …  and interview answers
+
+    def pending_interview(self, channel, chat_id):
+        return self.store.interviewing(channel, chat_id)
+
+    def handle_answer(self, startup, text):
+        """A chat message while Tim is interviewing the founder about a startup."""
+        if text.strip().lower() in ("skip", "/skip", "start", "go"):
+            self.skip_questions(startup["id"])
+            return f"👍 Skipping the rest. The *{startup['name']}* team meets in about a minute."
+        startup = self.answer(startup["id"], text)
+        if startup["status"] == "running":
+            names = ", ".join(f"{p.emoji} {p.first}" for p in TEAM)
+            return (f"🚀 Thanks! *{startup['name']}* has a team now: {names} and me as CEO.\n\n"
+                    "We meet every 10–30 minutes and I'll send you a summary after each meeting. "
+                    "`/startup` lists your startups.")
+        n = len(startup["answers"])
+        return f"*{n + 1}/{len(startup['questions'])}*: {startup['questions'][n]}\n\n_(reply here, or `skip`)_"
+
+    def _by_index(self, arg):
+        startups = self.store.all()
+        try:
+            return startups[int(arg) - 1]
+        except (ValueError, IndexError):
+            return None
 
     def command(self, channel, chat_id, arg):
         arg = arg.strip()
-        state = self.store.get()
-        if arg.lower() in ("off", "stop", "pause"):
-            if not state:
-                return "Startup Mode isn't on."
-            self.stop()
-            return "⏸️ Startup Mode paused. `/startup on` resumes it."
-        if arg.lower() in ("on", "resume"):
-            if not state or not state["idea"]:
-                return "Tell me the idea first: `/startup <your idea>`"
-            self.start(state["idea"], channel, chat_id, state["min_minutes"], state["max_minutes"])
-            return "▶️ Startup Mode is back on. The team meets every 10–30 minutes."
-        if arg.lower() == "now":
-            if not state or not state["idea"]:
-                return "Tell me the idea first: `/startup <your idea>`"
-            threading.Thread(target=self.run_round, daemon=True).start()
-            return "🧑‍🤝‍🧑 Calling the team in now. The summary will land here in a few minutes."
-        if arg and arg.lower() != "plan":
-            self.start(arg, channel, chat_id)
-            names = ", ".join(f"{r.emoji} {r.name}" for r in TEAM)
-            return (f"🚀 *Startup Mode is on.* Your team: {names}.\n\nThey'll meet every 10–30 minutes, build on each "
-                    "other's ideas, and I'll send you a short summary after each round. "
-                    "`/startup` shows the plan · `/startup now` meets right away · `/startup off` pauses.")
-        if not state or not state["idea"]:
-            return ("🚀 *Startup Mode*: a team of agents (sales, bizdev, marketing, automation, engineering, product, "
-                    "design, finance) that meets every 10–30 minutes to improve your startup.\n\n"
-                    "Start it with `/startup <your idea in a sentence or two>`.")
-        status = "on" if state["enabled"] else "paused"
-        when = ""
-        if state["enabled"] and state["next_run"]:
-            when = f" · next meeting in ~{max(1, int((state['next_run'] - self.clock()) / 60))} min"
-        return f"🚀 Startup Mode is {status} · {state['rounds']} rounds so far{when}\n\n{state['plan']}"
+        verb, _, rest = arg.partition(" ")
+        verb = verb.lower()
+        startups = self.store.all()
+        if verb == "new" or (arg and verb not in ("now", "off", "on", "pause", "resume", "delete") and not verb.isdigit()):
+            pitch = rest if verb == "new" else arg
+            try:
+                startup = self.create(pitch, channel=channel, chat_id=chat_id)
+            except ValueError as e:
+                return f"🤔 {e} e.g. `/startup new A marketplace for…`"
+            return (f"🚀 New startup: *{startup['name']}*. Before I hire the team, a few questions.\n\n"
+                    f"*1/{len(startup['questions'])}*: {startup['questions'][0]}\n\n_(reply here, or `skip`)_")
+        if verb in ("now", "off", "pause", "on", "resume", "delete") or verb.isdigit():
+            target = self._by_index(rest if not verb.isdigit() else verb) or (startups[-1] if startups and not rest and not verb.isdigit() else None)
+            if not target:
+                return "🤔 Which startup? Send `/startup` for the numbered list."
+            if verb == "now":
+                threading.Thread(target=self.run_round, args=(target["id"],), daemon=True).start()
+                return f"🧑‍🤝‍🧑 Calling the *{target['name']}* team in now. The summary lands here in a few minutes."
+            if verb in ("off", "pause"):
+                self.set_enabled(target["id"], False)
+                return f"⏸️ *{target['name']}* paused."
+            if verb in ("on", "resume"):
+                self.set_enabled(target["id"], True)
+                return f"▶️ *{target['name']}* is back on."
+            if verb == "delete":
+                self.delete(target["id"])
+                return f"🗑️ Deleted *{target['name']}*."
+            return f"🚀 *{target['name']}* · {target['status']} · {target['rounds']} meetings\n\n{target['plan']}"
+        if not startups:
+            return ("🚀 *Startup Mode*: pitch me a startup and I'll interview you, then hire a team (PM, designer, "
+                    "engineer, marketing, sales, bizdev, automation, finance) that works on it every 10–30 minutes.\n\n"
+                    "Start with `/startup new <your pitch>`.")
+        lines = []
+        for i, s in enumerate(startups, 1):
+            when = ""
+            if s["status"] == "running" and s["next_run"]:
+                when = f" · next meeting ~{max(1, int((s['next_run'] - self.clock()) / 60))} min"
+            lines.append(f"{i}. *{s['name']}*: {s['status']}, {s['rounds']} meetings{when}")
+        return ("🚀 *Your startups*\n" + "\n".join(lines) +
+                "\n\n`/startup <n>` plan · `/startup now <n>` meet · `/startup off <n>` pause · `/startup new <pitch>`")

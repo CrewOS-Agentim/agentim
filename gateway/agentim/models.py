@@ -1,6 +1,7 @@
 """Model catalog: runner models (local Hugging Face in Docker, LTX) + optional cloud, and default pulls."""
 
 import json
+import re
 import logging
 import threading
 import time
@@ -9,6 +10,8 @@ import urllib.request
 from .router import CLOUD_MODELS, model_from_runner
 
 log = logging.getLogger("agentim.models")
+
+NOT_CHAT = re.compile(r"whisper|kokoro|piper|\btts\b|-tts|embed|rerank|speaches|silero", re.I)
 
 
 class RunnerAPI:
@@ -69,7 +72,9 @@ class Catalog:
         models = []
         for api in self.apis:
             try:
-                models += [model_from_runner(info, api.url) for info in api.models()]
+                # Older runners may list speech/embedding models; they can't chat.
+                models += [model_from_runner(info, api.url) for info in api.models()
+                           if info.get("kind") in ("video", "image") or not NOT_CHAT.search(info["id"])]
             except Exception as e:
                 log.warning("runner %s unavailable: %s", api.url, e)
         seen, unique = set(), []
