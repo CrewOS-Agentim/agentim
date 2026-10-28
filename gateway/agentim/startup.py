@@ -76,12 +76,22 @@ def name_from_pitch(pitch):
 
 
 def parse_questions(text, limit=10):
-    """Numbered or bulleted lines → questions."""
+    """Numbered or bulleted lines → questions. Keeps only the question part: small models sometimes
+    write "**What are you making?** Leafy is…" (a heading plus their own made-up answer)."""
     questions = []
     for line in text.splitlines():
-        match = re.match(r"^\s*(?:\d+[.)]|[-*•])\s+(.+)$", line)
-        if match and len(match.group(1)) > 8:
-            questions.append(match.group(1).strip())
+        match = re.match(r"^\s*(?:\d+[.)]|[-•]|\*(?!\*))\s+(.+)$", line)
+        if not match:
+            continue
+        item = match.group(1).strip()
+        # Drop a lens label the model may add: "YC Partner**: …", "**Co-founder:** …", "(YC) …".
+        item = re.sub(r"^(?:\*\*)?\(?[A-Za-z][\w -]{1,20}\)?(?:\*\*)?\s*:\s*(?:\*\*)?\s*(?=\S)", "", item)
+        item = re.sub(r"^\([A-Za-z][\w -]{1,20}\)\s*", "", item)
+        bold = re.match(r"^\*\*(.+?\?)\*\*", item)
+        question = bold.group(1) if bold else item.split("?")[0] + "?" if "?" in item else ""
+        question = question.strip(" *")
+        if len(question) >= 6:  # "Why now?" counts
+            questions.append(question)
     return questions[:limit]
 
 
@@ -115,8 +125,10 @@ Post your update for this meeting, under 180 words, in first person like you wou
 1. What you did or decided since last time (be specific and realistic).
 2. Two or three concrete next moves in YOUR area: what, by when, how you'll know it worked.
 3. One ask for a colleague, by first name (e.g. "@Leo, can you…").
-React to colleagues (agree, push back, or build on one point) but never repeat or re-list their suggestions,
-and don't repeat the plan. Stay in your lane. Short bullets, no headings."""
+React to colleagues (agree, push back, or build on one point) but never repeat or re-list their suggestions.
+Do NOT write the company plan or other people's tasks: Agent Tim keeps the plan.
+Remember: you are {person.first}, the {person.title}. Everything you propose is about {person.owns}.
+Short bullets, no headings, start with "{person.first} here:"."""
 
 
 def ceo_prompt(startup, posted):
@@ -139,9 +151,14 @@ SUMMARY:
 
 
 def split_ceo(output, fallback_plan):
-    plan_part, _, summary = output.partition("SUMMARY:")
-    plan = plan_part.replace("PLAN:", "", 1).strip() or fallback_plan
-    return plan, summary.strip()
+    """Splits Tim's reply into the plan and the founder summary; models format the labels loosely
+    ("SUMMARY:", "**Summary**", "### Summary")."""
+    parts = re.split(r"^[#*\s]*summary[*\s]*:?[*\s]*$|\**summary\**\s*:", output, maxsplit=1,
+                     flags=re.IGNORECASE | re.MULTILINE)
+    plan_part, summary = (parts[0], parts[1]) if len(parts) == 2 else (output, "")
+    plan = re.sub(r"^[#*\s]*plan[*\s]*:?[*\s]*\n", "", plan_part, count=1,
+                  flags=re.IGNORECASE | re.MULTILINE).strip() or fallback_plan
+    return plan, summary.strip().strip("*").strip()
 
 
 class StartupStore:
@@ -253,8 +270,13 @@ class StartupMode:
 The founder's pitch:
 {pitch}
 
-Ask exactly {count} follow-up questions ({split}). Each question must be specific to this pitch, short, \
-and something the pitch doesn't already answer. One question per line, numbered 1 to {count}. No preamble, no headings."""
+Write exactly {count} follow-up QUESTIONS for the founder ({split}).
+Rules:
+- Only questions. Never answer them and never guess facts about the startup.
+- Make each one specific to this pitch (mention its customers, product or market), not a generic template.
+- Skip anything the pitch already answers. Each question ends with "?".
+Format, one per line, numbered 1 to {count}, nothing else. For example:
+1. Which office managers have you already talked to, and what did they say about dead plants?"""
         questions = parse_questions(self._ask(prompt) or "", limit=count)
         if len(questions) >= count // 2:
             return questions

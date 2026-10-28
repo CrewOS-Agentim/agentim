@@ -38,7 +38,7 @@ class CompanyLLM:
         self.prompts.append(prompt)
         if self.fail:
             raise LLMError("down")
-        if "follow-up questions" in prompt:
+        if "follow-up questions" in prompt.lower():
             return "1. Who manages plants at your target offices today?\n" + "\n".join(
                 f"{i}. Follow-up question number {i} about this pitch?" for i in range(2, 11))
         if prompt.startswith("You are Agent Tim, CEO"):
@@ -76,7 +76,21 @@ class HelperTests(unittest.TestCase):
 
     def test_parse_questions(self):
         text = "Sure! Here are questions:\n1. Who pays for it today?\n2) How much?? really\n- Which offices first?\nThanks"
-        self.assertEqual(parse_questions(text), ["Who pays for it today?", "How much?? really", "Which offices first?"])
+        self.assertEqual(parse_questions(text), ["Who pays for it today?", "How much?", "Which offices first?"])
+
+    def test_parse_questions_drops_made_up_answers(self):
+        text = ("1. **What are you making?** Leafy is a subscription service.\n"
+                "2. Who desperately needs it? A specific employee who is tired.\n"
+                "3. A statement without a question mark")
+        self.assertEqual(parse_questions(text), ["What are you making?", "Who desperately needs it?"])
+
+    def test_parse_questions_strips_lens_labels(self):
+        text = ("1. YC Partner**: What's the biggest pain point you solve?\n"
+                "2. **Co-founder:** Who decides when you disagree?\n"
+                "3. (YC) Why now?\n"
+                "4. Who pays for it today?")
+        self.assertEqual(parse_questions(text), ["What's the biggest pain point you solve?",
+                                                 "Who decides when you disagree?", "Why now?", "Who pays for it today?"])
 
     def test_name_from_pitch(self):
         self.assertEqual(name_from_pitch("Uber for dog walking. With GPS."), "Uber for dog walking")
@@ -85,6 +99,9 @@ class HelperTests(unittest.TestCase):
     def test_split_ceo(self):
         self.assertEqual(split_ceo("PLAN:\nP\nSUMMARY:\nS", "old"), ("P", "S"))
         self.assertEqual(split_ceo("", "old"), ("old", ""))
+        self.assertEqual(split_ceo("**PLAN**\n# Leafy\n\n**Summary**\nShip pilots.", "old"), ("# Leafy", "Ship pilots."))
+        self.assertEqual(split_ceo("# Leafy\n### Summary\nZoe sells.", "old"), ("# Leafy", "Zoe sells."))
+        self.assertEqual(split_ceo("PLAN:\nP\n**Summary:** Do it.", "old"), ("P", "Do it."))
 
 
 class InterviewTests(unittest.TestCase):
