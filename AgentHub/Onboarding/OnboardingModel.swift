@@ -105,11 +105,26 @@ final class OnboardingModel {
             if case .voice(let stt, let tts) = plan.voice.kind {
                 update("voice", .running(nil))
                 do {
-                    let voiceUp = await Shell.run(["docker", "compose", "--progress", "quiet", "up", "-d", "voice"], in: root)
+                    var voiceUp = await Shell.run(["docker", "compose", "--progress", "quiet", "up", "-d", "voice"], in: root)
+                    var listenOnly = false
+                    if !voiceUp.ok, Self.isRegistryBlocked(voiceUp.output) {
+                        // Some Docker setups only allow Docker Hub: use its build (speech-to-text only).
+                        env.set("VOICE_IMAGE", Self.fallbackVoiceImage)
+                        env.set("AGENTIM_VOICE_REPLIES", "false")
+                        try env.text.write(to: envURL, atomically: true, encoding: .utf8)
+                        voiceUp = await Shell.run(["docker", "compose", "--progress", "quiet", "up", "-d", "voice"], in: root)
+                        listenOnly = true
+                    }
                     guard voiceUp.ok else { throw SetupError(Self.explainDockerFailure(voiceUp.output)) }
                     try await waitFor(URL(string: "http://localhost:8000/health")!, timeout: 600)
-                    for model in [stt, tts] { try await downloadVoiceModel(model) }
-                    update("voice", .done)
+                    for model in listenOnly ? [stt] : [stt, tts] { try await downloadVoiceModel(model) }
+                    if listenOnly {
+                        // The gateway picks up the new voice settings.
+                        _ = await Shell.run(["docker", "compose", "--progress", "quiet", "up", "-d", "--no-deps", "gateway"], in: root)
+                        update("voice", .skipped("Voice notes are understood; replies stay in text. Your Docker only allows Docker Hub, which has no text-to-speech build."))
+                    } else {
+                        update("voice", .done)
+                    }
                 } catch {
                     update("voice", .failed(error.localizedDescription))
                 }
@@ -178,15 +193,25 @@ final class OnboardingModel {
         }
     }
 
+    /// Speech-to-text-only voice server on Docker Hub (Speaches' earlier name).
+    static let fallbackVoiceImage = "fedirz/faster-whisper-server:0.6.0-rc.3-cpu"
+
+    nonisolated static func isRegistryBlocked(_ output: String) -> Bool {
+        let lower = output.lowercased()
+        return lower.contains("denied") || lower.contains("unauthorized") || lower.contains("forbidden")
+    }
+
     private func downloadVoiceModel(_ model: String) async throws {
         let path = model.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(.init(charactersIn: "-._"))) ?? model
-        var request = URLRequest(url: URL(string: "http://localhost:8000/v1/models/\(path)")!)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 1800
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        // 201 created, 200 already present.
-        guard (200..<300).contains(code) || code == 409 else {
+        // Current Speaches: POST /v1/models/{id}. Older builds: POST /api/pull/{id}.
+        for endpoint in ["v1/models", "api/pull"] {
+            var request = URLRequest(url: URL(string: "http://localhost:8000/\(endpoint)/\(path)")!)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 1800
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if (200..<300).contains(code) || code == 409 { return }  // 409: already present
+            if code == 404, endpoint == "v1/models" { continue }
             throw SetupError("Voice model \(model): HTTP \(code) \(String(decoding: data.prefix(200), as: UTF8.self))")
         }
     }

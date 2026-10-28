@@ -109,6 +109,13 @@ final class EnvFileTests: XCTestCase {
         XCTAssertFalse(compose.contains("image: devlikeapro/waha:latest"))
     }
 
+    func testBlockedRegistryTriggersTheVoiceFallback() {
+        XCTAssertTrue(OnboardingModel.isRegistryBlocked("Error response from daemon: error from registry: denied"))
+        XCTAssertTrue(OnboardingModel.isRegistryBlocked("unauthorized: authentication required"))
+        XCTAssertFalse(OnboardingModel.isRegistryBlocked("no space left on device"))
+        XCTAssertTrue(OnboardingModel.fallbackVoiceImage.hasPrefix("fedirz/"), "must come from Docker Hub")
+    }
+
     func testDockerFailuresAreExplained() {
         let creds = OnboardingModel.explainDockerFailure("Error getting credentials - err: signal: terminated, out: ``")
         XCTAssertTrue(creds.contains("Keychain"))
