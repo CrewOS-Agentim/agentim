@@ -356,6 +356,36 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(view.string, "", "a handled Tab doesn't insert a tab character")
     }
 
+    func testGitHubRepoSources() {
+        XCTAssertEqual(ProjectSource.github("acme/web")?.repo, "acme/web")
+        XCTAssertEqual(ProjectSource.github("https://github.com/CrewOS-Agentim/agentim.git")?.repo, "CrewOS-Agentim/agentim")
+        XCTAssertNil(ProjectSource.github("just-a-name"))
+        XCTAssertNil(ProjectSource.github("a/b/c"))
+        XCTAssertEqual(ProjectSource.github("acme/web")?.json, ["type": "github", "repo": "acme/web"])
+        XCTAssertEqual(ProjectSource.folder(URL(fileURLWithPath: "/Users/me/code/orders")).label, "orders")
+    }
+
+    func testPickedFoldersBecomeWorkspaces() {
+        let env = "RUNNER_TOKEN=x\nAGENTIM_WORKSPACES=/Users/me/github\n"
+        XCTAssertEqual(StartupModel.withWorkspace("/Users/me/github/orders", in: env), env, "already covered")
+        XCTAssertEqual(StartupModel.withWorkspace("/Users/me/work/api", in: env),
+                       "RUNNER_TOKEN=x\nAGENTIM_WORKSPACES=/Users/me/github:/Users/me/work/api\n")
+        XCTAssertEqual(StartupModel.withWorkspace("/Users/me/work/api", in: "RUNNER_TOKEN=x\n"),
+                       "RUNNER_TOKEN=x\nAGENTIM_WORKSPACES=/Users/me/work/api\n")
+        XCTAssertNotEqual(StartupModel.withWorkspace("/Users/me/githubber", in: env), env, "a prefix that isn't a parent folder")
+    }
+
+    func testDecodesIdeas() throws {
+        var json = try JSONSerialization.jsonObject(with: Data(detailJSON.utf8)) as! [String: Any]
+        json["kind"] = "idea"
+        json["sources"] = [["type": "dir", "path": "/Users/me/code/orders"], ["type": "github", "repo": "acme/web"]]
+        let detail = try JSONDecoder().decode(StartupDetail.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertTrue(detail.isIdea)
+        XCTAssertEqual(detail.sources?.map(\.label), ["orders", "acme/web"])
+        let old = try JSONDecoder().decode(StartupDetail.self, from: Data(detailJSON.utf8))
+        XCTAssertFalse(old.isIdea, "startups from before ideas still decode")
+    }
+
     @MainActor
     func testDemoHasManyStartupsAndNamedPeople() {
         let demo = StartupModel(demo: true)

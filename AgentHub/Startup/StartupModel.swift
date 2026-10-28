@@ -23,6 +23,35 @@ struct RolePreset: Decodable, Equatable, Identifiable {
     var id: String { title }
 }
 
+/// Code a startup or idea is about: a folder on this Mac or a GitHub repo.
+struct ProjectSource: Codable, Hashable, Identifiable {
+    var type: String      // "dir" | "github"
+    var path: String?
+    var repo: String?
+    var id: String { repo ?? path ?? UUID().uuidString }
+    var isRepo: Bool { type == "github" }
+    var label: String { repo ?? URL(fileURLWithPath: path ?? "").lastPathComponent }
+    var symbol: String { isRepo ? "chevron.left.forwardslash.chevron.right" : "folder" }
+
+    static func folder(_ url: URL) -> ProjectSource { ProjectSource(type: "dir", path: url.path) }
+
+    /// "owner/name" or a github.com URL → a repo source (nil if it isn't one).
+    static func github(_ text: String) -> ProjectSource? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "https://github.com/", with: "")
+            .replacingOccurrences(of: ".git", with: "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let parts = trimmed.split(separator: "/")
+        guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isLetter || $0.isNumber || "-_.".contains($0) } })
+        else { return nil }
+        return ProjectSource(type: "github", repo: trimmed)
+    }
+
+    var json: [String: String] {
+        isRepo ? ["type": "github", "repo": repo ?? ""] : ["type": "dir", "path": path ?? ""]
+    }
+}
+
 struct StartupSummary: Decodable, Equatable, Identifiable {
     let id: String
     let name: String
@@ -32,6 +61,9 @@ struct StartupSummary: Decodable, Equatable, Identifiable {
     let next_run: Double?
     let min_minutes: Int
     let max_minutes: Int
+    var kind: String? = nil
+    var sources: [ProjectSource]? = nil
+    var isIdea: Bool { kind == "idea" }
 }
 
 struct StartupListing: Decodable, Equatable {
@@ -65,6 +97,9 @@ struct StartupDetail: Decodable, Equatable {
     let plan: String
     let min_minutes: Int
     let max_minutes: Int
+    var kind: String? = nil
+    var sources: [ProjectSource]? = nil
+    var isIdea: Bool { kind == "idea" }
     let next_run: Double?
     var rounds: Int
     let now: Double
@@ -125,8 +160,19 @@ struct StartupClient {
     func list() async throws -> StartupListing { try await send("v1/startups") }
     func detail(_ id: String) async throws -> StartupDetail { try await send("v1/startups/\(id)") }
 
-    func create(pitch: String, name: String, minMinutes: Int, maxMinutes: Int) async throws -> StartupDetail {
-        try await send("v1/startups", body: ["pitch": pitch, "name": name, "min_minutes": minMinutes, "max_minutes": maxMinutes])
+    func create(pitch: String, name: String, minMinutes: Int, maxMinutes: Int, kind: String = "startup",
+                sources: [ProjectSource] = []) async throws -> StartupDetail {
+        try await send("v1/startups", body: ["pitch": pitch, "name": name, "min_minutes": minMinutes, "max_minutes": maxMinutes,
+                                             "kind": kind, "sources": sources.map(\.json)])
+    }
+
+    func setSources(_ id: String, _ sources: [ProjectSource]) async throws -> StartupDetail {
+        try await send("v1/startups/\(id)", body: ["sources": sources.map(\.json)])
+    }
+
+    /// Claude Code plans (read-only) or builds (confirmed) the idea in each linked project; results land in the room.
+    func work(_ id: String, build: Bool) async throws {
+        _ = try await raw("v1/startups/\(id)/\(build ? "build" : "plan")", method: "POST", body: ["confirmed": build])
     }
 
     func answer(_ id: String, answers: [String]) async throws -> StartupDetail {
@@ -207,6 +253,10 @@ final class StartupModel {
     var composing = false
     var draftName = ""
     var draftPitch = ""
+    /// New: a startup (pitch → interview → team) or an idea (a feature across the linked code).
+    var draftKind = "startup"
+    var draftSources: [ProjectSource] = []
+    var draftRepo = ""
     var draftAnswers: [String] = []
     /// The interview question on screen (0-based).
     var questionIndex = 0
@@ -306,10 +356,99 @@ final class StartupModel {
     }
 
     /// Sends the pitch; the gateway replies with Tim's follow-up questions.
+    // MARK: - Code: folders and repos
+
+    /// Picks folders on this Mac (several at once) and adds them to the draft or to the open startup.
+    func chooseFolders(stackRoot: URL?, forDraft: Bool) async {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose the project folders (one per service)"
+        guard panel.runModal() == .OK else { return }
+        let picked = panel.urls.map(ProjectSource.folder)
+        for url in panel.urls { Self.allowWorkspace(url, stackRoot: stackRoot) }
+        await addSources(picked, stackRoot: stackRoot, forDraft: forDraft)
+    }
+
+    func addRepo(stackRoot: URL?, forDraft: Bool) async {
+        guard let source = ProjectSource.github(draftRepo) else {
+            error = "Use owner/name or a github.com link."
+            return
+        }
+        draftRepo = ""
+        error = nil
+        await addSources([source], stackRoot: stackRoot, forDraft: forDraft)
+    }
+
+    func removeSource(_ source: ProjectSource, stackRoot: URL?, forDraft: Bool) async {
+        if forDraft {
+            draftSources.removeAll { $0 == source }
+        } else if let detail {
+            await saveSources((detail.sources ?? []).filter { $0 != source }, id: detail.id, stackRoot: stackRoot)
+        }
+    }
+
+    private func addSources(_ sources: [ProjectSource], stackRoot: URL?, forDraft: Bool) async {
+        if forDraft {
+            draftSources += sources.filter { !draftSources.contains($0) }
+        } else if let detail {
+            let current = detail.sources ?? []
+            await saveSources(current + sources.filter { !current.contains($0) }, id: detail.id, stackRoot: stackRoot)
+        }
+    }
+
+    private func saveSources(_ sources: [ProjectSource], id: String, stackRoot: URL?) async {
+        if isDemo { detail?.sources = sources; return }
+        await act("Updating the code…", stackRoot) { client in self.detail = try await client.setSources(id, sources) }
+    }
+
+    /// Folders you pick are added to AGENTIM_WORKSPACES so the runner may read them (and nothing else).
+    nonisolated static func allowWorkspace(_ url: URL, stackRoot: URL?) {
+        guard let env = stackRoot?.appendingPathComponent(".env"),
+              let text = try? String(contentsOf: env, encoding: .utf8) else { return }
+        let updated = withWorkspace(url.path, in: text)
+        if updated != text { try? updated.write(to: env, atomically: true, encoding: .utf8) }
+    }
+
+    /// Adds `path` to AGENTIM_WORKSPACES unless a listed folder already contains it.
+    nonisolated static func withWorkspace(_ path: String, in env: String) -> String {
+        var lines = env.components(separatedBy: "\n")
+        if let i = lines.firstIndex(where: { $0.hasPrefix("AGENTIM_WORKSPACES=") }) {
+            let current = String(lines[i].dropFirst("AGENTIM_WORKSPACES=".count)).split(separator: ":").map(String.init)
+            if current.contains(where: { path == $0 || path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }) { return env }
+            lines[i] = "AGENTIM_WORKSPACES=" + (current + [path]).joined(separator: ":")
+        } else {
+            if lines.last == "" { lines.removeLast() }
+            lines.append("AGENTIM_WORKSPACES=\(path)")
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Ideas: plan and build with Claude Code
+
+    var confirmingBuild = false
+
+    func planIdea(stackRoot: URL?) async {
+        guard let id = detail?.id else { return }
+        meetingRequested = true
+        await act("Asking Claude Code to plan…", stackRoot) { client in try await client.work(id, build: false) }
+    }
+
+    func buildIdea(stackRoot: URL?) async {
+        guard let id = detail?.id else { return }
+        confirmingBuild = false
+        meetingRequested = true
+        await act("Claude Code is building…", stackRoot) { client in try await client.work(id, build: true) }
+    }
+
     func submitPitch(stackRoot: URL?) async {
         await act("Agent Tim is reading your pitch…", stackRoot) { client in
             let created = try await client.create(pitch: self.draftPitch, name: self.draftName,
-                                                  minMinutes: self.minMinutes, maxMinutes: self.maxMinutes)
+                                                  minMinutes: self.minMinutes, maxMinutes: self.maxMinutes,
+                                                  kind: self.draftKind, sources: self.draftSources)
+            self.draftSources = []
             self.composing = false
             self.selection = created.id
             self.detail = created

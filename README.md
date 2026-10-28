@@ -190,7 +190,7 @@ The app can also run Hugging Face **MLX** models directly on your Mac's GPU, aft
 
 **Quick controls:** **This Mac** has one-click **Start / Restart / Stop** for all the Docker containers, shows which models are in memory, and **Free memory** unloads them now (they also unload by themselves 5 minutes after their last use, `OLLAMA_KEEP_ALIVE`). **Stop LTX** quits LTX Desktop to free its GPU memory; it opens again when you ask for a video or image. The same actions are in the menu bar.
 
-**Meeting rooms:** **New chat → Meeting room** puts several agents in one chat (say CTO, CMO and QA Engineer). Each message gets an answer from every agent in turn, each building on the others, or tag `@CTO` to ask just one; add or remove agents from the bar at the top.
+**Group chats:** **New chat → Group chat** starts an ad-hoc chat with any mix of agents *and* skills (say CTO, CMO and the Web QA skill; a skill joins as its own member and answers with its playbook). Tap members in to pick them, then type. Every member answers in turn, each building on the others, with their name in their own color, grouped bubbles and "… is typing"; tag `@CTO` (or a skill's `@slug`, Tab completes) to ask just one. Add or remove members from the header any time.
 
 **Status:** the **Status** page shows which models are running, your Mac's CPU and memory (with live charts), each container's CPU and memory (`docker stats`), and every model task: what's running now and a history with timings and results.
 
@@ -260,7 +260,7 @@ triggers: release notes, changelog
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
 
-## 🚀 Startup Mode
+## 🚀 Startups & Ideas
 
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 
@@ -286,7 +286,11 @@ Run **as many startups as you like**, each with its own team of agents who act l
 
 **Review every meeting.** The **Meetings** tab lists each meeting with its date and time, who was there and Tim's summary; open one to read the whole conversation.
 
-**Make the team yours.** That's the default team: every startup can have its own (1–12 agents plus Tim). In the Mac app, click **Agents** to rename anyone, change their title, emoji or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. Agents you remove keep their messages in the agents room, marked *former*; the current team stops seeing them. In chat:
+**Link your code.** A startup can point at local folders and GitHub repos (`owner/name`, cloned on your Mac): every meeting starts with a short brief of each codebase (README, structure, stack, recent commits), so the agents improve what's really there.
+
+**Ideas for your code.** Choose **New → Idea for my code**, describe a feature, and pick the services it touches (one folder or repo each). **Plan with Claude Code** asks your local Claude Code to plan the change in *each* service, read-only, and posts every plan in the agents room before the team meets on it. **Build it…** (after you confirm) lets Claude Code make the changes in each service and reports the changed files; it never commits or pushes. Folders you pick are added to `AGENTIM_WORKSPACES`; agentim can't read anything else.
+
+**Make the team yours.** That's the default team: every startup can have its own (1–12 agents plus Tim). In the Mac app, click **Agents** to open the team page (full screen, no pop-up): every agent as a card, and an editor beside it to rename anyone, change their title, emoji, avatar, persona or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. Agents you remove keep their messages in the agents room, marked *former*; the current team stops seeing them. In chat:
 
 ```
 /startup team 2                                                    ← who works on #2

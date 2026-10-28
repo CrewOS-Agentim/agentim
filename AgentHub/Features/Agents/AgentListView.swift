@@ -27,10 +27,9 @@ struct AgentListView: View {
                     selection = nil
                     newAgent = Agent(name: "", emoji: "🤖", summary: "", systemPrompt: "")
                 } label: {
-                    Label("New agent", systemImage: "plus").frame(maxWidth: .infinity)
+                    Label("New agent", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 28)
                 }
-                .controlSize(.large)
-                .padding(10)
+                .bottomActionStyle()
             }
             .frame(minWidth: 280, idealWidth: 330, maxWidth: 440)
 

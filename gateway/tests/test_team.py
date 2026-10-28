@@ -427,6 +427,90 @@ class LeadershipTests(unittest.TestCase):
             self.assertEqual(playbook_slug(title), slug, title)
 
 
+class IdeasTests(unittest.TestCase):
+    SOURCES = [{"type": "dir", "path": "/Users/me/code/orders-service"}, {"type": "github", "repo": "acme/web"},
+               {"type": "github", "repo": "acme/web"}, {"type": "bogus"}]
+
+    def mode_with_code(self):
+        llm = TeamLLM()
+        gateway, mode = make_startup_mode(llm=llm)
+        calls = []
+
+        def call(path, body=None, timeout=30):
+            calls.append((path, body))
+            if path == "/v1/projects/context":
+                return {"context": "## orders-service\nStack files: package.json\nsrc/api/orders.ts", "folders": []}
+            return {"folder": "/x", "mode": body["mode"], "output": f"Plan for {body['source']}", "changed": " a.ts | 3 +"}
+
+        gateway.claude.call = call
+        return gateway, mode, llm, calls
+
+    def test_ideas_skip_the_interview_and_need_code(self):
+        _, mode, _, _ = self.mode_with_code()
+        idea = mode.create("Add refunds across the order and web services", kind="idea", sources=self.SOURCES)
+        self.assertEqual((idea["kind"], idea["status"], idea["questions"]), ("idea", "running", []))
+        self.assertEqual(idea["sources"], self.SOURCES[:2], "deduped and cleaned")
+        self.assertIsNotNone(idea["next_run"])
+        with self.assertRaisesRegex(ValueError, "Pick at least one folder"):
+            mode.create("Add refunds across services", kind="idea", sources=[])
+        startup = mode.create(PITCH, sources=[{"type": "github", "repo": "acme/web"}])
+        self.assertEqual(startup["status"], "interview", "startups still get the interview")
+        self.assertEqual(mode.summary(startup)["sources"], [{"type": "github", "repo": "acme/web"}])
+
+    def test_meetings_see_the_code(self):
+        _, mode, llm, calls = self.mode_with_code()
+        idea = mode.create("Add refunds across the order and web services", kind="idea", sources=self.SOURCES[:1])
+        mode.run_round(idea["id"])
+        prompt = next(p for p in llm.prompts if p.startswith("You are ") and ' at "' in p)
+        self.assertIn("The feature to add", prompt)
+        self.assertIn("src/api/orders.ts", prompt, "the codebase brief reaches the agents")
+        self.assertEqual(calls[0][0], "/v1/projects/context")
+
+    def test_plan_then_build_with_confirmation(self):
+        _, mode, _, calls = self.mode_with_code()
+        idea = mode.create("Add refunds across the order and web services", kind="idea", sources=self.SOURCES[:2])
+        mode.work_on_code(idea["id"], "plan")
+        tasks = [body for path, body in calls if path == "/v1/projects/task"]
+        self.assertEqual([t["mode"] for t in tasks], ["read", "read"], "one read-only plan per project")
+        self.assertIn("without changing any files", tasks[0]["prompt"])
+        coder = [m for m in mode.store.messages(idea["id"]) if m["role"] == "claude-code"]
+        self.assertEqual(len(coder), 2)
+        self.assertTrue(coder[0]["content"].startswith("**orders-service**: plan"))
+        self.assertTrue(any(m["role"] == "ceo" for m in mode.store.messages(idea["id"])), "then the team meets")
+        with self.assertRaisesRegex(ValueError, "confirm it first"):
+            mode.work_on_code(idea["id"], "build")
+        calls.clear()
+        mode.work_on_code(idea["id"], "build", confirmed=True)
+        builds = [body for path, body in calls if path == "/v1/projects/task"]
+        self.assertTrue(all(b["mode"] == "edit" and b["confirmed"] for b in builds))
+        last = [m for m in mode.store.messages(idea["id"]) if m["role"] == "claude-code"][-1]
+        self.assertIn("Changed:", last["content"])
+
+    def test_api(self):
+        gateway, mode, _, _ = self.mode_with_code()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gateway, {}, lambda: [QWEN]))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_port}/v1/startups"
+
+        def post(path, body):
+            req = urllib.request.Request(base + path, data=json.dumps(body).encode(), method="POST",
+                                         headers={"Authorization": "Bearer tok", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    return resp.status, json.loads(resp.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        try:
+            status, idea = post("", {"pitch": "Add refunds across the order and web services", "kind": "idea",
+                                     "sources": self.SOURCES[:1]})
+            self.assertEqual((status, idea["kind"]), (201, "idea"))
+            self.assertEqual(post(f"/{idea['id']}/build", {})[0], 400, "build needs confirmed: true")
+            self.assertEqual(post(f"/{idea['id']}/plan", {})[0], 202)
+        finally:
+            server.shutdown()
+
+
 class MigrationTests(unittest.TestCase):
     def test_old_database_gets_team_columns(self):
         db = sqlite3.connect(":memory:", check_same_thread=False)

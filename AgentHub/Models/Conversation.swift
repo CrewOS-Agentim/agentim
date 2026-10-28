@@ -15,8 +15,9 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var isError = false
     /// Files sent with the message (optional so older saved conversations still decode).
     var attachments: [ChatAttachment]?
-    /// In a meeting room: which agent wrote this reply.
+    /// In a group chat: which agent (or skill) wrote this reply.
     var agentID: UUID?
+    var skillID: UUID?
 
     /// What the model reads: the text plus every attached file.
     var modelContent: String {
@@ -35,6 +36,8 @@ struct Conversation: Identifiable, Codable, Hashable {
     var pinnedModelID: String?
     /// A meeting room: these agents all take part (each answers in turn). nil or empty = a normal chat.
     var participantIDs: [UUID]?
+    /// Skills that take part in the group chat as their own members ("Web QA", "CFO"…).
+    var participantSkillIDs: [UUID]?
 
     var isMeeting: Bool { participantIDs != nil }
     var updatedAt = Date()

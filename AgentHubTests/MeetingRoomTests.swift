@@ -27,7 +27,7 @@ final class MeetingRoomTests: XCTestCase {
         store.agents = [cto, cmo, qa]
         let meeting = store.newMeeting(with: [cto, cmo])
         XCTAssertTrue(meeting.isMeeting)
-        XCTAssertEqual(meeting.title, "Meeting: CTO, CMO")
+        XCTAssertEqual(meeting.title, "CTO, CMO")
         XCTAssertEqual(store.participants(in: meeting).map(\.name), ["CTO", "CMO"])
         store.setParticipants([cto.id, cmo.id, qa.id], in: meeting.id)
         let updated = store.conversations.first { $0.id == meeting.id }!
@@ -41,8 +41,35 @@ final class MeetingRoomTests: XCTestCase {
         withMessages.messages = [ChatMessage(role: .user, content: "Launch plan?"),
                                  ChatMessage(role: .assistant, content: "Ship Friday.", agentID: cto.id)]
         let transcript = store.transcript(withMessages)
-        XCTAssertTrue(transcript.contains("You (the founder): Launch plan?"))
+        XCTAssertTrue(transcript.contains("You: Launch plan?"))
         XCTAssertTrue(transcript.contains("CTO: Ship Friday."))
+    }
+
+    @MainActor
+    func testSkillsJoinGroupChats() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        store.agents = [cto, cmo]
+        let webQA = Skill(name: "Web QA", summary: "Tests web apps", instructions: "Find bugs.")
+        store.skills = [webQA]
+        let group = store.newMeeting(with: [cto], skills: [webQA])
+        XCTAssertEqual(group.title, "CTO, Web QA")
+        let members = store.members(in: group)
+        XCTAssertEqual(members.map(\.name), ["CTO", "Web QA"])
+        XCTAssertEqual(members.last?.mention, webQA.slug)
+        XCTAssertEqual(AppStore.addressed("@\(webQA.slug) check checkout", among: members).map(\.name), ["Web QA"])
+        XCTAssertEqual(AppStore.addressed("@web check it", among: members).map(\.name), ["Web QA"], "first word works for skills too")
+        XCTAssertEqual(AppStore.addressed("thoughts?", among: members).count, 2)
+
+        store.toggle(agent: cmo.id, in: group.id)
+        store.toggle(skill: webQA.id, in: group.id)
+        let updated = store.conversations.first { $0.id == group.id }!
+        XCTAssertEqual(store.members(in: updated).map(\.name), ["CTO", "CMO"])
+        XCTAssertEqual(updated.title, "CTO, CMO", "the title follows the members until the first message")
+
+        var withReply = updated
+        withReply.messages = [ChatMessage(role: .assistant, content: "Found 2 bugs.", skillID: webQA.id)]
+        XCTAssertEqual(store.speaker(of: withReply.messages[0])?.name, "Web QA")
+        XCTAssertTrue(store.transcript(withReply).contains("Web QA: Found 2 bugs."))
     }
 
     func testOldConversationsStillDecode() throws {

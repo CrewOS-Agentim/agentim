@@ -19,7 +19,7 @@ struct ChatView: View {
                 if conversation.isMeeting {
                     ParticipantsBar(conversation: conversation)
                 }
-                if conversation.isMeeting && store.participants(in: conversation).isEmpty {
+                if conversation.isMeeting && conversation.messages.isEmpty {
                     PickRoom(conversation: conversation)
                 } else if conversation.messages.isEmpty {
                     EmptyChat { draft = $0 }
@@ -54,12 +54,18 @@ struct ChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: Theme.s4) {
-                    ForEach(conversation.messages) { message in
+                    let messages = conversation.messages
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
+                        let speaker = conversation.isMeeting ? store.speaker(of: message) : nil
                         MessageRow(message: message, model: store.model(id: message.modelID),
                                    agent: message.agentID.flatMap { id in store.agents.first { $0.id == id } }
                                        ?? store.agent(for: conversation),
                                    showsName: conversation.isMeeting,
-                                   mentionNames: conversation.isMeeting ? store.participants(in: conversation).map(Self.firstName) : [])
+                                   mentionNames: conversation.isMeeting ? store.members(in: conversation).map(\.mention) : [],
+                                   speaker: speaker,
+                                   groupedWithPrevious: conversation.isMeeting && index > 0 && message.role == .assistant
+                                       && messages[index - 1].role == .assistant
+                                       && speaker != nil && store.speaker(of: messages[index - 1])?.id == speaker?.id)
                             .id(message.id)
                     }
                 }
@@ -94,10 +100,10 @@ struct ChatView: View {
             }
             VStack(spacing: 0) {
                 ComposerTextView(text: $draft,
-                                 placeholder: conversation.isMeeting ? "Message the room…  (@Name asks one agent · Tab completes)"
+                                 placeholder: conversation.isMeeting ? "Message the group…  (@Name asks one member · Tab completes)"
                                                                      : "Message Agent Tim…  (@model · /skill · drop files)",
                                  minHeight: 84, maxHeight: 320,
-                                 mentions: conversation.isMeeting ? store.participants(in: conversation).map(Self.firstName) : [],
+                                 mentions: conversation.isMeeting ? store.members(in: conversation).map(\.mention) : [],
                                  onSubmit: { submit(conversation) },
                                  height: $composerHeight,
                                  onTab: { completeMention(in: conversation) })
@@ -138,7 +144,7 @@ struct ChatView: View {
         .frame(maxWidth: Theme.readableWidth + 80)
         .padding(.horizontal, Theme.s6)
         .padding(.top, Theme.s2)
-        .padding(.bottom, Theme.s4)
+        .padding(.bottom, Theme.bottomInset)
         .frame(maxWidth: .infinity)
     }
 
@@ -149,15 +155,15 @@ struct ChatView: View {
     /// Tab after "@Pr" in a meeting → "@Product " (the first agent whose name starts with it).
     private func completeMention(in conversation: Conversation) -> Bool {
         guard conversation.isMeeting, let query = StartupModel.mentionQuery(in: draft) else { return false }
-        guard let agent = store.participants(in: conversation).first(where: {
-            Self.firstName($0).lowercased().hasPrefix(query)
+        guard let member = store.members(in: conversation).first(where: {
+            $0.mention.lowercased().hasPrefix(query)
         }) else { return false }
-        draft = String(draft.dropLast(query.count + 1)) + "@\(Self.firstName(agent)) "
+        draft = String(draft.dropLast(query.count + 1)) + "@\(member.mention) "
         return true
     }
 
     private func canSend(_ conversation: Conversation) -> Bool {
-        if conversation.isMeeting && store.participants(in: conversation).isEmpty { return false }
+        if conversation.isMeeting && store.members(in: conversation).isEmpty { return false }
         return ChatComposer.canSend(draft: draft, attachments: attachments) && !store.isStreaming(conversation.id)
     }
 
@@ -283,20 +289,44 @@ struct MessageRow: View {
     /// Meeting rooms show who's talking above each reply.
     var showsName = false
     var mentionNames: [String] = []
+    /// In a group chat: who wrote this (an agent or a skill).
+    var speaker: AppStore.Member? = nil
+    /// The same member's earlier message is right above: no avatar or name again.
+    var groupedWithPrevious = false
 
     private var isUser: Bool { message.role == .user }
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.s3) {
-            if isUser { Spacer(minLength: 60) } else { AvatarView(agent: agent, size: 32).padding(.top, 2) }
+            if isUser {
+                Spacer(minLength: 60)
+            } else if groupedWithPrevious {
+                Color.clear.frame(width: 32, height: 1)
+            } else if let speaker {
+                MemberAvatar(member: speaker, size: 32).padding(.top, 2)
+            } else {
+                AvatarView(agent: agent, size: 32).padding(.top, 2)
+            }
             VStack(alignment: isUser ? .trailing : .leading, spacing: Theme.s1 + 2) {
-                if showsName, !isUser, let agent {
-                    Text(agent.name).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if showsName, !isUser, !groupedWithPrevious, let name = speaker?.name ?? agent?.name {
+                    HStack(spacing: 6) {
+                        Text(name).font(.callout.weight(.semibold))
+                            .foregroundStyle(MemberAvatar.color(for: speaker?.id ?? agent?.id))
+                        if speaker?.skill != nil {
+                            Text("Skill").font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Theme.accent.opacity(0.12), in: Capsule())
+                        }
+                    }
                 }
                 if !(isUser && message.content.isEmpty) {
                     Group {
                         if message.content.isEmpty && message.role == .assistant {
-                            ProgressView().controlSize(.small).padding(Theme.s3)
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                if showsName { Text("\(speaker?.name ?? agent?.name ?? "") is typing…").font(.callout).foregroundStyle(.secondary) }
+                            }
+                            .padding(Theme.s3)
                         } else {
                             Text(LocalizedStringKey(mentionNames.isEmpty ? message.content
                                                     : StartupDetail.boldMentions(message.content, names: mentionNames)))
@@ -438,24 +468,75 @@ private struct DropHint: View {
     }
 }
 
-/// Who's in the meeting room: their avatars, remove with ×, and Add agent.
+/// An agent's or skill's avatar in a group chat.
+struct MemberAvatar: View {
+    let member: AppStore.Member
+    var size: CGFloat = 32
+
+    var body: some View {
+        if let agent = member.agent {
+            AvatarView(agent: agent, size: size)
+        } else {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: size * 0.45, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(Self.color(for: member.id).gradient, in: Circle())
+        }
+    }
+
+    /// A stable color per member, so each name reads like a group chat.
+    static func color(for id: UUID?) -> Color {
+        guard let id else { return .secondary }
+        let palette: [Color] = [.blue, .purple, .pink, .orange, .green, .teal, .indigo, .red, .brown, .cyan]
+        return palette[Int(id.uuid.0 ^ id.uuid.15) % palette.count]
+    }
+}
+
+/// Overlapping avatars of the first few members.
+struct StackedAvatars: View {
+    let members: [AppStore.Member]
+    var size: CGFloat = 26
+
+    var body: some View {
+        HStack(spacing: -size * 0.35) {
+            ForEach(members.prefix(4)) { member in
+                MemberAvatar(member: member, size: size)
+                    .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 2))
+            }
+            if members.count > 4 {
+                Text("+\(members.count - 4)").font(.caption2.weight(.bold))
+                    .frame(width: size, height: size)
+                    .background(Theme.surfaceMuted, in: Circle())
+                    .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 2))
+            }
+        }
+    }
+}
+
+/// The group chat's header: stacked avatars, member chips (remove with ×) and Add (agents or skills).
 private struct ParticipantsBar: View {
     @Environment(AppStore.self) private var store
     let conversation: Conversation
 
     var body: some View {
-        let inRoom = store.participants(in: conversation)
-        HStack(spacing: Theme.s2) {
-            Label("Meeting room", systemImage: "person.3.fill").font(.callout.weight(.semibold)).foregroundStyle(.tint)
+        let members = store.members(in: conversation)
+        HStack(spacing: Theme.s3) {
+            StackedAvatars(members: members)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Group chat").font(.callout.weight(.semibold))
+                Text(members.isEmpty ? "No members yet" : "\(members.count) member\(members.count == 1 ? "" : "s") · you")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(inRoom) { agent in
+                    ForEach(members) { member in
                         HStack(spacing: 5) {
-                            AvatarView(agent: agent, size: 22)
-                            Text(agent.name).font(.callout)
-                            Button { remove(agent) } label: { Image(systemName: "xmark.circle.fill") }
+                            MemberAvatar(member: member, size: 20)
+                            Text(member.name).font(.callout)
+                            Button { store.toggle(member, in: conversation.id) } label: { Image(systemName: "xmark.circle.fill") }
                                 .buttonStyle(.borderless).foregroundStyle(.secondary)
-                                .help("Remove \(agent.name) from the room")
+                                .help("Remove \(member.name) from the group")
                         }
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Theme.surface, in: Capsule())
@@ -464,11 +545,18 @@ private struct ParticipantsBar: View {
                 }
             }
             Menu {
-                ForEach(store.agents.filter { agent in !inRoom.contains { $0.id == agent.id } }) { agent in
-                    Button("\(agent.emoji) \(agent.name)") { add(agent) }
+                Section("Agents") {
+                    ForEach(store.agents.filter { agent in !members.contains { $0.id == agent.id } }) { agent in
+                        Button("\(agent.emoji) \(agent.name)") { store.toggle(agent: agent.id, in: conversation.id) }
+                    }
+                }
+                Section("Skills") {
+                    ForEach(store.skills.filter { skill in !members.contains { $0.id == skill.id } }) { skill in
+                        Button("🪄 \(skill.name)") { store.toggle(skill: skill.id, in: conversation.id) }
+                    }
                 }
             } label: {
-                Label("Add agent", systemImage: "person.badge.plus")
+                Label("Add", systemImage: "person.badge.plus")
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -477,54 +565,63 @@ private struct ParticipantsBar: View {
         .padding(.vertical, Theme.s2)
         .background(.bar)
     }
-
-    private func add(_ agent: Agent) {
-        store.setParticipants((conversation.participantIDs ?? []) + [agent.id], in: conversation.id)
-    }
-
-    private func remove(_ agent: Agent) {
-        store.setParticipants((conversation.participantIDs ?? []).filter { $0 != agent.id }, in: conversation.id)
-    }
 }
 
-/// An empty meeting room: pick who joins.
+/// A new group chat: tap agents and skills to add or remove them, then send the first message below.
 private struct PickRoom: View {
     @Environment(AppStore.self) private var store
     let conversation: Conversation
 
     var body: some View {
+        let chosen = Set(store.members(in: conversation).map(\.id))
         ScrollView {
             VStack(spacing: Theme.s4) {
-                Image(systemName: "person.3.fill").font(.system(size: 40)).foregroundStyle(.tint)
-                Text("Who's in the meeting?").headlineStyle(26)
-                Text("Pick the agents. Everyone answers each message in turn, or tag @Name to ask one.")
-                    .foregroundStyle(.secondary)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Theme.s3)], spacing: Theme.s3) {
-                    ForEach(store.agents) { agent in
-                        Button {
-                            store.setParticipants((conversation.participantIDs ?? []) + [agent.id], in: conversation.id)
-                        } label: {
-                            HStack(spacing: Theme.s2) {
-                                AvatarView(agent: agent, size: 34)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(agent.name).font(.callout.weight(.semibold))
-                                    Text(agent.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            .padding(Theme.s2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .frame(maxWidth: 820)
+                Image(systemName: "bubble.left.and.bubble.right.fill").font(.system(size: 40)).foregroundStyle(.tint)
+                Text("Who's in the group chat?").headlineStyle(26)
+                Text("Pick agents and skills. Everyone answers each message in turn; tag @Name to ask one. Then type below.")
+                    .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                section("Agents", items: store.agents.map {
+                    AppStore.Member(id: $0.id, name: $0.name, emoji: $0.emoji, agent: $0)
+                }, subtitle: { $0.agent?.summary ?? "" }, chosen: chosen)
+                section("Skills", items: store.skills.map {
+                    AppStore.Member(id: $0.id, name: $0.name, emoji: "🪄", skill: $0)
+                }, subtitle: { $0.skill?.summary ?? "" }, chosen: chosen)
             }
             .padding(Theme.s8)
             .frame(maxWidth: .infinity)
         }
+    }
+
+    private func section(_ title: String, items: [AppStore.Member], subtitle: @escaping (AppStore.Member) -> String,
+                         chosen: Set<UUID>) -> some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            Text(title).font(.headline)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Theme.s3)], spacing: Theme.s3) {
+                ForEach(items) { member in
+                    let isIn = chosen.contains(member.id)
+                    Button { store.toggle(member, in: conversation.id) } label: {
+                        HStack(spacing: Theme.s2) {
+                            MemberAvatar(member: member, size: 34)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(member.name).font(.callout.weight(.semibold))
+                                Text(subtitle(member)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: isIn ? "checkmark.circle.fill" : "plus.circle")
+                                .foregroundStyle(isIn ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                        }
+                        .padding(Theme.s2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                            .strokeBorder(isIn ? Theme.accent : Theme.border, lineWidth: isIn ? 2 : 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(isIn ? .isSelected : [])
+                }
+            }
+        }
+        .frame(maxWidth: 820)
     }
 }

@@ -22,7 +22,7 @@ struct ConversationListView: View {
             List(selection: $selection) {
                 ForEach(filtered) { conversation in
                     ConversationRow(conversation: conversation, agent: store.agent(for: conversation),
-                                    participants: store.participants(in: conversation))
+                                    members: store.members(in: conversation))
                         .tag(conversation.id)
                         .contextMenu {
                             Button("Delete", role: .destructive) { delete([conversation.id]) }
@@ -57,7 +57,7 @@ struct ConversationListView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
-                    Button("Meeting room (several agents)", systemImage: "person.3.fill") {
+                    Button("Group chat (agents & skills)", systemImage: "bubble.left.and.bubble.right.fill") {
                         selection = store.newMeeting(with: []).id
                     }
                     Divider()
@@ -83,15 +83,16 @@ struct ConversationListView: View {
 private struct ConversationRow: View {
     let conversation: Conversation
     let agent: Agent?
-    var participants: [Agent] = []
+    var members: [AppStore.Member] = []
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             if conversation.isMeeting {
-                ZStack(alignment: .bottomTrailing) {
-                    AvatarView(agent: participants.first, size: 40)
-                    Image(systemName: "person.3.fill").font(.system(size: 9)).foregroundStyle(.white)
-                        .padding(3).background(Color.accentColor, in: Circle())
+                if members.isEmpty {
+                    Image(systemName: "bubble.left.and.bubble.right.fill").foregroundStyle(.white)
+                        .frame(width: 40, height: 40).background(Color.accentColor.gradient, in: Circle())
+                } else {
+                    StackedAvatars(members: Array(members.prefix(2)), size: 30).frame(width: 40, alignment: .leading)
                 }
             } else {
                 AvatarView(agent: agent, size: 40)
@@ -103,7 +104,7 @@ private struct ConversationRow: View {
                     Text(conversation.updatedAt, style: .relative)
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(conversation.isMeeting ? (participants.isEmpty ? "Meeting room" : participants.map(\.name).joined(separator: ", "))
+                Text(conversation.isMeeting ? (members.isEmpty ? "Group chat" : "Group · " + members.map(\.name).joined(separator: ", "))
                                             : agent?.name ?? "Unknown agent")
                     .font(.caption).foregroundStyle(.tint).lineLimit(1)
                 Text(conversation.preview).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
