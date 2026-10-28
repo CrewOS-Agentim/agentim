@@ -140,4 +140,33 @@ final class HostControllerTests: XCTestCase {
         XCTAssertEqual(LogsView.withoutStatusChecks(ollama).split(separator: "\n").count, 2,
                        "model loading and chat requests stay; polling goes")
     }
+
+    func testParsesDockerStats() {
+        let output = """
+        {"Name":"agentim-ollama-1","CPUPerc":"312.50%","MemUsage":"2.71GiB / 7.65GiB","MemPerc":"35.43%"}
+        {"Name":"someone-else-1","CPUPerc":"1.00%","MemUsage":"1MiB / 7.65GiB","MemPerc":"0.01%"}
+        {"Name":"agentim-gateway-1","CPUPerc":"0.40%","MemUsage":"61MiB / 7.65GiB","MemPerc":"0.78%"}
+        """
+        let stats = StatusModel.parseDockerStats(output)
+        XCTAssertEqual(stats.map(\.service), ["gateway", "ollama"], "only agentim's containers")
+        XCTAssertEqual(stats[1].cpuPercent, 312.5)
+        XCTAssertEqual(stats[1].memoryUsage, "2.71GiB / 7.65GiB")
+    }
+
+    func testDecodesTasks() throws {
+        let json = #"{"running":[{"id":"a","model":"ollama/qwen3:4b","label":"Telegram chat","preview":"hi","started":10,"seconds":2.5}],"recent":[{"id":"b","model":"ltx/video","label":"API chat","started":5,"ended":8,"seconds":75.0,"ok":false,"error":"busy"}],"now":12}"#
+        let snapshot = try JSONDecoder().decode(StatusModel.TaskSnapshot.self, from: Data(json.utf8))
+        XCTAssertEqual(snapshot.running.first?.modelName, "qwen3:4b")
+        XCTAssertEqual(snapshot.running.first?.duration, "2.5 s")
+        XCTAssertEqual(snapshot.recent.first?.duration, "1 min 15 s")
+        XCTAssertEqual(snapshot.recent.first?.ok, false)
+    }
+
+    func testMacCPUAndMemoryReadings() {
+        XCTAssertNotNil(StatusModel.cpuTicks())
+        let memory = StatusModel.memory()
+        XCTAssertEqual(memory.total, ProcessInfo.processInfo.physicalMemory)
+        XCTAssertGreaterThan(memory.used, 0)
+        XCTAssertLessThan(memory.fraction, 1.0)
+    }
 }

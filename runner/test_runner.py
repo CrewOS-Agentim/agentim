@@ -238,6 +238,37 @@ class LocalAgentsTests(unittest.TestCase):
                 agents.run_task("claude-code", "hi")
 
 
+class TaskLogTests(unittest.TestCase):
+    def test_running_then_history_newest_first(self):
+        now = [1000.0]
+        log = runner.TaskLog(clock=lambda: now[0])
+        a = log.start("ollama/qwen3", "Startup meeting · Leafy · Maya", "What should we\n ship   first?")
+        b = log.start("ltx/video", "Telegram chat", "a cat surfing")
+        now[0] = 1003.5
+        snap = log.snapshot()
+        self.assertEqual([t["label"] for t in snap["running"]], ["Startup meeting · Leafy · Maya", "Telegram chat"])
+        self.assertEqual(snap["running"][0]["seconds"], 3.5)
+        self.assertEqual(snap["running"][0]["preview"], "What should we ship first?")
+        log.finish(a)
+        now[0] = 1010
+        log.finish(b, error="LTX Desktop is busy")
+        snap = log.snapshot()
+        self.assertEqual(snap["running"], [])
+        self.assertEqual([t["model"] for t in snap["recent"]], ["ltx/video", "ollama/qwen3"], "newest first")
+        self.assertEqual((snap["recent"][0]["ok"], snap["recent"][0]["seconds"]), (False, 10.0))
+        self.assertTrue(snap["recent"][1]["ok"])
+        self.assertIsNone(log.finish("unknown"))
+
+    def test_history_survives_a_restart_and_is_capped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tasks.jsonl")
+            log = runner.TaskLog(path, keep=3)
+            for i in range(5):
+                log.finish(log.start("m", f"task {i}"))
+            again = runner.TaskLog(path, keep=3)
+            self.assertEqual([t["label"] for t in again.snapshot()["recent"]], ["task 4", "task 3", "task 2"])
+
+
 class MemoryControlTests(unittest.TestCase):
     """Free memory: list what Ollama has loaded, unload it, quit LTX Desktop."""
 

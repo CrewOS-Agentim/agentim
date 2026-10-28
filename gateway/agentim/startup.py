@@ -18,7 +18,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from .llm import LLMError
+from .llm import LLMError, labelled
 
 log = logging.getLogger("agentim.startup")
 
@@ -528,7 +528,7 @@ Rules:
 - Skip anything the pitch already answers. Each question ends with "?".
 Format, one per line, numbered 1 to {count}, nothing else. For example:
 1. Which office managers have you already talked to, and what did they say about dead plants?"""
-        questions = parse_questions(self._ask(prompt) or "", limit=count)
+        questions = parse_questions(self._ask(prompt, "Startup interview questions") or "", limit=count)
         if len(questions) >= count // 2:
             return questions
         return (questions + [q for q in FALLBACK_QUESTIONS if q not in questions])[:count]
@@ -618,7 +618,7 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
 The founder just tagged you directly: "{text}"
 Answer the founder now, as {person.first}: do what they asked in your area (concrete output, not a promise), \
 under 180 words, start with "{person.first} here:"."""
-            reply = self._ask(prompt)
+            reply = self._ask(prompt, f"Startup · {startup['name']} · @{person.first} replies")
             if reply:
                 self.store.add_message(startup_id, round_no, person.key, reply)
             return reply
@@ -654,7 +654,8 @@ under 180 words, start with "{person.first} here:"."""
         transcript = "\n\n".join(f"{people[m['role']].name if m['role'] in people else m['role']}"
                                   f" ({people[m['role']].title if m['role'] in people else ''}): {m['content']}"
                                   for m in messages)
-        reply = self._ask(minutes_prompt(startup, round_no, transcript)) or ""
+        reply = self._ask(minutes_prompt(startup, round_no, transcript),
+                          f"Startup meeting · {startup['name']} · minutes") or ""
         minutes = clean_minutes(reply) or fallback_minutes(messages, people)
         self.store.save_minutes(startup_id, round_no, minutes)
         return minutes
@@ -745,7 +746,8 @@ under 180 words, start with "{person.first} here:"."""
                                      "speakers": [p.key for p in speakers]}
             for person in speakers:
                 self.live[startup_id]["speaking"] = person.key
-                reply = self._ask(person_prompt(person, startup, discussion(), team, self.playbook(person)))
+                reply = self._ask(person_prompt(person, startup, discussion(), team, self.playbook(person)),
+                                  f"Startup meeting · {startup['name']} · {person.first}")
                 if not reply:
                     continue
                 self.store.add_message(startup_id, round_no, person.key, reply)
@@ -758,7 +760,8 @@ under 180 words, start with "{person.first} here:"."""
             recent = self.store.messages(startup_id, limit=60)
             last_summary = max((m["ts"] for m in recent if m["role"] == CEO.key), default=0)
             notes = [m["content"] for m in recent if m["role"] == FOUNDER.key and m["ts"] > last_summary]
-            plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted, people, notes)) or "", startup["plan"])
+            plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted, people, notes),
+                                                f"Startup meeting · {startup['name']} · Tim (plan)") or "", startup["plan"])
             summary = summary or "The team posted new ideas; see the plan."
             self.store.add_message(startup_id, round_no, CEO.key, summary)
             startup = self.store.get(startup_id) or startup
@@ -790,7 +793,7 @@ under 180 words, start with "{person.first} here:"."""
     # Routed by the kind of work, not the prompt text (prompts mention people as @Name).
     ROUTING_HINT = "Analyze the business strategy and plan the next steps step by step."
 
-    def _ask(self, prompt):
+    def _ask(self, prompt, label="Startup Mode"):
         try:
             decision = self.gateway.router().route(self.ROUTING_HINT)
         except Exception as e:
@@ -798,7 +801,8 @@ under 180 words, start with "{person.first} here:"."""
             return None
         for model in [decision.model] + decision.fallbacks[:1]:
             try:
-                return self.gateway.llm.complete(model, "", [{"role": "user", "content": prompt}]).strip()
+                with labelled(label):
+                    return self.gateway.llm.complete(model, "", [{"role": "user", "content": prompt}]).strip()
             except LLMError as e:
                 log.warning("startup: %s failed: %s", model.alias, e)
         return None

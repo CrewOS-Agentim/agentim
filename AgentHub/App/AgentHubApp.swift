@@ -49,7 +49,7 @@ struct AgentimApp: App {
 }
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case chats, startup, agents, skills, models, host, settings
+    case chats, startup, agents, skills, models, status, host, settings
     var id: String { rawValue }
 
     var title: String {
@@ -59,6 +59,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .agents: "Agents"
         case .skills: "Skills"
         case .models: "Models"
+        case .status: "Status"
         case .host: "This Mac"
         case .settings: "Settings"
         }
@@ -71,6 +72,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
         case .agents: "person.2.badge.gearshape"
         case .skills: "wand.and.stars"
         case .models: "cpu"
+        case .status: "gauge.with.dots.needle.67percent"
         case .host: "desktopcomputer"
         case .settings: "gearshape"
         }
@@ -117,6 +119,7 @@ struct RootView: View {
             case .agents: AgentListView()
             case .skills: SkillListView()
             case .models: ModelsView()
+            case .status: StatusView()
             case .host: HostView()
             case .settings: SettingsView()
             }

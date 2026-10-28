@@ -151,6 +151,9 @@ final class HostController {
         return Self.parseEnv(env)["RUNNER_TOKEN"]
     }
 
+    /// GET a runner endpoint with the stack's token (nil if it isn't reachable).
+    func runnerData(_ port: Int, _ path: String) async -> Data? { await runner(port, path) }
+
     private func runner(_ port: Int, _ path: String, post: Bool = false) async -> Data? {
         guard let token = runnerToken, let url = URL(string: "http://localhost:\(port)/\(path)") else { return nil }
         var request = URLRequest(url: url, timeoutInterval: post ? 90 : 5)

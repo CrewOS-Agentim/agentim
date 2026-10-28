@@ -346,6 +346,62 @@ class LTXBridge:
 LTX = LTXBridge()
 
 
+# ---------------------------------------------------------------- task log (Status page)
+
+class TaskLog:
+    """Every model request this runner handles: what's running now and the recent history (kept on disk)."""
+
+    def __init__(self, path=None, keep=500, clock=time.time):
+        self.path, self.keep, self.clock = path, keep, clock
+        self.lock = threading.Lock()
+        self.running = {}
+        self.history = []
+        if path and os.path.exists(path):
+            try:
+                with open(path) as f:
+                    self.history = [json.loads(line) for line in f if line.strip()][-keep:]
+            except (OSError, ValueError):
+                self.history = []
+
+    def start(self, model, label, preview=""):
+        task = {"id": uuid.uuid4().hex[:12], "model": model, "label": label or "Chat",
+                "preview": " ".join(preview.split())[:90], "started": self.clock()}
+        with self.lock:
+            self.running[task["id"]] = task
+        return task["id"]
+
+    def finish(self, task_id, error=None):
+        with self.lock:
+            task = self.running.pop(task_id, None)
+            if not task:
+                return None
+            task.update(ended=self.clock(), ok=error is None, error=(error or "")[:200] or None)
+            task["seconds"] = round(task["ended"] - task["started"], 2)
+            self.history.append(task)
+            self.history = self.history[-self.keep:]
+            if self.path:
+                try:
+                    os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                    with open(self.path, "a") as f:
+                        f.write(json.dumps(task) + "\n")
+                    if sum(1 for _ in open(self.path)) > 2 * self.keep:  # trim now and then
+                        with open(self.path, "w") as f:
+                            f.writelines(json.dumps(t) + "\n" for t in self.history)
+                except OSError:
+                    pass
+        return task
+
+    def snapshot(self, limit=200):
+        now = self.clock()
+        with self.lock:
+            running = [{**t, "seconds": round(now - t["started"], 1)} for t in self.running.values()]
+            recent = list(reversed(self.history))[:limit]
+        return {"running": sorted(running, key=lambda t: t["started"]), "recent": recent, "now": now}
+
+
+TASKS = TaskLog(os.path.join(STATE_DIR, "tasks.jsonl"))
+
+
 # ---------------------------------------------------------------- memory: what's loaded, unload, stop LTX
 
 def loaded_models():
@@ -662,6 +718,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def error(self, status, message):
+        self.task_error = message  # a failed chat shows as failed in the task log
         self.send_json(status, {"error": {"message": message}})
 
     def body(self):
@@ -707,6 +764,8 @@ class Handler(BaseHTTPRequestHandler):
                 "gpus": gpus(), "backends": backend_status(), "ltx": LTX.available()})
         if path == "/v1/models":
             return self.send_json(200, {"object": "list", "data": list_models()})
+        if path == "/v1/tasks":
+            return self.send_json(200, TASKS.snapshot())
         if path == "/v1/models/loaded":
             return self.send_json(200, {"models": loaded_models(), "ltx_running": LTX.available()})
         if (path == "/v1/claude/sessions" or path.startswith("/v1/claude/sessions/")) and IN_CONTAINER:
@@ -766,6 +825,21 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- handlers
     def chat(self, body):
+        """Records the request in the task log (Status page), then answers it."""
+        prompt = next((m.get("content") for m in reversed(body.get("messages", [])) if m.get("role") == "user"), "")
+        label = urllib.parse.unquote(self.headers.get("X-Agentim-Task", "")) or (
+            "Mac app chat" if "agentim" in self.headers.get("User-Agent", "") else "API request")
+        task_id = TASKS.start(body.get("model", ""), label, prompt if isinstance(prompt, str) else "")
+        self.task_error = None
+        try:
+            return self.answer_chat(body)
+        except Exception as e:
+            self.task_error = str(e)
+            raise
+        finally:
+            TASKS.finish(task_id, self.task_error)
+
+    def answer_chat(self, body):
         model = body.get("model", "")
         backend, _, name = model.partition("/")
         if backend == "ltx":

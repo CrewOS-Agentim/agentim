@@ -31,5 +31,31 @@ class LocalAgentRoutingTests(unittest.TestCase):
             Router([CLAUDE_CODE], "balanced", True).route("hello")
 
 
+class TaskLabelTests(unittest.TestCase):
+    def test_runner_calls_carry_the_task_label(self):
+        from agentim import llm as llm_mod
+        from agentim.core import Gateway
+        sent = []
+        original = llm_mod.post
+        llm_mod.post = lambda url, body, headers, timeout: sent.append(headers) or {"choices": [{"message": {"content": "hi"}}]}
+
+        class Config:
+            runner_token = "tok"
+
+        try:
+            client = llm_mod.LLM(Config())
+            client.complete(QWEN, "", [{"role": "user", "content": "hi"}])
+            self.assertNotIn("X-Agentim-Task", sent[-1], "unlabelled calls send nothing")
+            with llm_mod.labelled("Startup meeting · Leafy · Maya"):
+                client.complete(QWEN, "", [{"role": "user", "content": "hi"}])
+            from urllib.parse import unquote
+            self.assertEqual(unquote(sent[-1]["X-Agentim-Task"]), "Startup meeting · Leafy · Maya", "survives as ASCII")
+            self.assertIsNone(llm_mod.task_label.get(), "reset after the block")
+        finally:
+            llm_mod.post = original
+        self.assertEqual(Gateway.task_label("telegram:123"), "Telegram chat")
+        self.assertEqual(Gateway.task_label("api:mcp-abc"), "Claude/ChatGPT connector")
+
+
 if __name__ == "__main__":
     unittest.main()

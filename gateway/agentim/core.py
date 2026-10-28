@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from .claude_sessions import ClaudeSessions
 from . import skills as skill_lib
-from .llm import LLMError
+from .llm import LLMError, labelled
 from .router import NoModel, Router
 
 MEDIA_LINK = re.compile(r"\[(video|image)\]\((https?://[^)\s]+)\)")
@@ -144,6 +144,14 @@ class Gateway:
 
     # ---- answering
 
+    @staticmethod
+    def task_label(key):
+        """How a chat shows on the Status page: "Telegram chat", "Claude/ChatGPT connector", …"""
+        channel, _, chat_id = key.partition(":")
+        if chat_id.startswith("mcp-"):
+            return "Claude/ChatGPT connector"
+        return {"api": "API chat", "whatsapp": "WhatsApp chat"}.get(channel, f"{channel.capitalize()} chat")
+
     def answer(self, key, text):
         agent = self.agent_for(key)
         history = self.store.history(key)
@@ -160,7 +168,8 @@ class Gateway:
         last_error = None
         for model in [decision.model] + decision.fallbacks[:2]:
             try:
-                output = self.llm.complete(model, system, messages)
+                with labelled(self.task_label(key)):
+                    output = self.llm.complete(model, system, messages)
             except LLMError as e:
                 last_error = e
                 continue
