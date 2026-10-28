@@ -21,7 +21,8 @@ struct ConversationListView: View {
         HSplitView {
             List(selection: $selection) {
                 ForEach(filtered) { conversation in
-                    ConversationRow(conversation: conversation, agent: store.agent(for: conversation))
+                    ConversationRow(conversation: conversation, agent: store.agent(for: conversation),
+                                    participants: store.participants(in: conversation))
                         .tag(conversation.id)
                         .contextMenu {
                             Button("Delete", role: .destructive) { delete([conversation.id]) }
@@ -56,6 +57,10 @@ struct ConversationListView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
+                    Button("Meeting room (several agents)", systemImage: "person.3.fill") {
+                        selection = store.newMeeting(with: []).id
+                    }
+                    Divider()
                     ForEach(store.agents) { agent in
                         Button("\(agent.emoji) \(agent.name)") { selection = store.newConversation(agent: agent).id }
                     }
@@ -78,10 +83,19 @@ struct ConversationListView: View {
 private struct ConversationRow: View {
     let conversation: Conversation
     let agent: Agent?
+    var participants: [Agent] = []
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            AvatarView(agent: agent, size: 40)
+            if conversation.isMeeting {
+                ZStack(alignment: .bottomTrailing) {
+                    AvatarView(agent: participants.first, size: 40)
+                    Image(systemName: "person.3.fill").font(.system(size: 9)).foregroundStyle(.white)
+                        .padding(3).background(Color.accentColor, in: Circle())
+                }
+            } else {
+                AvatarView(agent: agent, size: 40)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(conversation.title).font(.headline).lineLimit(1)
@@ -89,7 +103,9 @@ private struct ConversationRow: View {
                     Text(conversation.updatedAt, style: .relative)
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(agent?.name ?? "Unknown agent").font(.caption).foregroundStyle(.tint)
+                Text(conversation.isMeeting ? (participants.isEmpty ? "Meeting room" : participants.map(\.name).joined(separator: ", "))
+                                            : agent?.name ?? "Unknown agent")
+                    .font(.caption).foregroundStyle(.tint).lineLimit(1)
                 Text(conversation.preview).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
             }
         }

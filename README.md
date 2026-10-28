@@ -190,6 +190,10 @@ The app can also run Hugging Face **MLX** models directly on your Mac's GPU, aft
 
 **Quick controls:** **This Mac** has one-click **Start / Restart / Stop** for all the Docker containers, shows which models are in memory, and **Free memory** unloads them now (they also unload by themselves 5 minutes after their last use, `OLLAMA_KEEP_ALIVE`). **Stop LTX** quits LTX Desktop to free its GPU memory; it opens again when you ask for a video or image. The same actions are in the menu bar.
 
+**Meeting rooms:** **New chat → Meeting room** puts several agents in one chat (say CTO, CMO and QA Engineer). Each message gets an answer from every agent in turn, each building on the others, or tag `@CTO` to ask just one; add or remove agents from the bar at the top.
+
+**Status:** the **Status** page shows which models are running, your Mac's CPU and memory (with live charts), each container's CPU and memory (`docker stats`), and every model task: what's running now and a history with timings and results.
+
 **Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line). **Drag files** into a chat, or click 📎: text, code and PDFs are read into the prompt (up to 10 files, 20 MB and 100k characters each); images and other files are passed by name, since the chat models only read text.
 
 **Found a bug?** **Help → Report an Issue on GitHub…** (also in Settings and the menu bar) opens a new GitHub issue with your app version, macOS, chip and memory filled in. Nothing is sent until you submit it.
