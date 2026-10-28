@@ -69,6 +69,14 @@ struct StartupDetail: Decodable, Equatable {
     let people: [String: PersonInfo]
     var presets: [RolePreset]? = nil
     let messages: [Message]
+    /// Set while the agents are meeting (gateway `StartupMode.live`).
+    var meeting: Meeting? = nil
+
+    struct Meeting: Decodable, Equatable {
+        let round: Int
+        let speaking: String?
+        var speakers: [String]? = nil
+    }
 
     var isInterview: Bool { status == "interview" }
     var isRunning: Bool { status == "running" }
@@ -165,6 +173,10 @@ final class StartupModel {
             listing = Self.demoListing
             selection = Self.demoDetail.id
             detail = Self.demoDetail
+            // `-demoMeeting YES` shows Leafy's agents mid-meeting (screenshots).
+            if UserDefaults.standard.bool(forKey: "demoMeeting") {
+                detail?.meeting = .init(round: 7, speaking: "data", speakers: ["sales", "design", "data"])
+            }
             // `-demoInterview YES` opens Tutorly mid-interview (screenshots).
             if UserDefaults.standard.bool(forKey: "demoInterview") {
                 selection = Self.demoInterview.id
@@ -190,8 +202,16 @@ final class StartupModel {
     func startPolling(stackRoot: URL?) {
         guard !isDemo, timer == nil else { return }
         Task { await refresh(stackRoot: stackRoot) }
-        timer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
-            Task { await self?.refresh(stackRoot: stackRoot) }
+        // Every 3 s while the agents are meeting (to show the chat live), otherwise every 15 s.
+        var ticks = 0
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                ticks += 1
+                if self.detail?.meeting != nil || self.meetingRequested || ticks % 5 == 0 {
+                    await self.refresh(stackRoot: stackRoot)
+                }
+            }
         }
     }
 
@@ -283,14 +303,14 @@ final class StartupModel {
     func submitAnswers(stackRoot: URL?) async {
         guard let id = detail?.id else { return }
         let answers = draftAnswers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        await act("Hiring the team…", stackRoot) { client in
+        await act("Starting the agents…", stackRoot) { client in
             self.detail = try await client.answer(id, answers: answers)
         }
     }
 
     func skipQuestions(stackRoot: URL?) async {
         guard let id = detail?.id else { return }
-        await act("Hiring the team…", stackRoot) { client in self.detail = try await client.skip(id) }
+        await act("Starting the agents…", stackRoot) { client in self.detail = try await client.skip(id) }
     }
 
     func setEnabled(_ on: Bool, stackRoot: URL?) async {
@@ -333,7 +353,7 @@ final class StartupModel {
             if person.key.hasPrefix("new-") { person.key = "" }
             return person
         }
-        await act("Updating the team…", stackRoot) { client in
+        await act("Updating the agents…", stackRoot) { client in
             self.detail = try await client.setTeam(id, team)
             self.editingTeam = false
         }
@@ -351,9 +371,17 @@ final class StartupModel {
         return "New Hire \(team.count + 1)"
     }
 
+    /// "Meet now" was pressed: poll fast until the meeting shows up (and while it runs).
+    var meetingRequested = false
+
     func meetNow(stackRoot: URL?) async {
+        meetingRequested = true
+        Task {
+            try? await Task.sleep(for: .seconds(20))
+            self.meetingRequested = false
+        }
         guard let id = detail?.id else { return }
-        await act("Calling the team in…", stackRoot) { client in try await client.meetNow(id) }
+        await act("Calling the agents in…", stackRoot) { client in try await client.meetNow(id) }
     }
 
     func delete(stackRoot: URL?) async {
@@ -389,6 +417,7 @@ final class StartupModel {
         .init(key: "sales", name: "Zoe Kim", title: "Head of Sales", emoji: "💼", owns: "the first 10 customers, pricing and pipeline"),
         .init(key: "bizdev", name: "Omar Haddad", title: "Business Development", emoji: "🤝", owns: "partnerships and distribution"),
         .init(key: "finance", name: "Grace Liu", title: "Finance & Fundraising", emoji: "💰", owns: "unit economics, runway and fundraising"),
+        .init(key: "data", name: "Nina Shah", title: "Data Analyst", emoji: "📊", owns: "metrics, tracking, dashboards and experiments"),
     ]
 
     static let demoHire = StartupPerson(key: "jordan", name: "Jordan Lee", title: "Customer Success", emoji: "🫶",

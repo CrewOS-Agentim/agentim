@@ -15,7 +15,7 @@ struct AgentimApp: App {
                 .frame(minWidth: 900, minHeight: 600)
                 .task {
                     host.startPolling()
-                    guard !AppStore.isDemo else { return }
+                    guard !AppStore.isDemo, !AppStore.isTesting else { return }
                     async let account: Void = store.refreshHuggingFaceAccount()
                     async let servers: Void = store.refreshServers()
                     _ = await (account, servers)
@@ -29,7 +29,7 @@ struct AgentimApp: App {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            guard !AppStore.isDemo else { return }
+            guard !AppStore.isDemo, !AppStore.isTesting else { return }
             if phase == .background { store.saveNow() }
             if phase == .active { Task { await store.refreshServers() } }
         }

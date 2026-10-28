@@ -72,7 +72,7 @@ class HelperTests(unittest.TestCase):
             picked = pick_speakers(last, 3, rng)
             spoken += [p.key for p in picked]
             last.update({p.key: round_no for p in picked})
-        self.assertEqual(len(set(spoken)), 8)
+        self.assertEqual(len(set(spoken)), len(TEAM))
 
     def test_parse_questions(self):
         text = "Sure! Here are questions:\n1. Who pays for it today?\n2) How much?? really\n- Which offices first?\nThanks"
@@ -284,7 +284,7 @@ class APITests(unittest.TestCase):
         self.assertEqual(detail["people"]["product"]["name"], "Maya Chen")
         status, listing = self.call("/v1/startups")
         self.assertEqual([s["name"] for s in listing["startups"]], ["Leafy"])
-        self.assertEqual(len(listing["team"]), 8)
+        self.assertEqual(len(listing["team"]), len(TEAM))
         status, body = self.call(f"/v1/startups/{sid}", {"enabled": False})
         self.assertEqual(body["status"], "paused")
         self.assertEqual(self.call("/v1/startups/nope")[0], 404)

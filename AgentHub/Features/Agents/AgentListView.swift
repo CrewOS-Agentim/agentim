@@ -41,7 +41,7 @@ private struct AgentRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(agent.emoji).font(.largeTitle)
+            AvatarView(agent: agent, size: 52)
             VStack(alignment: .leading, spacing: 4) {
                 Text(agent.name).font(.headline)
                 if !agent.summary.isEmpty {

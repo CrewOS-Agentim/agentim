@@ -4,6 +4,8 @@ import Foundation
 /// `-openChat YES`); it uses a throwaway store so real data is never touched.
 extension AppStore {
     static var isDemo: Bool { UserDefaults.standard.bool(forKey: "demo") }
+    /// Running as the unit-test host: skip startup work that reads the Keychain (it can block on a prompt).
+    static var isTesting: Bool { ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil }
 
     static func demo() -> AppStore {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("agentim-demo-\(UUID().uuidString).json")

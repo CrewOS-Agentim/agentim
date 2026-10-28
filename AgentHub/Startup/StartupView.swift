@@ -98,13 +98,13 @@ private struct NewStartup: View {
             VStack(spacing: 20) {
                 TimAvatar(size: 84)
                 Text("Pitch me your startup").headlineStyle(34)
-                Text("I'll ask a few follow-up questions, then hire a team that works on it every 10–30 minutes, like a real company.")
+                Text("I'll ask a few follow-up questions, then put a team of agents on it. They work every 10–30 minutes, like a real company.")
                     .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 600)
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
                     ForEach(team) { person in
                         VStack(spacing: 2) {
-                            Text(person.emoji).font(.title2)
+                            AvatarView(image: Avatars.teamMember(person.key), emoji: person.emoji, size: 40)
                             Text(person.name).font(.caption.weight(.semibold))
                             Text(person.title).font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
@@ -184,10 +184,10 @@ private struct Interview: View {
                 TimAvatar(size: 48)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("A few questions about \(detail.name)").headlineStyle(24)
-                    Text("So the team starts from what you know, not guesses.").foregroundStyle(.secondary)
+                    Text("So your agents start from what you know, not guesses.").foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Edit the team", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
+                Button("Edit agents", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
             }
             DisclosureGroup("Your pitch") {
                 Text(detail.pitch).font(.callout).frame(maxWidth: .infinity, alignment: .leading).padding(.top, Theme.s2)
@@ -250,7 +250,7 @@ private struct Interview: View {
             .keyboardShortcut(.leftArrow, modifiers: .command)
 
             Menu("Skip all") {
-                Button("Skip the rest and hire the team now") { Task { await model.skipQuestions(stackRoot: stackRoot) } }
+                Button("Skip the rest and start the agents now") { Task { await model.skipQuestions(stackRoot: stackRoot) } }
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -269,7 +269,7 @@ private struct Interview: View {
                 go(skip: false)
             } label: {
                 HStack(spacing: 6) {
-                    Text(model.isLastQuestion ? "Hire the team" : "Next")
+                    Text(model.isLastQuestion ? "Start the agents" : "Next")
                     Image(systemName: model.isLastQuestion ? "person.3.fill" : "chevron.right")
                 }
                 .frame(minWidth: 110)
@@ -342,7 +342,7 @@ private struct RunningStartup: View {
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.orange) }
             }
             Spacer()
-            Button("Team", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
+            Button("Agents", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
             Button("Meet now", systemImage: "person.3.fill") { Task { await model.meetNow(stackRoot: stackRoot) } }
                 .disabled(model.busy != nil || !detail.isRunning)
             Toggle("On", isOn: Binding(get: { detail.isRunning },
@@ -384,20 +384,25 @@ private struct TeamRoom: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Label("Team room", systemImage: "bubble.left.and.bubble.right.fill").font(.headline).foregroundStyle(.tint)
+            Label("Agents room", systemImage: "bubble.left.and.bubble.right.fill").font(.headline).foregroundStyle(.tint)
                 .padding([.horizontal, .top], 20).padding(.bottom, 10)
+            if let meeting = detail.meeting {
+                LiveMeetingBar(detail: detail, meeting: meeting)
+                    .padding(.horizontal, 20).padding(.bottom, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         if detail.messages.isEmpty {
-                            Text("The team's first meeting starts in about a minute.").foregroundStyle(.secondary)
+                            Text("The agents' first meeting starts in about a minute.").foregroundStyle(.secondary)
                         }
                         ForEach(detail.messages) { message in
                             let person = detail.person(message.role)
                             let isCEO = message.role == "ceo"
                             HStack(alignment: .top, spacing: 10) {
-                                Text(person.emoji).font(.title2).frame(width: 38, height: 38)
-                                    .background(isCEO ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12), in: Circle())
+                                AvatarView(image: Avatars.teamMember(message.role), emoji: person.emoji, size: 38)
+                                    .overlay(Circle().strokeBorder(isCEO ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 2))
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack(spacing: 6) {
                                         Text(person.name).font(.callout.weight(.semibold))
@@ -416,11 +421,76 @@ private struct TeamRoom: View {
                             .background(isCEO ? Color.accentColor.opacity(0.07) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
                             .id(message.id)
                         }
+                        if let speaking = detail.meeting?.speaking {
+                            TypingRow(detail: detail, key: speaking).id("typing")
+                        }
                     }
                     .padding(.horizontal, 20).padding(.bottom, 20)
                 }
                 .onChange(of: detail.messages.last?.id) { _, id in if let id { proxy.scrollTo(id, anchor: .bottom) } }
+                .onChange(of: detail.meeting?.speaking) { _, speaking in
+                    if speaking != nil { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
+                }
             }
         }
+    }
+}
+
+/// "In a meeting" banner: who's in the room and who's talking right now.
+private struct LiveMeetingBar: View {
+    let detail: StartupDetail
+    let meeting: StartupDetail.Meeting
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle().fill(Color.red).frame(width: 8, height: 8)
+                .symbolEffect(.pulse)
+                .accessibilityHidden(true)
+            Text("Meeting \(meeting.round) in progress").font(.callout.weight(.semibold))
+            HStack(spacing: -8) {
+                ForEach((meeting.speakers ?? []) + ["ceo"], id: \.self) { key in
+                    AvatarView(image: Avatars.teamMember(key), emoji: detail.person(key).emoji, size: 24)
+                        .overlay(Circle().strokeBorder(key == meeting.speaking ? Color.accentColor : Color(nsColor: .windowBackgroundColor),
+                                                       lineWidth: 2))
+                        .help(detail.person(key).name)
+                }
+            }
+            Spacer()
+            if let speaking = meeting.speaking {
+                Text("\(detail.person(speaking).name.split(separator: " ").first.map(String.init) ?? "") is talking…")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// The agent who's writing right now, with animated dots.
+private struct TypingRow: View {
+    let detail: StartupDetail
+    let key: String
+    @State private var phase = 0.0
+
+    var body: some View {
+        let person = detail.person(key)
+        HStack(alignment: .center, spacing: 10) {
+            AvatarView(image: Avatars.teamMember(key), emoji: person.emoji, size: 38)
+            Text(person.name).font(.callout.weight(.semibold))
+            HStack(spacing: 4) {
+                ForEach(0..<3) { i in
+                    Circle().fill(Color.secondary).frame(width: 6, height: 6)
+                        .opacity(0.3 + 0.7 * max(0, sin(phase - Double(i) * 0.8)))
+                }
+            }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(Color.secondary.opacity(0.1), in: Capsule())
+        }
+        .padding(12)
+        .onAppear {
+            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi * 2 }
+        }
+        .accessibilityLabel("\(person.name) is writing")
     }
 }

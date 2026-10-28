@@ -45,6 +45,7 @@ TEAM = [
     Person("sales", "Zoe Kim", "Head of Sales", "💼", "the first 10 customers, the pitch, pricing, objections and the pipeline"),
     Person("bizdev", "Omar Haddad", "Business Development", "🤝", "partnerships, distribution channels, integrations and deals"),
     Person("finance", "Grace Liu", "Finance & Fundraising", "💰", "unit economics, runway, pricing math, and when and how to raise"),
+    Person("data", "Nina Shah", "Data Analyst", "📊", "the metrics: north star, funnel, retention, the tracking plan, dashboards and experiment results"),
 ]
 CEO = Person("ceo", "Agent Tim", "CEO", "🐙", "the plan, priorities and keeping the founder in the loop")
 PEOPLE = {p.key: p for p in TEAM + [CEO]}
@@ -60,6 +61,10 @@ ROLE_PRESETS = [
     {"title": "Legal & Compliance", "emoji": "⚖️", "owns": "contracts, terms, privacy, regulation and company setup"},
     {"title": "Recruiter", "emoji": "🧲", "owns": "who to hire next, job posts, sourcing and interview loops"},
     {"title": "Community Manager", "emoji": "💬", "owns": "community, events, user stories and early-adopter relationships"},
+    {"title": "QA Engineer", "emoji": "🐞", "owns": "test plans, automated web/mobile/API tests, bug triage and release quality"},
+    {"title": "Penetration Tester", "emoji": "🔓", "owns": "authorized penetration tests: scoping, rules of engagement, methodology and findings"},
+    {"title": "Security Researcher", "emoji": "🔬", "owns": "vulnerability research, threat intelligence, new attack techniques and tooling"},
+    {"title": "Compliance & GRC", "emoji": "🛡️", "owns": "SOC 2 / ISO 27001 / PCI readiness, policies, audits and what customers' security teams ask"},
 ]
 
 
@@ -126,6 +131,28 @@ FALLBACK_QUESTIONS = [
 ]
 
 
+# How every startup's agents work, whatever the idea.
+OPERATING_PRINCIPLES = """How this company works:
+- Launch fast: ship the smallest useful version this week, not the perfect one next month.
+- Measure everything: every launch has a metric and a target; look at the numbers before deciding.
+- Improve in loops: launch → measure → learn → improve, every meeting.
+- Sales and marketing exist to grow revenue and weekly active users; report both.
+- Design keeps making the product clearer, faster and more delightful, one improvement at a time."""
+
+# What each role pushes for, on top of the principles (by key; custom roles fall back to their title).
+ROLE_GOALS = {
+    "product": "decide the next smallest launch and the metric it must move",
+    "design": "ship one concrete design improvement every meeting (onboarding, key screens, landing page) and say how you'll know it worked",
+    "engineering": "get things live fast and safely, and make sure every launch is instrumented",
+    "marketing": "grow sign-ups and weekly active users through content, social and launches; report the numbers",
+    "automation": "turn sign-ups into active and paying users with automated onboarding, email/SMS and lead scoring",
+    "sales": "close revenue: pipeline, demos, pilots and paying customers; report deals and revenue",
+    "bizdev": "open partnerships and channels that bring users and revenue",
+    "finance": "keep pricing, unit economics and runway healthy as revenue grows",
+    "data": "set up the metrics and tracking, report the numbers each meeting, and say what they mean",
+}
+
+
 def initial_plan(name, team=None):
     areas = "\n".join(f"### {p.emoji} {p.title} ({p.first})\n- …" for p in (team or TEAM))
     return f"# {name}\n\n## Top 3 priorities\n1. (the team will decide)\n\n## By area\n{areas}\n\n## Experiments this week\n\n## Open questions\n"
@@ -180,12 +207,15 @@ experienced employee: you own {person.owns}. Your colleagues: {colleagues}. The 
 The current plan:
 {startup['plan']}
 
+{OPERATING_PRINCIPLES}
+Your goal: {ROLE_GOALS.get(person.key, f"push {person.owns} forward, fast and measurably")}.
+
 Recent team discussion:
 {discussion or "(this is the team's first meeting)"}
 
 Post your update for this meeting, under 180 words, in first person like you would in the team Slack:
 1. What you did or decided since last time (be specific and realistic).
-2. Two or three concrete next moves in YOUR area: what, by when, how you'll know it worked.
+2. Two or three concrete next moves in YOUR area: what, by when, and the metric that shows it worked.
 3. One ask for a colleague, by first name (e.g. "@Leo, can you…").
 React to colleagues (agree, push back, or build on one point) but never repeat or re-list their suggestions.
 Do NOT write the company plan or other people's tasks: Agent Tim keeps the plan.
@@ -198,6 +228,8 @@ def ceo_prompt(startup, posted, people=None):
     updates = "\n\n".join(f"{people[m['role']].name} ({people[m['role']].title}):\n{m['content']}" for m in posted)
     return f"""You are Agent Tim, CEO of "{startup['name']}". Keep the company plan short, concrete and current.
 
+{OPERATING_PRINCIPLES}
+
 {brief(startup)}
 
 Current plan:
@@ -208,7 +240,7 @@ Updates from this meeting:
 
 Reply with exactly two parts:
 PLAN:
-<the full updated plan in markdown with: Top 3 priorities, By area (short bullets per area that changed, with the owner's first name), Experiments this week, Open questions. Keep what still holds, replace what changed, under 400 words.>
+<the full updated plan in markdown with: Top 3 priorities, Metrics (north star, active users, revenue, with current value or "not measured yet" and a target), By area (short bullets per area that changed, with the owner's first name), Experiments this week, Open questions. Keep what still holds, replace what changed, under 400 words.>
 SUMMARY:
 <2–3 sentences for the founder: what the team decided and the single next action, with the owner's name.>"""
 
@@ -311,6 +343,7 @@ class StartupMode:
         self.notify = None  # callable(channel, chat_id, text), set by __main__
         self.locks = {}
         self.locks_guard = threading.Lock()
+        self.live = {}  # startup id → {"round", "speaking", "started"} while a meeting runs
 
     # ---- creating a startup: pitch → follow-up questions → team
 
@@ -480,7 +513,10 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
             posted = []
             speakers = pick_speakers(self.store.last_spoke(startup_id), min(self.speakers_per_round, len(team)),
                                      self.rng, team)
+            self.live[startup_id] = {"round": round_no, "speaking": None, "started": self.clock(),
+                                     "speakers": [p.key for p in speakers]}
             for person in speakers:
+                self.live[startup_id]["speaking"] = person.key
                 reply = self._ask(person_prompt(person, startup, discussion, team))
                 if not reply:
                     continue
@@ -490,6 +526,7 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
             if not posted:
                 self.schedule_next(startup)
                 return None
+            self.live[startup_id]["speaking"] = CEO.key
             plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted, people)) or "", startup["plan"])
             summary = summary or "The team posted new ideas; see the plan."
             self.store.add_message(startup_id, round_no, CEO.key, summary)
@@ -504,6 +541,7 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
                     log.exception("startup: couldn't send the meeting summary")
             return text
         finally:
+            self.live.pop(startup_id, None)
             lock.release()
 
     # Routed by the kind of work, not the prompt text (prompts mention people as @Name).
@@ -560,7 +598,8 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         people = {k: {"name": p.name, "title": p.title, "emoji": p.emoji, "former": k not in current}
                   for k, p in people_of(startup).items()}
         return {**startup, "now": self.clock(), "team": [person_dict(p) for p in team_of(startup)], "people": people,
-                "presets": ROLE_PRESETS, "messages": self.store.messages(startup_id)}
+                "presets": ROLE_PRESETS, "messages": self.store.messages(startup_id),
+                "meeting": self.live.get(startup_id)}
 
     def listing(self):
         return {"now": self.clock(), "team": self.team(), "presets": ROLE_PRESETS,

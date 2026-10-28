@@ -11,8 +11,8 @@ struct TeamEditor: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("The team").font(.title2.bold())
-                    Text("Agent Tim stays on as CEO. Everyone else is yours to shape.")
+                    Text("Your agents").headlineStyle(22)
+                    Text("Agent Tim stays on as CEO. Every other agent is yours to shape.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -23,7 +23,7 @@ struct TeamEditor: View {
                     Divider()
                     Button("Someone else…") { model.hire(nil) }
                 } label: {
-                    Label("Hire", systemImage: "person.badge.plus")
+                    Label("Add agent", systemImage: "person.badge.plus")
                 }
                 .fixedSize()
                 .disabled(model.teamDraft.count >= 12)
@@ -37,7 +37,7 @@ struct TeamEditor: View {
                         EmployeeCard(person: $person) { model.remove(person) }
                     }
                     if model.teamDraft.isEmpty {
-                        Text("Hire at least one person.").foregroundStyle(.secondary).padding()
+                        Text("Add at least one agent.").foregroundStyle(.secondary).padding()
                     }
                 }
                 .padding(20)
@@ -45,12 +45,12 @@ struct TeamEditor: View {
 
             Divider()
             HStack {
-                Text("\(model.teamDraft.count) of 12 people").font(.caption).foregroundStyle(.secondary)
+                Text("\(model.teamDraft.count) of 12 agents").font(.caption).foregroundStyle(.secondary)
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.orange).lineLimit(2) }
                 Spacer()
                 Button("Cancel") { model.editingTeam = false }
                     .keyboardShortcut(.cancelAction)
-                Button("Save team") { Task { await model.saveTeam(stackRoot: stackRoot) } }
+                Button("Save agents") { Task { await model.saveTeam(stackRoot: stackRoot) } }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!model.teamDraftIsValid || model.busy != nil)
@@ -67,12 +67,16 @@ private struct EmployeeCard: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            TextField("🙂", text: $person.emoji)
-                .font(.system(size: 26))
-                .multilineTextAlignment(.center)
-                .frame(width: 48, height: 48)
-                .textFieldStyle(.plain)
-                .background(Color.secondary.opacity(0.12), in: Circle())
+            if let avatar = Avatars.teamMember(person.key) {
+                Image(nsImage: avatar).resizable().frame(width: 48, height: 48).clipShape(Circle())
+            } else {
+                TextField("🙂", text: $person.emoji)
+                    .font(.system(size: 26))
+                    .multilineTextAlignment(.center)
+                    .frame(width: 48, height: 48)
+                    .textFieldStyle(.plain)
+                    .background(Color.secondary.opacity(0.12), in: Circle())
+            }
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     TextField("Name", text: $person.name).textFieldStyle(.roundedBorder)
@@ -88,7 +92,7 @@ private struct EmployeeCard: View {
                 Image(systemName: "person.badge.minus")
             }
             .buttonStyle(.borderless)
-            .help("Let \(person.name) go. Their messages stay in the team room.")
+            .help("Remove \(person.name). Their messages stay in the agents room.")
         }
         .padding(12)
         .background(.background, in: RoundedRectangle(cornerRadius: 14))

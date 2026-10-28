@@ -81,10 +81,7 @@ private struct ConversationRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Text(agent?.emoji ?? "💬")
-                .font(.title2)
-                .frame(width: 40, height: 40)
-                .background(.quaternary, in: Circle())
+            AvatarView(agent: agent, size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 HStack {
                     Text(conversation.title).font(.headline).lineLimit(1)

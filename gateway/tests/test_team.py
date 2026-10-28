@@ -113,6 +113,47 @@ class TeamTests(unittest.TestCase):
         self.assertFalse(any(f"{leaver.name}:" in p for p in llm.prompts), "the leaver's old messages aren't in context")
 
 
+class GoalsAndLiveMeetingTests(unittest.TestCase):
+    def test_prompts_carry_the_operating_principles_and_role_goals(self):
+        llm = TeamLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = running(mode)
+        startup = mode.set_team(startup["id"], [person_dict(p) for p in TEAM if p.key in ("sales", "design", "data")])
+        mode.run_round(startup["id"])
+        people = [p for p in llm.prompts if p.startswith("You are ") and ' at "' in p]
+        by_person = {p.split()[2]: p for p in people}  # "You are Zoe Kim, …"
+        self.assertEqual(len(people), 3)
+        for prompt in people:
+            self.assertIn("Launch fast", prompt)
+            self.assertIn("Measure everything", prompt)
+        self.assertIn("revenue", by_person["Zoe"])
+        self.assertIn("design improvement", by_person["Leo"])
+        self.assertIn("set up the metrics", by_person["Nina"])
+
+    def test_data_analyst_is_on_the_default_team(self):
+        self.assertIn("data", [p.key for p in TEAM])
+
+    def test_live_meeting_state(self):
+        seen, ids = [], []
+
+        class Watching(TeamLLM):
+            def complete(inner, model, system, messages):
+                if ids:
+                    seen.append(dict(mode.detail(ids[0])["meeting"] or {}))
+                return super().complete(model, system, messages)
+
+        _, mode = make_startup_mode(llm=Watching())
+        startup = running(mode)
+        ids.append(startup["id"])
+        self.assertIsNone(mode.detail(startup["id"])["meeting"], "no meeting yet")
+        mode.run_round(startup["id"])
+        speaking = [s.get("speaking") for s in seen if s]
+        self.assertEqual(speaking[-1], "ceo", "Tim speaks last")
+        self.assertEqual(len(set(speaking[:-1])), 3, "three agents take turns")
+        self.assertEqual(seen[0]["round"], 1)
+        self.assertIsNone(mode.detail(startup["id"])["meeting"], "cleared after the meeting")
+
+
 class MigrationTests(unittest.TestCase):
     def test_old_database_gets_team_columns(self):
         db = sqlite3.connect(":memory:", check_same_thread=False)
@@ -134,7 +175,7 @@ class ChatTests(unittest.TestCase):
         self.assertIn("Maya Chen", say("/startup team 1"))
         self.assertIn("Jordan Lee* joined", say("/startup hire 1 Jordan Lee | Customer Success | onboarding and retention"))
         self.assertIn("Use `/startup hire", say("/startup hire 1 Jordan Lee"))
-        self.assertIn("has 8 people", say("/startup fire 1 Omar"))
+        self.assertIn("has 9 people", say("/startup fire 1 Omar"))
         self.assertIn("No one called", say("/startup fire 1 Nobody"))
         self.assertIn("Which startup", say("/startup fire 9 Maya"))
 
