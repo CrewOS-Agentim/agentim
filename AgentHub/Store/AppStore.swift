@@ -195,15 +195,97 @@ final class AppStore {
 
     // MARK: - Meeting rooms
 
-    /// A chat with several agents; each answers in turn (or only the ones you @mention).
+    /// Someone in a group chat: an agent, or a skill taking part as its own member.
+    struct Member: Identifiable, Hashable {
+        let id: UUID
+        let name: String
+        let emoji: String
+        var agent: Agent?
+        var skill: Skill?
+
+        /// What @mentions match: the first word of the name, the hyphenated name, and a skill's slug.
+        var mentionKeys: Set<String> {
+            let words = name.lowercased().split(separator: " ").map(String.init)
+            var keys: Set<String> = [words.first ?? "", words.joined(separator: "-")]
+            if let skill { keys.insert(skill.slug) }
+            return keys
+        }
+
+        /// The name to type after @ (and to Tab-complete).
+        var mention: String { skill?.slug ?? (name.split(separator: " ").first.map(String.init) ?? name) }
+    }
+
+    /// A group chat with agents and/or skills; each answers in turn (or only the ones you @mention).
     @discardableResult
-    func newMeeting(with participants: [Agent]) -> Conversation {
-        var conversation = Conversation(title: "Meeting", agentID: participants.first?.id ?? agents.first?.id ?? UUID())
+    func newMeeting(with participants: [Agent], skills: [Skill] = []) -> Conversation {
+        var conversation = Conversation(title: "Group chat", agentID: participants.first?.id ?? agents.first?.id ?? UUID())
         conversation.participantIDs = participants.map(\.id)
-        conversation.title = "Meeting: " + participants.prefix(3).map(\.name).joined(separator: ", ")
-            + (participants.count > 3 ? " +\(participants.count - 3)" : "")
+        conversation.participantSkillIDs = skills.map(\.id)
+        let names = participants.map(\.name) + skills.map(\.name)
+        if !names.isEmpty {
+            conversation.title = names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
+        }
         conversations.insert(conversation, at: 0)
         return conversation
+    }
+
+    /// Everyone in the group chat: its agents, then its skills.
+    func members(in conversation: Conversation) -> [Member] {
+        participants(in: conversation).map { Member(id: $0.id, name: $0.name, emoji: $0.emoji, agent: $0) }
+            + (conversation.participantSkillIDs ?? []).compactMap { id in
+                skills.first { $0.id == id }.map { Member(id: $0.id, name: $0.name, emoji: "🪄", skill: $0) }
+            }
+    }
+
+    /// Adds the member to the group chat, or removes them if they're in it.
+    func toggle(_ member: Member, in conversationID: UUID) {
+        if member.skill != nil { toggle(skill: member.id, in: conversationID) } else { toggle(agent: member.id, in: conversationID) }
+    }
+
+    func toggle(agent id: UUID, in conversationID: UUID) {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
+        let ids = conversation.participantIDs ?? []
+        setParticipants(ids.contains(id) ? ids.filter { $0 != id } : ids + [id], in: conversationID)
+        retitle(conversationID)
+    }
+
+    func toggle(skill id: UUID, in conversationID: UUID) {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
+        let ids = conversation.participantSkillIDs ?? []
+        setSkillParticipants(ids.contains(id) ? ids.filter { $0 != id } : ids + [id], in: conversationID)
+        retitle(conversationID)
+    }
+
+    /// Before the first message, the group's title follows who's in it.
+    private func retitle(_ conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }), conversations[i].messages.isEmpty else { return }
+        let names = members(in: conversations[i]).map(\.name)
+        conversations[i].title = names.isEmpty ? "Group chat"
+            : names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
+    }
+
+    func setSkillParticipants(_ ids: [UUID], in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].participantSkillIDs = ids
+    }
+
+    /// The members a message is for: the ones @mentioned, else everyone.
+    nonisolated static func addressed(_ text: String, among members: [Member]) -> [Member] {
+        let mentions = Set(text.matches(of: /@([\w-]+)/).map { $0.1.lowercased() })
+        guard !mentions.isEmpty else { return members }
+        let picked = members.filter { !$0.mentionKeys.isDisjoint(with: mentions) }
+        return picked.isEmpty ? members : picked
+    }
+
+    /// Who wrote a message in a group chat (an agent or a skill).
+    func speaker(of message: ChatMessage) -> Member? {
+        if let id = message.skillID, let skill = skills.first(where: { $0.id == id }) {
+            return Member(id: skill.id, name: skill.name, emoji: "🪄", skill: skill)
+        }
+        if let id = message.agentID, let agent = agents.first(where: { $0.id == id }) {
+            return Member(id: agent.id, name: agent.name, emoji: agent.emoji, agent: agent)
+        }
+        return nil
     }
 
     func participants(in conversation: Conversation) -> [Agent] {
@@ -229,39 +311,39 @@ final class AppStore {
     /// The meeting so far as a transcript, with the person each line is from.
     func transcript(_ conversation: Conversation, limit: Int = 16) -> String {
         conversation.messages.suffix(limit).filter { !$0.isError && !$0.content.isEmpty }.map { message in
-            let who = message.role == .user ? "You (the founder)"
-                : message.agentID.flatMap { id in agents.first { $0.id == id }?.name } ?? "Assistant"
+            let who = message.role == .user ? "You" : speaker(of: message)?.name ?? "Assistant"
             return "\(who): \(message.modelContent)"
         }.joined(separator: "\n\n")
     }
 
-    /// Posts the message, then lets each addressed agent answer in turn, each seeing the replies before it.
+    /// Posts the message, then lets each addressed member answer in turn, each seeing the replies before it.
     func sendToMeeting(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
         conversations[index].messages.append(ChatMessage(role: .user, content: text, attachments: attachments.nilIfEmpty))
-        let everyone = participants(in: conversations[index])
+        let everyone = members(in: conversations[index])
         let speakers = Self.addressed(text, among: everyone)
         streamingConversationIDs.insert(conversationID)
         Task {
             defer { streamingConversationIDs.remove(conversationID) }
-            for agent in speakers {
-                await meetingReply(from: agent, others: everyone.filter { $0.id != agent.id }, in: conversationID)
+            for member in speakers {
+                await meetingReply(from: member, others: everyone.filter { $0.id != member.id }, in: conversationID)
             }
         }
     }
 
-    private func meetingReply(from agent: Agent, others: [Agent], in conversationID: UUID) async {
+    private func meetingReply(from member: Member, others: [Member], in conversationID: UUID) async {
         guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
         let names = others.map(\.name).joined(separator: ", ")
         let ask = """
-        You're in a meeting with the founder\(names.isEmpty ? "" : " and \(names)"). Here's the conversation so far:
+        You're in a group chat with the user\(names.isEmpty ? "" : " and \(names)"). Here's the conversation so far:
 
         \(transcript(conversation))
 
-        Reply now as \(agent.name), from your own expertise. Build on (or push back on) what others said, address them \
-        by name when you do, don't repeat their points, and keep it under 180 words. Start with "\(agent.name):".
+        Reply now as \(member.name), from your own expertise. Build on (or push back on) what others said, address them \
+        by name when you do, don't repeat their points, and keep it under 180 words. Start with "\(member.name):".
         """
-        let reply = ChatMessage(role: .assistant, content: "", agentID: agent.id)
+        let agent = member.agent
+        let reply = ChatMessage(role: .assistant, content: "", agentID: member.agent?.id, skillID: member.skill?.id)
         guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
         conversations[c].messages.append(reply)
         do {
@@ -269,12 +351,13 @@ final class AppStore {
                 RoutingRequest(text: ask, history: [], agent: agent, conversationPin: conversation.pinnedModelID, isOnline: isOnline))
             let targets = ([decision.model] + decision.fallbacks.prefix(1)).compactMap { model in client(for: model).map { (model, $0) } }
             guard !targets.isEmpty else { throw RoutingError.noModelsAvailable }
-            let system = systemPrompt(agent: agent, message: ask)
+            let system = member.skill.map { "You are the \($0.name) specialist in this group chat.\n\n## Skill: \($0.name)\n\($0.instructions)" }
+                ?? systemPrompt(agent: agent, message: ask)
             for (model, client) in targets {
                 updateReply(reply.id, in: conversationID) {
                     $0.content = ""
                     $0.modelID = model.id
-                    $0.routingReason = "\(agent.name) in the meeting"
+                    $0.routingReason = "\(member.name) in the group chat"
                 }
                 do {
                     let request = ChatRequest(model: model.modelName, system: system,
@@ -284,7 +367,7 @@ final class AppStore {
                     }
                     // Small models often echo "Name:"; the bubble already shows who's talking.
                     updateReply(reply.id, in: conversationID) {
-                        $0.content = Self.withoutSpeakerPrefix($0.content, name: agent.name)
+                        $0.content = Self.withoutSpeakerPrefix($0.content, name: member.name)
                     }
                     return
                 } catch {
@@ -295,7 +378,7 @@ final class AppStore {
         } catch {
             updateReply(reply.id, in: conversationID) {
                 $0.isError = true
-                $0.content = "\(agent.name) couldn't answer: \(error.localizedDescription)"
+                $0.content = "\(member.name) couldn't answer: \(error.localizedDescription)"
             }
         }
     }
