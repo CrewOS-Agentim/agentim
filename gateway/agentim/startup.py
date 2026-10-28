@@ -138,10 +138,11 @@ Recent team discussion:
 {discussion or "(nobody has spoken yet)"}
 
 Write your update for this round, under 180 words:
-1. One sharp observation about the idea from your angle.
-2. Two or three concrete, specific improvements (who, what, how to test it this week).
+1. One sharp observation about the idea that only a {role.name} lead would make.
+2. Two or three concrete improvements in YOUR area ({role.focus}): who, what, how to test it this week.
 3. One question or hand-off to another teammate, starting with @Role (e.g. @Design, @Sales).
-Build on what teammates said; don't repeat the plan back. Plain text with short bullets."""
+React to teammates (agree, push back, or build on one point), but never repeat or re-list their
+suggestions and don't repeat the plan back. Stay in your lane. Plain text with short bullets."""
 
 
 def chief_prompt(idea, plan, round_messages):
