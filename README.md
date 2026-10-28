@@ -186,6 +186,8 @@ xcodegen generate && open agentim.xcodeproj     # ⌘R
 
 The app can also run Hugging Face **MLX** models directly on your Mac's GPU, after the same memory check. Use **Models → Browse Hugging Face**.
 
+**Status bar and logs:** a bar at the bottom of every screen shows each container from `docker ps` (green = running), the models in memory and LTX; click any of them, or **Logs**, to open the Logs window for that container or for the runner on your Mac, live, with a filter, copy, **Open in Terminal**, and the app's own status checks hidden.
+
 **Quick controls:** **This Mac** has one-click **Start / Restart / Stop** for all the Docker containers, shows which models are in memory, and **Free memory** unloads them now (they also unload by themselves 5 minutes after their last use, `OLLAMA_KEEP_ALIVE`). **Stop LTX** quits LTX Desktop to free its GPU memory; it opens again when you ask for a video or image. The same actions are in the menu bar.
 
 **Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line). **Drag files** into a chat, or click 📎: text, code and PDFs are read into the prompt (up to 10 files, 20 MB and 100k characters each); images and other files are passed by name, since the chat models only read text.

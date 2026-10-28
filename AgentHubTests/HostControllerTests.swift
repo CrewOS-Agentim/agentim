@@ -112,4 +112,32 @@ final class HostControllerTests: XCTestCase {
         XCTAssertEqual(loaded.models.first?.gigabytes, "5.1 GB")
         XCTAssertEqual(loaded.ltx_running, true)
     }
+
+    func testParsesDockerPS() {
+        let output = """
+        {"Names":"agentim-ollama-1","State":"running","Status":"Up 2 hours","Labels":"com.docker.compose.project=agentim,com.docker.compose.service=ollama"}
+        {"Names":"agentim-gateway-1","State":"running","Status":"Up 1 minute (unhealthy)","Labels":"com.docker.compose.service=gateway,x=y"}
+        {"Names":"agentim-voice-1","State":"exited","Status":"Exited (1) 3 minutes ago","Labels":"com.docker.compose.service=voice"}
+        not json
+        """
+        let containers = HostController.parseDockerPS(output)
+        XCTAssertEqual(containers.map(\.service), ["gateway", "ollama", "voice"])
+        XCTAssertEqual(containers.first { $0.service == "voice" }?.isRunning, false)
+        XCTAssertEqual(containers.first { $0.service == "gateway" }?.status, "Up 1 minute (unhealthy)")
+        XCTAssertEqual(containers.first { $0.service == "ollama" }?.name, "agentim-ollama-1")
+    }
+
+    func testLogFilter() {
+        let log = "loading model qwen\nserving on :11434\nModel unloaded"
+        XCTAssertEqual(LogsView.filter(log, by: "model"), "loading model qwen\nModel unloaded")
+        XCTAssertEqual(LogsView.filter(log, by: "  "), log, "blank filter shows everything")
+        let ollama = """
+        [GIN] 2026/10/28 - 18:44:41 | 200 | 21µs | 172.21.0.4 | GET      "/api/ps"
+        time=2026-10-28T18:45:00 level=INFO msg="loading model" model=qwen3
+        [GIN] 2026/10/28 - 18:45:25 | 200 | 38µs | 172.21.0.4 | GET      "/api/version"
+        [GIN] 2026/10/28 - 18:45:30 | 200 | 2.1s | 172.21.0.4 | POST     "/v1/chat/completions"
+        """
+        XCTAssertEqual(LogsView.withoutStatusChecks(ollama).split(separator: "\n").count, 2,
+                       "model loading and chat requests stay; polling goes")
+    }
 }

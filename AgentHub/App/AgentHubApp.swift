@@ -35,6 +35,11 @@ struct AgentimApp: App {
             if phase == .active { Task { await store.refreshServers() } }
         }
 
+        Window("Logs", id: "logs") {
+            LogsView().environment(host)
+        }
+        .defaultSize(width: 980, height: 620)
+
         MenuBarExtra {
             MenuBarContent().environment(host)
         } label: {
@@ -76,6 +81,7 @@ struct RootView: View {
     /// `-section models` on launch picks the starting section (used for screenshots).
     @State private var selection: SidebarItem? = SidebarItem(rawValue: UserDefaults.standard.string(forKey: "section") ?? "") ?? .chats
     @Environment(HostController.self) private var host
+    @Environment(\.openWindow) private var openWindow
     /// First launch shows onboarding; "Run setup again" in This Mac resets this.
     /// `-onboarding YES` forces it (screenshots); demo mode otherwise skips it.
     @AppStorage("onboardingComplete") private var onboardingComplete = false
@@ -104,13 +110,6 @@ struct RootView: View {
                 Label(item.title, systemImage: item.symbol).tag(item)
             }
             .navigationSplitViewColumnWidth(min: 170, ideal: 190)
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 6) {
-                    Circle().fill(host.isHealthy ? Color.green : Color.orange).frame(width: 8, height: 8)
-                    Text(host.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                .padding(10)
-            }
         } detail: {
             switch selection ?? .chats {
             case .chats: ConversationListView()
@@ -122,7 +121,12 @@ struct RootView: View {
             case .settings: SettingsView()
             }
         }
-        .onAppear { Snapshots.runIfRequested { selection = $0 } }
+        .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
+        .onAppear {
+            Snapshots.runIfRequested { selection = $0 }
+            // `-openLogs YES` opens the Logs window (screenshots).
+            if UserDefaults.standard.bool(forKey: "openLogs") { openWindow(id: "logs") }
+        }
     }
 }
 
