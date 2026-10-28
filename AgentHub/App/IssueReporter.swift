@@ -4,7 +4,7 @@ import Foundation
 /// "Report an issue": opens a new GitHub issue for agentim, prefilled with what helps triage
 /// (app and macOS version, chip, memory). Nothing is sent until the user submits it on GitHub.
 enum IssueReporter {
-    static let repository = URL(string: "https://github.com/doron2402/agentim")!
+    static let repository = URL(string: "https://github.com/CrewOS-Agentim/agentim")!
 
     enum Kind: String {
         case bug, feature

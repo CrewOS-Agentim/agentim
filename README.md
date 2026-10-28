@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://doron2402.github.io/agentim/"><b>Website</b></a> ·
+  <a href="https://crewos-agentim.github.io/agentim/"><b>Website</b></a> ·
   <a href="#-quick-start">Quick start</a> ·
   <a href="#-how-it-works">How it works</a> ·
   <a href="#-the-mac-app">Mac app</a> ·
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/doron2402/agentim/actions"><img alt="tests" src="https://github.com/doron2402/agentim/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/CrewOS-Agentim/agentim/actions"><img alt="tests" src="https://github.com/CrewOS-Agentim/agentim/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="license" src="https://img.shields.io/badge/license-MIT-8b5cf6">
   <img alt="macOS" src="https://img.shields.io/badge/macOS-14%2B-1d1d1f?logo=apple">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI-f05138?logo=swift&logoColor=white">
@@ -79,7 +79,7 @@ xcodegen generate && open agentim.xcodeproj     # ⌘R. Onboarding opens on firs
 You need a Mac with Apple silicon, [Docker Desktop](https://www.docker.com/products/docker-desktop/), and five minutes.
 
 ```sh
-git clone https://github.com/doron2402/agentim.git && cd agentim
+git clone https://github.com/CrewOS-Agentim/agentim.git && cd agentim
 
 # 1. Always-on: creates .env with fresh secrets, installs the restart watchdog,
 #    the LTX runner and the lid-close power guard (asks for your password once)
@@ -336,7 +336,7 @@ With [LTX Desktop](https://ltx.studio) installed on the Mac, the native runner (
 /video a tiny purple cartoon octopus in sunglasses surfing a wave made of chat bubbles
 ```
 
-Agent Tim renders it locally, for free, and sends the clip back to Telegram, WhatsApp or Slack. The clip on the [website](https://doron2402.github.io/agentim/#video) was made exactly this way.
+Agent Tim renders it locally, for free, and sends the clip back to Telegram, WhatsApp or Slack. The clip on the [website](https://crewos-agentim.github.io/agentim/#video) was made exactly this way.
 
 ## 🔒 Privacy & security
 
@@ -370,7 +370,7 @@ CI runs all four on every push.
 
 PRs are welcome, especially new skills, channels and model backends. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Found a bug or want a feature? [Open an issue](https://github.com/doron2402/agentim/issues/new/choose), or use **Help → Report an Issue on GitHub…** in the app.
+Found a bug or want a feature? [Open an issue](https://github.com/CrewOS-Agentim/agentim/issues/new/choose), or use **Help → Report an Issue on GitHub…** in the app.
 
 ## 📄 License
 

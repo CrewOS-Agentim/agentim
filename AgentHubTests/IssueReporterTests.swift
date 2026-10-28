@@ -11,7 +11,7 @@ final class IssueReporterTests: XCTestCase {
         let url = IssueReporter.url(kind: .bug, title: "Crash", details: "It broke & stopped",
                                     environment: ["agentim": "1.0 (1)", "macOS": "26.5"])
         XCTAssertEqual(url.host, "github.com")
-        XCTAssertEqual(url.path, "/doron2402/agentim/issues/new")
+        XCTAssertEqual(url.path, "/CrewOS-Agentim/agentim/issues/new")
         let q = query(url)
         XCTAssertEqual(q["title"], "Crash")
         XCTAssertEqual(q["labels"], "bug")
