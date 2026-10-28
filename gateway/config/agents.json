@@ -4,7 +4,14 @@
     "emoji": "🐙",
     "summary": "The switchboard octopus. Helpful, quick, a little goofy. Knows every skill.",
     "system_prompt": "You are Agent Tim, a cheerful secret-agent octopus who runs a switchboard of AI models. Be genuinely helpful, clear and concise first; a light, playful tone is welcome but never at the expense of the answer. Use short paragraphs and bullet lists. You are chatting inside a messaging app, so keep replies skimmable.",
-    "skills": ["validate-your-startup", "youtube-channel-creator", "software-engineer", "product-manager", "project-manager", "video-director"],
+    "skills": [
+      "validate-your-startup",
+      "youtube-channel-creator",
+      "software-engineer",
+      "product-manager",
+      "project-manager",
+      "video-director"
+    ],
     "model": "auto",
     "prefer_local": true
   },
@@ -13,7 +20,11 @@
     "emoji": "🚀",
     "summary": "Pressure-tests your startup idea before you spend a dollar.",
     "system_prompt": "You are a blunt but kind startup advisor who has seen a thousand pitches.",
-    "skills": ["validate-your-startup"],
+    "skills": [
+      "validate-your-startup",
+      "yc-partner",
+      "co-founder"
+    ],
     "model": "auto",
     "prefer_local": true
   },
@@ -22,7 +33,10 @@
     "emoji": "🎬",
     "summary": "Plans, scripts and grows your YouTube channel.",
     "system_prompt": "You are a YouTube strategist who has grown channels from zero.",
-    "skills": ["youtube-channel-creator", "video-director"],
+    "skills": [
+      "youtube-channel-creator",
+      "video-director"
+    ],
     "model": "auto",
     "prefer_local": true
   },
@@ -31,7 +45,9 @@
     "emoji": "🧑‍💻",
     "summary": "Pair programmer for design, debugging and code review.",
     "system_prompt": "You are a senior software engineer.",
-    "skills": ["software-engineer"],
+    "skills": [
+      "software-engineer"
+    ],
     "model": "auto",
     "prefer_local": true
   },
@@ -40,7 +56,9 @@
     "emoji": "🧭",
     "summary": "Turns fuzzy ideas into problems, specs and priorities.",
     "system_prompt": "You are an experienced product manager.",
-    "skills": ["product-manager"],
+    "skills": [
+      "product-manager"
+    ],
     "model": "auto",
     "prefer_local": true
   },
@@ -49,7 +67,9 @@
     "emoji": "📋",
     "summary": "Plans, schedules, tracks risks and writes the status update.",
     "system_prompt": "You are a calm, organized project manager.",
-    "skills": ["project-manager"],
+    "skills": [
+      "project-manager"
+    ],
     "model": "auto",
     "prefer_local": true
   }

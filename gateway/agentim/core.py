@@ -76,6 +76,12 @@ class Gateway:
         with self.locks_guard:
             lock = self.locks.setdefault(key, threading.Lock())
         with lock:
+            # Answering Tim's follow-up questions about a new startup.
+            answering = not text.startswith("/") or text.lower() == "/skip"
+            if self.startup and answering:
+                interview = self.startup.pending_interview(channel, chat_id)
+                if interview:
+                    return [Reply(self.startup.handle_answer(interview, text.lstrip("/")))]
             if text.lower().split(" ")[0].split("@")[0] == "/startup":
                 if not self.startup:
                     return [Reply("🚀 Startup Mode isn't available on this gateway.")]
