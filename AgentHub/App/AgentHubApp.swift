@@ -37,12 +37,13 @@ struct AgentimApp: App {
 }
 
 enum SidebarItem: String, CaseIterable, Identifiable {
-    case chats, agents, skills, models, host, settings
+    case chats, startup, agents, skills, models, host, settings
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .chats: "Chats"
+        case .startup: "Startup"
         case .agents: "Agents"
         case .skills: "Skills"
         case .models: "Models"
@@ -54,6 +55,7 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .chats: "bubble.left.and.bubble.right"
+        case .startup: "lightbulb.max.fill"
         case .agents: "person.2.badge.gearshape"
         case .skills: "wand.and.stars"
         case .models: "cpu"
@@ -71,6 +73,7 @@ struct RootView: View {
     /// `-onboarding YES` forces it (screenshots); demo mode otherwise skips it.
     @AppStorage("onboardingComplete") private var onboardingComplete = false
     @State private var onboarding = OnboardingModel(demo: AppStore.isDemo)
+    @State private var startup = StartupModel(demo: AppStore.isDemo)
 
     private var showOnboarding: Bool {
         if UserDefaults.standard.bool(forKey: "onboarding") { return true }
@@ -104,6 +107,7 @@ struct RootView: View {
         } detail: {
             switch selection ?? .chats {
             case .chats: ConversationListView()
+            case .startup: StartupView(model: startup)
             case .agents: AgentListView()
             case .skills: SkillListView()
             case .models: ModelsView()

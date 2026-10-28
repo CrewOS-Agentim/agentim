@@ -22,17 +22,27 @@ enum Shell {
             var environment = ProcessInfo.processInfo.environment
             environment["PATH"] = searchPath
             process.environment = environment
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
+            // Output goes to a temp file, not a pipe: a pipe holds ~64 KB, and a chatty command
+            // (docker pulling gigabytes) would block writing to it while we wait for it to exit.
+            let log = FileManager.default.temporaryDirectory.appendingPathComponent("agentim-\(UUID().uuidString).log")
+            FileManager.default.createFile(atPath: log.path, contents: nil)
+            guard let handle = try? FileHandle(forWritingTo: log) else {
+                return continuation.resume(returning: Result(status: -1, output: "couldn't create a log file"))
+            }
+            process.standardOutput = handle
+            process.standardError = handle
             process.terminationHandler = { finished in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                try? handle.close()
+                let data = (try? Data(contentsOf: log)) ?? Data()
+                try? FileManager.default.removeItem(at: log)
                 continuation.resume(returning: Result(status: finished.terminationStatus,
                                                       output: String(decoding: data, as: UTF8.self)))
             }
             do {
                 try process.run()
             } catch {
+                try? handle.close()
+                try? FileManager.default.removeItem(at: log)
                 continuation.resume(returning: Result(status: -1, output: error.localizedDescription))
             }
         }

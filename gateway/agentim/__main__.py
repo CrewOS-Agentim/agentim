@@ -9,6 +9,7 @@ from .core import Gateway
 from .llm import LLM
 from .models import Catalog, bootstrap
 from .server import serve
+from .startup import StartupMode, StartupStore
 from .store import Store
 from .voice import Voice
 
@@ -41,9 +42,16 @@ def main():
     config = config_lib.from_env()
     catalog = Catalog(config)
     voice = Voice(config.voice_url, config.stt_model, config.tts_model, config.tts_voice)
-    gateway = Gateway(config, Store(os.path.join(config.data_dir, "agentim.db")), LLM(config), catalog,
-                      skill_lib.load_dir(config.skills_dir), voice if voice.enabled else None)
+    store = Store(os.path.join(config.data_dir, "agentim.db"))
+    gateway = Gateway(config, store, LLM(config), catalog, skill_lib.load_dir(config.skills_dir),
+                      voice if voice.enabled else None)
     channels = build_channels(config, gateway)
+
+    # Startup Mode: the team meets on its own schedule and reports to the chat that started it.
+    gateway.startup = StartupMode(gateway, StartupStore(store.db, store.lock))
+    gateway.startup.notify = lambda channel, chat_id, text: channels[channel].send_text(chat_id, text) \
+        if channel in channels else None
+    threading.Thread(target=gateway.startup.loop, name="startup", daemon=True).start()
     print(BANNER.format(
         version=__version__, channels=", ".join(channels) or "none configured (see .env)",
         runners=", ".join(config.runner_urls),

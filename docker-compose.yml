@@ -57,7 +57,8 @@ services:
 
   # WhatsApp bridge (WAHA). Link your number once: open http://localhost:3000/dashboard and scan the QR.
   whatsapp:
-    image: devlikeapro/waha:latest
+    # Apple silicon needs the arm build (WAHA_TAG=arm); onboarding and install.sh set it.
+    image: devlikeapro/waha:${WAHA_TAG:-latest}
     environment:
       WAHA_API_KEY: ${WAHA_API_KEY:-}
       WHATSAPP_API_KEY: ${WAHA_API_KEY:-}
@@ -76,10 +77,16 @@ services:
   # Voice notes in and out: Whisper (speech-to-text) + Kokoro (text-to-speech), OpenAI-compatible.
   # Enabled by onboarding with COMPOSE_PROFILES=voice; models download on first use.
   voice:
-    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    # If ghcr.io is blocked, onboarding falls back to the Docker Hub build (speech-to-text only).
+    image: ${VOICE_IMAGE:-ghcr.io/speaches-ai/speaches:latest-cpu}
     profiles: ["voice"]
+    # A fresh named volume is root-owned, so the image's non-root user couldn't save models into it.
+    user: "0:0"
+    environment:
+      HF_HOME: /models
+      HF_HUB_CACHE: /models/hub
     volumes:
-      - voice-models:/home/ubuntu/.cache/huggingface/hub
+      - voice-models:/models
     ports:
       - "127.0.0.1:8000:8000"   # onboarding downloads the chosen models through this
     restart: unless-stopped

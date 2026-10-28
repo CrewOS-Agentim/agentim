@@ -3,6 +3,7 @@
 import json
 import logging
 import secrets
+import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -43,6 +44,12 @@ def make_handler(gateway, channels, catalog):
             path = urllib.parse.urlparse(self.path).path
             if path == "/health":
                 return self.send_json(200, {"ok": True, "version": __version__})
+            if path == "/v1/startup":
+                if self.authorized():
+                    if not gateway.startup:
+                        return self.send_json(404, {"error": "startup mode unavailable"})
+                    self.send_json(200, gateway.startup.snapshot())
+                return
             if path != "/v1/status":
                 return self.send_json(404, {"error": "not found"})
             if self.authorized():
@@ -63,6 +70,27 @@ def make_handler(gateway, channels, catalog):
                 channel = channels.get("whatsapp")
                 handled = channel.on_webhook(self.read_json()) if channel else False
                 return self.send_json(200, {"handled": handled})
+            if url.path in ("/v1/startup", "/v1/startup/run"):
+                if not self.authorized():
+                    return
+                startup = gateway.startup
+                if not startup:
+                    return self.send_json(404, {"error": "startup mode unavailable"})
+                if url.path == "/v1/startup/run":
+                    threading.Thread(target=startup.run_round, daemon=True).start()
+                    return self.send_json(202, {"started": True})
+                body = self.read_json()
+                try:
+                    if body.get("enabled") is False:
+                        startup.stop()
+                    else:
+                        current = startup.store.get() or {}
+                        startup.start(body.get("idea") or current.get("idea", ""),
+                                      min_minutes=body.get("min_minutes", current.get("min_minutes", 10)),
+                                      max_minutes=body.get("max_minutes", current.get("max_minutes", 30)))
+                except ValueError as e:
+                    return self.send_json(400, {"error": str(e)})
+                return self.send_json(200, startup.snapshot())
             if url.path != "/v1/messages":
                 return self.send_json(404, {"error": "not found"})
             if self.authorized():

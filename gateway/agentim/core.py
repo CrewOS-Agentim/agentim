@@ -17,6 +17,7 @@ HELP = """🐙 *Agent Tim at your service.* Just talk to me; I route every messa
 /models: list models · /model <alias>: pin · /model auto
 /video <idea>: make a short video · /image <idea>: make a picture
 /reset: forget this chat
+/startup <your idea>: a team of agents meets every 10–30 min to improve your startup
 Tip: start a message with @alias to pick a model just once."""
 
 
@@ -35,6 +36,7 @@ class Gateway:
     def __init__(self, config, store, llm, models_provider, skills, voice=None):
         self.config = config
         self.voice = voice  # agentim.voice.Voice, or None when voice isn't set up
+        self.startup = None  # agentim.startup.StartupMode, attached by __main__
         self.store = store
         self.llm = llm
         self.models_provider = models_provider  # () -> [Model]
@@ -46,6 +48,8 @@ class Gateway:
     # ---- access
 
     def allowed(self, channel, user_id):
+        if channel == "api":
+            return True  # the HTTP API already requires the gateway token (the Mac app, scripts)
         users = self.config.allowed.get(channel, set())
         return "*" in users or str(user_id) in users
 
@@ -72,6 +76,10 @@ class Gateway:
         with self.locks_guard:
             lock = self.locks.setdefault(key, threading.Lock())
         with lock:
+            if text.lower().split(" ")[0].split("@")[0] == "/startup":
+                if not self.startup:
+                    return [Reply("🚀 Startup Mode isn't available on this gateway.")]
+                return [Reply(self.startup.command(channel, chat_id, text.partition(" ")[2]))]
             if text.startswith("/"):
                 reply = self.command(key, text)
                 if reply is not None:

@@ -120,7 +120,11 @@ enum StackFiles {
     /// The repo checkout when running from source, otherwise the copy in Application Support
     /// (refreshed from the app bundle, keeping the user's .env).
     static func ensureInstalled(repoRoot: URL?) throws -> URL {
-        if let repoRoot { return repoRoot }
+        // A repo checkout is used as-is. Our own copy is always refreshed from the app bundle,
+        // so fixes in a new app version reach the compose file (the user's .env is kept).
+        if let repoRoot, repoRoot.standardizedFileURL.path != installedRoot.standardizedFileURL.path {
+            return repoRoot
+        }
         guard let bundled else { throw SetupError("This build of agentim doesn't include the Docker stack.") }
         let target = installedRoot
         let fm = FileManager.default

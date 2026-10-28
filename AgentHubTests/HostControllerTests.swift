@@ -66,6 +66,39 @@ final class HostControllerTests: XCTestCase {
         XCTAssertEqual(host.summary, "All 4 services running")
     }
 
+    @MainActor
+    func testDemoNeverOverwritesTheSavedStackRoot() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.string(forKey: "stackRoot")
+        defer { defaults.set(previous, forKey: "stackRoot") }
+        defaults.set("/real/stack", forKey: "stackRoot")
+        _ = HostController(demo: true)
+        XCTAssertEqual(defaults.string(forKey: "stackRoot"), "/real/stack")
+    }
+
+    func testSavedStackRootMustHoldTheComposeFile() throws {
+        XCTAssertNil(HostController.validStackRoot("/Users/you/agentim"))
+        XCTAssertNil(HostController.validStackRoot(nil))
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: dir.appendingPathComponent("docker-compose.yml").path, contents: Data())
+        XCTAssertEqual(HostController.validStackRoot(dir.path)?.standardizedFileURL, dir.standardizedFileURL)
+    }
+
+    /// Regression: chatty commands (docker pulling gigabytes) used to deadlock on a full pipe.
+    func testShellHandlesLotsOfOutput() async {
+        let result = await Shell.run(["sh", "-c", "yes agentim | head -c 2000000; echo done >&2"])
+        XCTAssertTrue(result.ok)
+        XCTAssertGreaterThan(result.output.count, 2_000_000)
+        XCTAssertTrue(result.output.hasSuffix("done\n"))
+    }
+
+    func testShellReportsFailure() async {
+        let result = await Shell.run(["sh", "-c", "echo nope; exit 3"])
+        XCTAssertEqual(result.status, 3)
+        XCTAssertEqual(result.output, "nope\n")
+    }
+
     func testMacMemoryIsSane() {
         XCTAssertGreaterThan(DeviceMemory.availableToAppBytes, 0)
         XCTAssertLessThanOrEqual(DeviceMemory.availableToAppBytes, DeviceMemory.physicalBytes)

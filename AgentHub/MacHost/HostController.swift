@@ -26,7 +26,8 @@ final class HostController {
     ]
 
     var stackRoot: URL? {
-        didSet { UserDefaults.standard.set(stackRoot?.path, forKey: "stackRoot") }
+        // Demo mode (screenshots) must never overwrite the real setting.
+        didSet { if !isDemo { UserDefaults.standard.set(stackRoot?.path, forKey: "stackRoot") } }
     }
     private(set) var dockerRunning = false
     private(set) var services: [Service] = []
@@ -51,11 +52,7 @@ final class HostController {
 
     init(demo: Bool = false) {
         isDemo = demo
-        if let saved = UserDefaults.standard.string(forKey: "stackRoot") {
-            stackRoot = URL(fileURLWithPath: saved)
-        } else {
-            stackRoot = Self.findStackRoot()
-        }
+        stackRoot = Self.validStackRoot(UserDefaults.standard.string(forKey: "stackRoot")) ?? Self.findStackRoot()
         if demo { seedDemo() }
     }
 
@@ -206,6 +203,13 @@ final class HostController {
     }
 
     /// Walks up from the app (e.g. a build inside the repo) looking for the agentim checkout.
+    /// A saved stack folder is only trusted if it still holds the compose file.
+    nonisolated static func validStackRoot(_ path: String?) -> URL? {
+        guard let path, !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: path)
+        return FileManager.default.fileExists(atPath: url.appendingPathComponent("docker-compose.yml").path) ? url : nil
+    }
+
     nonisolated static func findStackRoot(from start: URL = Bundle.main.bundleURL) -> URL? {
         var url = start
         for _ in 0..<12 {

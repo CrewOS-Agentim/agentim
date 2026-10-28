@@ -34,6 +34,8 @@ if [ -z "$DRY" ] && [ ! -f "$ROOT/.env" ]; then
   for key in RUNNER_TOKEN AGENTIM_WEBHOOK_SECRET WAHA_API_KEY WAHA_DASHBOARD_PASSWORD; do
     sed -i '' "s/^$key=change-me/$key=$(openssl rand -hex 24)/" "$ROOT/.env"
   done
+  # The WhatsApp bridge publishes Apple-silicon builds under a separate tag.
+  [ "$(uname -m)" = arm64 ] && sed -i '' "s/^WAHA_TAG=.*/WAHA_TAG=arm/" "$ROOT/.env"
   say "Edit $ROOT/.env to add your Telegram/Slack tokens and allowed users."
 fi
 RUNNER_TOKEN=$( [ -f "$ROOT/.env" ] && grep -E '^RUNNER_TOKEN=' "$ROOT/.env" | cut -d= -f2- || echo dry-run)

@@ -65,7 +65,7 @@ struct OnboardingPlan: Equatable {
 
     var downloadBytes: Int64 { [chat, coding, voice].reduce(0) { $0 + $1.sizeBytes } }
 
-    func apply(to env: inout EnvFile) {
+    func apply(to env: inout EnvFile, appleSilicon: Bool = OnboardingPlan.isAppleSilicon) {
         env.set("AGENTIM_DEFAULT_MODELS", ollamaRefs.joined(separator: ","))
         if case .voice(let stt, let tts) = voice.kind {
             env.set("COMPOSE_PROFILES", "voice")
@@ -79,5 +79,15 @@ struct OnboardingPlan: Equatable {
             env.set("VOICE_URL", "")
         }
         env.set("AGENTIM_LTX", media.kind == .ltx ? "true" : "false")
+        // The WhatsApp bridge publishes Apple-silicon builds under a separate tag.
+        env.set("WAHA_TAG", appleSilicon ? "arm" : "latest")
+    }
+
+    static var isAppleSilicon: Bool {
+        #if arch(arm64)
+        true
+        #else
+        false
+        #endif
     }
 }
