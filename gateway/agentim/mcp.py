@@ -68,6 +68,11 @@ TOOLS = [
           {"startup": STARTUP_REF,
            "answers": {"type": "array", "items": {"type": "string"}, "description": "Answers, in question order."},
            "skip": {"type": "boolean", "description": "Skip the remaining questions."}}, ["startup"]),
+    _tool("message_startup_agents", "Message a startup's agents",
+          "Post a message from the founder into a startup's agents room. During a meeting the agents who speak "
+          "next answer it; otherwise the next meeting starts from it.",
+          {"startup": STARTUP_REF, "message": {"type": "string", "description": "What to tell the agents."}},
+          ["startup", "message"]),
     _tool("run_startup_meeting", "Run a team meeting",
           "Call the startup's team into a meeting now. It takes a few minutes; read the result with get_startup.",
           {"startup": STARTUP_REF}, ["startup"]),
@@ -238,6 +243,16 @@ class MCPServer:
         team = ", ".join(f"{p['emoji']} {p['name']} ({p['title']})" for p in mode.detail(target["id"])["team"])
         return _text(f"🚀 {target['name']} is running. The team ({team}) meets every "
                      f"{target['min_minutes']}–{target['max_minutes']} minutes; the first meeting is in about a minute.")
+
+    def tool_message_startup_agents(self, startup, message):
+        mode, target = self._startups(), self._startup(startup)
+        try:
+            result = mode.post_founder(target["id"], message)
+        except ValueError as e:
+            raise ToolError(str(e))
+        when = "The agents speaking next in this meeting will answer it." if result["live"] else \
+            "The next meeting starts from it (or call run_startup_meeting)."
+        return _text(f"Posted to the {target['name']} agents room. {when}")
 
     def tool_run_startup_meeting(self, startup):
         mode, target = self._startups(), self._startup(startup)

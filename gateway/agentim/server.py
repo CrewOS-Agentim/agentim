@@ -161,6 +161,8 @@ def make_handler(gateway, channels, catalog):
                         startup.answer(startup_id, body.get("answers", []))
                 elif action == "team":
                     startup.set_team(startup_id, body.get("team"))
+                elif action == "messages":
+                    startup.post_founder(startup_id, body.get("text", ""))
                 elif action == "run":
                     threading.Thread(target=startup.run_round, args=(startup_id,), daemon=True).start()
                     return self.send_json(202, {"started": True})

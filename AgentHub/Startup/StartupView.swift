@@ -24,6 +24,11 @@ struct StartupView: View {
             .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Startups")
+        .sheet(item: $model.pendingDelete) { startup in
+            DeleteStartupConfirmation(startup: startup,
+                                      onCancel: { model.askToDelete(nil) },
+                                      onDelete: { Task { await model.confirmDelete(stackRoot: host.stackRoot) } })
+        }
         .sheet(isPresented: $model.editingTeam) {
             TeamEditor(model: model, presets: model.detail?.presets ?? StartupModel.demoPresets, stackRoot: host.stackRoot)
         }
@@ -60,8 +65,12 @@ private struct StartupList: View {
                     }
                     .padding(.vertical, 3)
                     .tag(startup.id)
+                    .contextMenu {
+                        Button("Delete \(startup.name)…", systemImage: "trash", role: .destructive) { model.askToDelete(startup) }
+                    }
                 }
             }
+            .onDeleteCommand { model.askToDelete(model.selectedSummary) }
             Divider()
             Button { model.newStartup() } label: {
                 Label("New startup", systemImage: "plus").frame(maxWidth: .infinity)
@@ -318,7 +327,7 @@ private struct RunningStartup: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(minWidth: 300, idealWidth: 400)
-                TeamRoom(detail: detail).frame(minWidth: 360)
+                TeamRoom(model: model, detail: detail, stackRoot: stackRoot).frame(minWidth: 360)
             }
         }
     }
@@ -349,7 +358,7 @@ private struct RunningStartup: View {
                                        set: { on in Task { await model.setEnabled(on, stackRoot: stackRoot) } }))
                 .toggleStyle(.switch)
             Menu {
-                Button("Delete startup", role: .destructive) { Task { await model.delete(stackRoot: stackRoot) } }
+                Button("Delete startup…", systemImage: "trash", role: .destructive) { model.askToDelete(model.selectedSummary) }
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
         }
@@ -380,7 +389,10 @@ private struct PlanText: View {
 }
 
 private struct TeamRoom: View {
+    @Bindable var model: StartupModel
     let detail: StartupDetail
+    let stackRoot: URL?
+    @State private var draftHeight: CGFloat = 44
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -398,28 +410,11 @@ private struct TeamRoom: View {
                             Text("The agents' first meeting starts in about a minute.").foregroundStyle(.secondary)
                         }
                         ForEach(detail.messages) { message in
-                            let person = detail.person(message.role)
-                            let isCEO = message.role == "ceo"
-                            HStack(alignment: .top, spacing: 10) {
-                                AvatarView(image: Avatars.teamMember(message.role), emoji: person.emoji, size: 38)
-                                    .overlay(Circle().strokeBorder(isCEO ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 2))
-                                VStack(alignment: .leading, spacing: 3) {
-                                    HStack(spacing: 6) {
-                                        Text(person.name).font(.callout.weight(.semibold))
-                                        if person.former == true {
-                                            Text("former").font(.caption2.weight(.semibold))
-                                                .padding(.horizontal, 5).padding(.vertical, 1)
-                                                .background(Color.secondary.opacity(0.15), in: Capsule())
-                                        }
-                                        Text(person.title).font(.caption).foregroundStyle(.secondary)
-                                        Text("· meeting \(message.round)").font(.caption).foregroundStyle(.tertiary)
-                                    }
-                                    Text(LocalizedStringKey(message.content)).font(.callout).textSelection(.enabled)
-                                }
+                            if message.role == "founder" {
+                                FounderBubble(message: message).id(message.id)
+                            } else {
+                                AgentMessageRow(detail: detail, message: message).id(message.id)
                             }
-                            .padding(12)
-                            .background(isCEO ? Color.accentColor.opacity(0.07) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
-                            .id(message.id)
                         }
                         if let speaking = detail.meeting?.speaking {
                             TypingRow(detail: detail, key: speaking).id("typing")
@@ -432,7 +427,94 @@ private struct TeamRoom: View {
                     if speaking != nil { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
                 }
             }
+            Divider()
+            founderComposer
         }
+    }
+
+    /// The founder's line into the meeting: Return sends, Shift+Return for a new line.
+    private var founderComposer: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            ComposerTextView(text: $model.founderDraft,
+                             placeholder: detail.meeting != nil ? "Jump into the meeting…" : "Message the agents…",
+                             minHeight: 44, maxHeight: 140, font: .systemFont(ofSize: NSFont.systemFontSize + 1),
+                             focusOnAppear: false, onSubmit: { send() }, height: $draftHeight)
+                .frame(height: draftHeight)
+                .padding(.horizontal, 6)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
+                    .strokeBorder(Theme.accent.opacity(model.founderDraft.isEmpty ? 0.25 : 0.6), lineWidth: 1.5))
+            Button(action: send) {
+                Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 34, height: 34)
+                    .background(model.canSendToAgents ? Theme.accent : Color.secondary.opacity(0.35), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!model.canSendToAgents)
+            .accessibilityLabel("Send to the agents")
+            .padding(.bottom, 5)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .overlay(alignment: .topLeading) {
+            Text(detail.meeting != nil ? "The agents speaking next will answer you." : "The next meeting starts from your message.")
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.leading, 20).offset(y: -2)
+        }
+    }
+
+    private func send() {
+        Task { await model.sendToAgents(stackRoot: stackRoot) }
+    }
+}
+
+/// One agent's message in the agents room (Tim's is highlighted).
+private struct AgentMessageRow: View {
+    let detail: StartupDetail
+    let message: StartupDetail.Message
+
+    var body: some View {
+        let person = detail.person(message.role)
+        let isCEO = message.role == "ceo"
+        HStack(alignment: .top, spacing: 10) {
+            AvatarView(image: Avatars.teamMember(message.role, startup: detail.id), emoji: person.emoji, size: 38)
+                .overlay(Circle().strokeBorder(isCEO ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 2))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(person.name).font(.callout.weight(.semibold))
+                    if person.former == true {
+                        Text("former").font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15), in: Capsule())
+                    }
+                    Text(person.title).font(.caption).foregroundStyle(.secondary)
+                    Text("· meeting \(message.round)").font(.caption).foregroundStyle(.tertiary)
+                }
+                Text(LocalizedStringKey(message.content)).font(.callout).textSelection(.enabled)
+            }
+        }
+        .padding(12)
+        .background(isCEO ? Color.accentColor.opacity(0.07) : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// The founder's own messages in the agents room, on the right like a chat.
+private struct FounderBubble: View {
+    let message: StartupDetail.Message
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 50)
+            VStack(alignment: .trailing, spacing: 3) {
+                Text("You · meeting \(message.round)").font(.caption).foregroundStyle(.secondary)
+                Text(LocalizedStringKey(message.content))
+                    .font(.callout)
+                    .foregroundStyle(.white)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -449,7 +531,7 @@ private struct LiveMeetingBar: View {
             Text("Meeting \(meeting.round) in progress").font(.callout.weight(.semibold))
             HStack(spacing: -8) {
                 ForEach((meeting.speakers ?? []) + ["ceo"], id: \.self) { key in
-                    AvatarView(image: Avatars.teamMember(key), emoji: detail.person(key).emoji, size: 24)
+                    AvatarView(image: Avatars.teamMember(key, startup: detail.id), emoji: detail.person(key).emoji, size: 24)
                         .overlay(Circle().strokeBorder(key == meeting.speaking ? Color.accentColor : Color(nsColor: .windowBackgroundColor),
                                                        lineWidth: 2))
                         .help(detail.person(key).name)
@@ -476,7 +558,7 @@ private struct TypingRow: View {
     var body: some View {
         let person = detail.person(key)
         HStack(alignment: .center, spacing: 10) {
-            AvatarView(image: Avatars.teamMember(key), emoji: person.emoji, size: 38)
+            AvatarView(image: Avatars.teamMember(key, startup: detail.id), emoji: person.emoji, size: 38)
             Text(person.name).font(.callout.weight(.semibold))
             HStack(spacing: 4) {
                 ForEach(0..<3) { i in
@@ -492,5 +574,46 @@ private struct TypingRow: View {
             withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = .pi * 2 }
         }
         .accessibilityLabel("\(person.name) is writing")
+    }
+}
+
+/// "Delete this startup?": what goes away, and a clear way out.
+struct DeleteStartupConfirmation: View {
+    let startup: StartupSummary
+    let onCancel: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(spacing: Theme.s4) {
+            Image(systemName: "trash.circle.fill")
+                .font(.system(size: 52))
+                .foregroundStyle(.red)
+                .accessibilityHidden(true)
+            Text("Delete \(startup.name)?").headlineStyle(22).multilineTextAlignment(.center)
+            Text(startup.pitch).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(3)
+            VStack(alignment: .leading, spacing: Theme.s2) {
+                Label("Its plan, interview answers and agents", systemImage: "doc.text")
+                Label(startup.rounds > 0 ? "\(startup.rounds) meetings of agent messages" : "Its agents room", systemImage: "bubble.left.and.bubble.right")
+                Label("Scheduled meetings stop right away", systemImage: "calendar.badge.minus")
+            }
+            .font(.callout)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card(radius: Theme.radius, padding: Theme.s4)
+            Text("This can't be undone.").font(.callout.weight(.semibold)).foregroundStyle(.red)
+            HStack(spacing: Theme.s3) {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity)
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete startup", systemImage: "trash").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.large)
+            }
+        }
+        .padding(Theme.s6)
+        .frame(width: 420)
     }
 }

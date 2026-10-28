@@ -10,7 +10,15 @@
       "software-engineer",
       "product-manager",
       "project-manager",
-      "video-director"
+      "video-director",
+      "web-qa",
+      "mobile-qa",
+      "api-testing",
+      "data-analytics",
+      "cpo",
+      "cmo",
+      "cto",
+      "ciso"
     ],
     "model": "auto",
     "prefer_local": true,

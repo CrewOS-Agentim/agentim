@@ -184,6 +184,90 @@ final class StartupTests: XCTestCase {
     }
 
     @MainActor
+    func testFounderTalksToTheAgents() async {
+        let model = StartupModel(demo: true)
+        XCTAssertFalse(model.canSendToAgents, "nothing to send")
+        model.founderDraft = "   "
+        XCTAssertFalse(model.canSendToAgents)
+        model.founderDraft = String(repeating: "x", count: StartupModel.maxFounderMessage + 1)
+        XCTAssertFalse(model.canSendToAgents, "too long")
+        model.founderDraft = "Focus on enterprise pilots"
+        XCTAssertTrue(model.canSendToAgents)
+        let before = model.detail?.messages.count ?? 0
+        await model.sendToAgents(stackRoot: nil)
+        XCTAssertEqual(model.founderDraft, "", "cleared after sending")
+        XCTAssertEqual(model.detail?.messages.count, before + 1)
+        XCTAssertEqual(model.detail?.messages.last?.role, "founder")
+        XCTAssertEqual(model.detail?.messages.last?.content, "Focus on enterprise pilots")
+    }
+
+    func testPostMessageRequest() throws {
+        let request = try StartupClient(token: "t").request("v1/startups/a1/messages", method: "POST", body: ["text": "Hi agents"])
+        XCTAssertEqual(request.url?.path, "/v1/startups/a1/messages")
+        XCTAssertEqual(try JSONSerialization.jsonObject(with: request.httpBody!) as? [String: String], ["text": "Hi agents"])
+    }
+
+    @MainActor
+    func testDeleteNeedsConfirmation() async {
+        let model = StartupModel(demo: true)
+        let leafy = model.listing!.startups.first { $0.id == "leafy" }!
+        model.askToDelete(leafy)
+        XCTAssertEqual(model.pendingDelete?.id, "leafy", "the confirmation screen is showing")
+        XCTAssertEqual(model.listing?.startups.count, 3, "nothing deleted yet")
+        model.askToDelete(nil)  // Cancel
+        XCTAssertNil(model.pendingDelete)
+        XCTAssertEqual(model.listing?.startups.count, 3)
+        model.askToDelete(leafy)
+        await model.confirmDelete(stackRoot: nil)
+        XCTAssertNil(model.pendingDelete)
+        XCTAssertFalse(model.listing!.startups.contains { $0.id == "leafy" })
+        XCTAssertNotEqual(model.selection, "leafy", "selection moves off the deleted startup")
+    }
+
+    @MainActor
+    func testPersonaAndAvatarEdits() throws {
+        CustomAvatars.root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = StartupModel(demo: true)
+        model.beginTeamEdit()
+        model.teamDraft[0].persona = "Ex-Stripe PM, blunt, loves data"
+        let size = NSSize(width: 40, height: 20)
+        let image = NSImage(size: size, flipped: false) { rect in NSColor.purple.setFill(); rect.fill(); return true }
+        model.setAvatar(image, for: model.teamDraft[0])
+        XCTAssertTrue(model.editorAvatar(for: model.teamDraft[0]) === image, "preview shows the pending avatar")
+        let key = model.teamDraft[0].key
+        model.applyAvatarEdits(model.avatarEdits, draftKeys: [key], savedKeys: [key], startup: "leafy")
+        let saved = try XCTUnwrap(CustomAvatars.image(startup: "leafy", key: key))
+        XCTAssertEqual(saved.size.width, saved.size.height, "center-cropped to a square")
+        XCTAssertTrue(model.avatarEdits.isEmpty)
+
+        model.resetAvatar(for: model.teamDraft[0])
+        model.applyAvatarEdits(model.avatarEdits, draftKeys: [key], savedKeys: [key], startup: "leafy")
+        XCTAssertNil(CustomAvatars.image(startup: "leafy", key: key), "back to the default")
+    }
+
+    func testNewHireAvatarFollowsTheRealKey() throws {
+        CustomAvatars.root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let image = NSImage(size: NSSize(width: 10, height: 10), flipped: false) { rect in NSColor.red.setFill(); rect.fill(); return true }
+        let edits: [String: StartupModel.AvatarEdit] = ["new-abc": .image(image)]
+        MainActor.assumeIsolated {
+            StartupModel(demo: true).applyAvatarEdits(edits, draftKeys: ["product", "new-abc"],
+                                                      savedKeys: ["product", "jordan-customer-success"], startup: "s1")
+        }
+        XCTAssertNotNil(CustomAvatars.image(startup: "s1", key: "jordan-customer-success"))
+        XCTAssertNil(CustomAvatars.image(startup: "s1", key: "new-abc"))
+    }
+
+    func testLTXAvatarPromptAndReplyParsing() {
+        let person = StartupPerson(key: "cto", name: "Kai Mori", title: "CTO", emoji: "🧠", owns: nil, persona: "dry humour")
+        let prompt = LTXAvatar.prompt(for: person)
+        XCTAssertTrue(prompt.contains("Kai Mori, a CTO (dry humour)"))
+        XCTAssertTrue(prompt.contains("no text"))
+        let reply = #"{"choices":[{"message":{"content":"Rendered.\n\n[image](http://localhost:8766/files/abc.png)"}}]}"#
+        XCTAssertEqual(LTXAvatar.imageURL(in: Data(reply.utf8))?.absoluteString, "http://localhost:8766/files/abc.png")
+        XCTAssertNil(LTXAvatar.imageURL(in: Data("{}".utf8)))
+    }
+
+    @MainActor
     func testDemoHasManyStartupsAndNamedPeople() {
         let demo = StartupModel(demo: true)
         XCTAssertEqual(demo.listing?.startups.count, 3)

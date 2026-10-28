@@ -30,6 +30,7 @@ class Person:
     title: str
     emoji: str
     owns: str
+    persona: str = ""  # personality, background and how they talk (set by the founder)
 
     @property
     def first(self):
@@ -48,6 +49,8 @@ TEAM = [
     Person("data", "Nina Shah", "Data Analyst", "📊", "the metrics: north star, funnel, retention, the tracking plan, dashboards and experiment results"),
 ]
 CEO = Person("ceo", "Agent Tim", "CEO", "🐙", "the plan, priorities and keeping the founder in the loop")
+FOUNDER = Person("founder", "Founder", "Founder", "🧑‍🚀", "the vision and the final call")
+MAX_FOUNDER_MESSAGE = 2000
 PEOPLE = {p.key: p for p in TEAM + [CEO]}
 MAX_TEAM = 12
 
@@ -64,6 +67,9 @@ ROLE_PRESETS = [
     {"title": "QA Engineer", "emoji": "🐞", "owns": "test plans, automated web/mobile/API tests, bug triage and release quality"},
     {"title": "Penetration Tester", "emoji": "🔓", "owns": "authorized penetration tests: scoping, rules of engagement, methodology and findings"},
     {"title": "Security Researcher", "emoji": "🔬", "owns": "vulnerability research, threat intelligence, new attack techniques and tooling"},
+    {"title": "CPO", "emoji": "🧭", "owns": "product vision, strategy, roadmap and product-market fit"},
+    {"title": "CMO", "emoji": "📣", "owns": "positioning, channels, launches and pipeline from marketing"},
+    {"title": "CISO", "emoji": "🛡️", "owns": "the security program, risk register, compliance and incident readiness"},
     {"title": "Compliance & GRC", "emoji": "🛡️", "owns": "SOC 2 / ISO 27001 / PCI readiness, policies, audits and what customers' security teams ask"},
 ]
 
@@ -73,7 +79,21 @@ def slug(text):
 
 
 def person_dict(person):
-    return {"key": person.key, "name": person.name, "title": person.title, "emoji": person.emoji, "owns": person.owns}
+    return {"key": person.key, "name": person.name, "title": person.title, "emoji": person.emoji, "owns": person.owns,
+            "persona": person.persona}
+
+
+MAX_PERSONA = 600
+
+# Agents whose title matches a C-level skill follow that skill's playbook in meetings.
+ROLE_PLAYBOOKS = {"cto": "cto", "chief technology": "cto", "cmo": "cmo", "chief marketing": "cmo",
+                  "cpo": "cpo", "chief product": "cpo", "ciso": "ciso", "chief information security": "ciso",
+                  "data analyst": "data-analytics", "qa": "web-qa"}
+
+
+def playbook_slug(title):
+    title = title.lower()
+    return next((slug for words, slug in ROLE_PLAYBOOKS.items() if re.search(rf"\b{re.escape(words)}\b", title)), None)
 
 
 def normalize_member(raw, taken):
@@ -85,13 +105,14 @@ def normalize_member(raw, taken):
     if slug(name) == "agent-tim":
         raise ValueError("Agent Tim is the CEO and is always on the team.")
     owns = " ".join(str(raw.get("owns") or "").split())[:300] or f"everything a {title} is responsible for"
+    persona = str(raw.get("persona") or "").strip()[:MAX_PERSONA]
     emoji = (str(raw.get("emoji") or "").strip() or "🧑‍💼")[:4]
     key = slug(str(raw.get("key") or "")) or slug(name.split()[0] + "-" + title)
     base, n = key, 2
     while key in taken or key == CEO.key:
         key, n = f"{base}-{n}", n + 1
     taken.add(key)
-    return {"key": key, "name": name, "title": title, "emoji": emoji, "owns": owns}
+    return {"key": key, "name": name, "title": title, "emoji": emoji, "owns": owns, "persona": persona}
 
 
 def normalize_team(members):
@@ -114,6 +135,7 @@ def people_of(startup):
     people = {m["key"]: Person(**m) for m in (startup or {}).get("alumni") or []}
     people.update({p.key: p for p in team_of(startup)})
     people[CEO.key] = CEO
+    people[FOUNDER.key] = FOUNDER
     return people
 
 # Used when no model answers: five YC-partner questions, then five co-founder questions.
@@ -197,7 +219,7 @@ def brief(startup):
     return f"Startup: {startup['name']}\nPitch: {startup['pitch']}" + (f"\n\nFounder's answers:\n{answers}" if answers else "")
 
 
-def person_prompt(person, startup, discussion, team=None):
+def person_prompt(person, startup, discussion, team=None, playbook=""):
     colleagues = ", ".join(f"{p.first} ({p.title})" for p in (team or TEAM) if p.key != person.key) or "none yet"
     return f"""You are {person.name}, {person.title} at "{startup['name']}", an early-stage startup. You are a real, \
 experienced employee: you own {person.owns}. Your colleagues: {colleagues}. The CEO is Agent Tim.
@@ -209,6 +231,8 @@ The current plan:
 
 {OPERATING_PRINCIPLES}
 Your goal: {ROLE_GOALS.get(person.key, f"push {person.owns} forward, fast and measurably")}.
+{f"Your persona (stay in character, including how you talk): {person.persona}" if person.persona else ""}
+{f"Your playbook as {person.title}:{chr(10)}{playbook}" if playbook else ""}
 
 Recent team discussion:
 {discussion or "(this is the team's first meeting)"}
@@ -217,15 +241,19 @@ Post your update for this meeting, under 180 words, in first person like you wou
 1. What you did or decided since last time (be specific and realistic).
 2. Two or three concrete next moves in YOUR area: what, by when, and the metric that shows it worked.
 3. One ask for a colleague, by first name (e.g. "@Leo, can you…").
+If the Founder said something in the discussion, start by answering it or acting on it: the founder has the final call.
 React to colleagues (agree, push back, or build on one point) but never repeat or re-list their suggestions.
 Do NOT write the company plan or other people's tasks: Agent Tim keeps the plan.
 Remember: you are {person.first}, the {person.title}. Everything you propose is about {person.owns}.
 Short bullets, no headings, start with "{person.first} here:"."""
 
 
-def ceo_prompt(startup, posted, people=None):
-    people = people or PEOPLE
+def ceo_prompt(startup, posted, people=None, founder_notes=()):
+    people = people or {**PEOPLE, FOUNDER.key: FOUNDER}
     updates = "\n\n".join(f"{people[m['role']].name} ({people[m['role']].title}):\n{m['content']}" for m in posted)
+    if founder_notes:
+        updates = ("The founder told the team (this overrides earlier plans where they conflict):\n"
+                   + "\n".join(f"- {note}" for note in founder_notes) + "\n\n" + updates)
     return f"""You are Agent Tim, CEO of "{startup['name']}". Keep the company plan short, concrete and current.
 
 {OPERATING_PRINCIPLES}
@@ -435,6 +463,22 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
     def delete(self, startup_id):
         self.store.delete(startup_id)
 
+    def post_founder(self, startup_id, text):
+        """The founder talks to the agents: during a meeting, the agents who speak next see it;
+        otherwise the next meeting starts from it."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("Write something for the agents.")
+        if len(text) > MAX_FOUNDER_MESSAGE:
+            raise ValueError(f"Keep it under {MAX_FOUNDER_MESSAGE} characters.")
+        live = self.live.get(startup_id)
+        round_no = live["round"] if live else startup["rounds"] + 1
+        self.store.add_message(startup_id, round_no, FOUNDER.key, text)
+        return {"posted": True, "live": bool(live), "round": round_no}
+
     # ---- the team: edit, hire, fire
 
     def set_team(self, startup_id, members):
@@ -506,10 +550,14 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
                 return None
             round_no = startup["rounds"] + 1
             team, people = team_of(startup), people_of(startup)
-            current = {p.key for p in team} | {CEO.key}
-            # Former employees' messages stay in the history but not in the current team's context.
-            discussion = "\n".join(f"{people[m['role']].name}: {m['content']}"
-                                   for m in self.store.messages(startup_id, limit=12) if m["role"] in current)
+            current = {p.key for p in team} | {CEO.key, FOUNDER.key}
+
+            def discussion():
+                # Re-read before each speaker: the founder may have posted mid-meeting. Former employees'
+                # messages stay in the history but not in the current team's context.
+                return "\n".join(f"{people[m['role']].name}: {m['content']}"
+                                 for m in self.store.messages(startup_id, limit=14) if m["role"] in current)
+
             posted = []
             speakers = pick_speakers(self.store.last_spoke(startup_id), min(self.speakers_per_round, len(team)),
                                      self.rng, team)
@@ -517,17 +565,20 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
                                      "speakers": [p.key for p in speakers]}
             for person in speakers:
                 self.live[startup_id]["speaking"] = person.key
-                reply = self._ask(person_prompt(person, startup, discussion, team))
+                reply = self._ask(person_prompt(person, startup, discussion(), team, self.playbook(person)))
                 if not reply:
                     continue
                 self.store.add_message(startup_id, round_no, person.key, reply)
                 posted.append({"round": round_no, "role": person.key, "content": reply})
-                discussion += f"\n{person.name}: {reply}"
             if not posted:
                 self.schedule_next(startup)
                 return None
             self.live[startup_id]["speaking"] = CEO.key
-            plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted, people)) or "", startup["plan"])
+            # Everything the founder said since Tim's last summary (between meetings and during this one).
+            recent = self.store.messages(startup_id, limit=60)
+            last_summary = max((m["ts"] for m in recent if m["role"] == CEO.key), default=0)
+            notes = [m["content"] for m in recent if m["role"] == FOUNDER.key and m["ts"] > last_summary]
+            plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted, people, notes)) or "", startup["plan"])
             summary = summary or "The team posted new ideas; see the plan."
             self.store.add_message(startup_id, round_no, CEO.key, summary)
             startup = self.store.get(startup_id) or startup
@@ -543,6 +594,12 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         finally:
             self.live.pop(startup_id, None)
             lock.release()
+
+    def playbook(self, person, limit=1500):
+        """The C-level / specialist skill matching this agent's title, trimmed to keep prompts small."""
+        slug = playbook_slug(person.title)
+        skill = next((s for s in getattr(self.gateway, "skills", []) if s.slug == slug), None) if slug else None
+        return skill.instructions[:limit] if skill else ""
 
     # Routed by the kind of work, not the prompt text (prompts mention people as @Name).
     ROUTING_HINT = "Analyze the business strategy and plan the next steps step by step."
@@ -638,6 +695,17 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         startups = self.store.all()
         if verb in ("team", "hire", "fire"):
             return self.team_command(verb, rest)
+        if verb == "say":
+            number, _, text = rest.strip().partition(" ")
+            target = self._by_index(number)
+            if not target or not text.strip():
+                return "🤔 Use `/startup say 1 <your message to the agents>` (send `/startup` for the list)."
+            try:
+                result = self.post_founder(target["id"], text)
+            except ValueError as e:
+                return f"🤔 {e}"
+            when = "They'll answer in this meeting." if result["live"] else "They'll pick it up in the next meeting."
+            return f"📣 Told the *{target['name']}* agents. {when}"
         if verb == "new" or (arg and verb not in ("now", "off", "on", "pause", "resume", "delete") and not verb.isdigit()):
             pitch = rest if verb == "new" else arg
             try:
@@ -675,7 +743,8 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
             lines.append(f"{i}. *{s['name']}*: {s['status']}, {s['rounds']} meetings{when}")
         return ("🚀 *Your startups*\n" + "\n".join(lines) +
                 "\n\n`/startup <n>` plan · `/startup now <n>` meet · `/startup off <n>` pause · `/startup new <pitch>`"
-                "\n`/startup team <n>` · `/startup hire <n> Name | Title | what they own` · `/startup fire <n> Name`")
+                "\n`/startup team <n>` · `/startup hire <n> Name | Title | what they own` · `/startup fire <n> Name`"
+                "\n`/startup say <n> <message>` talk to the agents")
 
     def team_command(self, verb, rest):
         number, _, details = rest.strip().partition(" ")

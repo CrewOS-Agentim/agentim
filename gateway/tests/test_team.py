@@ -154,6 +154,114 @@ class GoalsAndLiveMeetingTests(unittest.TestCase):
         self.assertIsNone(mode.detail(startup["id"])["meeting"], "cleared after the meeting")
 
 
+class FounderMessageTests(unittest.TestCase):
+    def test_message_mid_meeting_reaches_the_next_speakers_and_tim(self):
+        posted = []
+
+        class Founder(TeamLLM):
+            def complete(inner, model, system, messages):
+                prompt = messages[-1]["content"]
+                # The founder jumps in while the first agent is talking.
+                if not posted and prompt.startswith("You are ") and ' at "' in prompt and not prompt.startswith("You are Agent Tim"):
+                    posted.append(mode.post_founder(ids[0], "Focus on enterprise pilots this week."))
+                return super().complete(model, system, messages)
+
+        ids = []
+        llm = Founder()
+        _, mode = make_startup_mode(llm=llm)
+        startup = running(mode)
+        ids.append(startup["id"])
+        mode.run_round(startup["id"])
+        self.assertTrue(posted[0]["live"], "posted during the meeting")
+        self.assertEqual(posted[0]["round"], 1)
+        people = [p for p in llm.prompts if p.startswith("You are ") and ' at "' in p]
+        self.assertNotIn("enterprise pilots", people[0], "the first speaker started before it was posted")
+        self.assertIn("Founder: Focus on enterprise pilots", people[1], "the next speaker sees it")
+        self.assertIn("answering it or acting on it", people[1])
+        ceo = next(p for p in llm.prompts if p.startswith("You are Agent Tim"))
+        self.assertIn("The founder told the team", ceo)
+        self.assertIn("enterprise pilots", ceo)
+        roles = [m["role"] for m in mode.store.messages(startup["id"])]
+        self.assertIn("founder", roles)
+        self.assertEqual(mode.detail(startup["id"])["people"]["founder"]["name"], "Founder")
+
+    def test_message_between_meetings_goes_to_the_next_one(self):
+        llm = TeamLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = running(mode)
+        result = mode.post_founder(startup["id"], "Raise prices 20%.")
+        self.assertEqual((result["live"], result["round"]), (False, 1))
+        mode.run_round(startup["id"])
+        ceo = next(p for p in llm.prompts if p.startswith("You are Agent Tim"))
+        self.assertIn("Raise prices 20%", ceo)
+        llm.prompts.clear()
+        mode.run_round(startup["id"])
+        ceo = next(p for p in llm.prompts if p.startswith("You are Agent Tim"))
+        self.assertNotIn("The founder told the team", ceo, "only new notes reach Tim")
+
+    def test_validation_chat_and_api(self):
+        gateway, mode = make_startup_mode()
+        startup = running(mode)
+        for bad in ("", "   ", "x" * 2001):
+            with self.assertRaises(ValueError):
+                mode.post_founder(startup["id"], bad)
+        say = lambda text: gateway.handle("telegram", "c", "1", text)[0].text  # noqa: E731
+        self.assertIn("next meeting", say("/startup say 1 Ship the landing page today"))
+        self.assertIn("Use `/startup say", say("/startup say 1"))
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gateway, {}, lambda: [QWEN]))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{server.server_port}/v1/startups/{startup['id']}/messages",
+                                         data=json.dumps({"text": "Hello agents"}).encode(), method="POST",
+                                         headers={"Authorization": "Bearer tok", "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                body = json.loads(resp.read())
+            self.assertEqual(body["messages"][-1]["content"], "Hello agents")
+            self.assertEqual(body["messages"][-1]["role"], "founder")
+        finally:
+            server.shutdown()
+
+
+class PersonaAndPlaybookTests(unittest.TestCase):
+    def test_persona_is_saved_trimmed_and_used(self):
+        llm = TeamLLM()
+        gateway, mode = make_startup_mode(llm=llm)
+        startup = running(mode)
+        team = [{"name": "Kai Mori", "title": "CTO", "owns": "architecture",
+                 "persona": "Ex-Google SRE, dry humour, talks in short bullet points."},
+                {"name": "Ana Ruiz", "title": "CMO", "persona": "x" * 900}]
+        startup = mode.set_team(startup["id"], team)
+        self.assertEqual(len(startup["team"][1]["persona"]), 600, "personas are capped")
+        mode.run_round(startup["id"])
+        kai = next(p for p in llm.prompts if p.startswith("You are Kai Mori"))
+        self.assertIn("Your persona (stay in character", kai)
+        self.assertIn("dry humour", kai)
+
+    def test_c_level_titles_get_their_playbook(self):
+        from agentim.startup import playbook_slug
+        self.assertEqual(playbook_slug("CTO"), "cto")
+        self.assertEqual(playbook_slug("Chief Marketing Officer"), "cmo")
+        self.assertEqual(playbook_slug("CISO"), "ciso")
+        self.assertEqual(playbook_slug("Head of Product (CPO)"), "cpo")
+        self.assertIsNone(playbook_slug("Designer"))
+        self.assertIsNone(playbook_slug("Director"), "no accidental match inside words")
+
+    def test_playbook_text_reaches_the_prompt(self):
+        llm = TeamLLM()
+        gateway, mode = make_startup_mode(llm=llm)
+        from agentim import skills as skill_lib
+        gateway.skills = skill_lib.load_dir(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "skills"))
+        startup = running(mode)
+        mode.set_team(startup["id"], [{"name": "Kai Mori", "title": "CTO"}])
+        mode.run_round(startup["id"])
+        kai = next(p for p in llm.prompts if p.startswith("You are Kai Mori"))
+        self.assertIn("Your playbook as CTO", kai)
+        self.assertIn("DORA", kai)
+
+    def test_old_members_without_persona_still_load(self):
+        self.assertEqual(team_of({"team": [{"key": "a", "name": "Ana", "title": "PM", "emoji": "🙂", "owns": "x"}]})[0].persona, "")
+
+
 class MigrationTests(unittest.TestCase):
     def test_old_database_gets_team_columns(self):
         db = sqlite3.connect(":memory:", check_same_thread=False)

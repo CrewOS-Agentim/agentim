@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -9,6 +10,8 @@ struct StartupPerson: Codable, Equatable, Identifiable {
     var title: String
     var emoji: String
     var owns: String?
+    /// Personality, background and how they talk (the agent stays in character).
+    var persona: String?
     var id: String { key }
 }
 
@@ -34,7 +37,7 @@ struct StartupSummary: Decodable, Equatable, Identifiable {
 struct StartupListing: Decodable, Equatable {
     let now: Double
     let team: [StartupPerson]
-    let startups: [StartupSummary]
+    var startups: [StartupSummary]
 }
 
 struct StartupDetail: Decodable, Equatable {
@@ -68,7 +71,7 @@ struct StartupDetail: Decodable, Equatable {
     let team: [StartupPerson]
     let people: [String: PersonInfo]
     var presets: [RolePreset]? = nil
-    let messages: [Message]
+    var messages: [Message]
     /// Set while the agents are meeting (gateway `StartupMode.live`).
     var meeting: Meeting? = nil
 
@@ -79,6 +82,12 @@ struct StartupDetail: Decodable, Equatable {
     }
 
     var isInterview: Bool { status == "interview" }
+
+    /// Demo mode: show the founder's message without a gateway.
+    mutating func appendDemoFounderMessage(_ text: String) {
+        messages.append(Message(round: meeting?.round ?? rounds + 1, role: "founder", content: text,
+                                ts: Date().timeIntervalSince1970))
+    }
     var isRunning: Bool { status == "running" }
 
     /// Minutes until the next meeting, on the gateway's clock.
@@ -110,12 +119,18 @@ struct StartupClient {
     func setEnabled(_ id: String, _ on: Bool) async throws -> StartupDetail { try await send("v1/startups/\(id)", body: ["enabled": on]) }
 
     func setTeam(_ id: String, _ team: [StartupPerson]) async throws -> StartupDetail {
-        let members = team.map { ["key": $0.key, "name": $0.name, "title": $0.title, "emoji": $0.emoji, "owns": $0.owns ?? ""] }
+        let members = team.map { ["key": $0.key, "name": $0.name, "title": $0.title, "emoji": $0.emoji, "owns": $0.owns ?? "",
+                                  "persona": $0.persona ?? ""] }
         return try await send("v1/startups/\(id)/team", body: ["team": members])
     }
 
     func meetNow(_ id: String) async throws {
         _ = try await raw("v1/startups/\(id)/run", method: "POST", body: [:])
+    }
+
+    /// The founder posts into the agents room (during a meeting or before the next one).
+    func postMessage(_ id: String, text: String) async throws -> StartupDetail {
+        try await send("v1/startups/\(id)/messages", body: ["text": text])
     }
 
     func delete(_ id: String) async throws {
@@ -150,7 +165,7 @@ struct StartupClient {
 @MainActor
 @Observable
 final class StartupModel {
-    private(set) var listing: StartupListing?
+    var listing: StartupListing?
     var detail: StartupDetail?
     private(set) var error: String?
     private(set) var busy: String?
@@ -324,6 +339,8 @@ final class StartupModel {
     var teamDraft: [StartupPerson] = []
 
     func beginTeamEdit() {
+        avatarEdits = [:]
+        avatarError = nil
         teamDraft = detail?.team ?? []
         editingTeam = true
     }
@@ -353,11 +370,83 @@ final class StartupModel {
             if person.key.hasPrefix("new-") { person.key = "" }
             return person
         }
+        let draftKeys = teamDraft.map(\.key)
+        let edits = avatarEdits
         await act("Updating the agents…", stackRoot) { client in
-            self.detail = try await client.setTeam(id, team)
+            let saved = try await client.setTeam(id, team)
+            // The gateway keeps the order, so draft i is saved member i (new hires get their real key here).
+            self.applyAvatarEdits(edits, draftKeys: draftKeys, savedKeys: saved.team.map(\.key), startup: id)
+            self.detail = saved
             self.editingTeam = false
         }
-        if isDemo { editingTeam = false }
+        if isDemo {
+            applyAvatarEdits(edits, draftKeys: draftKeys, savedKeys: draftKeys, startup: id)
+            editingTeam = false
+        }
+    }
+
+    // MARK: - Avatars in the agents editor
+
+    enum AvatarEdit { case image(NSImage), useDefault }
+
+    /// Pending avatar changes in the editor, by draft key (saved with the team).
+    var avatarEdits: [String: AvatarEdit] = [:]
+    var generatingAvatars: Set<String> = []
+    var avatarError: String?
+
+    /// What the editor shows for this agent: the pending change, else the saved custom/bundled avatar.
+    func editorAvatar(for person: StartupPerson) -> NSImage? {
+        switch avatarEdits[person.key] {
+        case .image(let image): return image
+        case .useDefault: return Avatars.teamMember(person.key)
+        case nil: return Avatars.teamMember(person.key, startup: detail?.id)
+        }
+    }
+
+    func setAvatar(_ image: NSImage, for person: StartupPerson) {
+        avatarEdits[person.key] = .image(image)
+    }
+
+    func resetAvatar(for person: StartupPerson) {
+        avatarEdits[person.key] = .useDefault
+    }
+
+    func chooseAvatar(for person: StartupPerson) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.message = "Choose a picture for \(person.name)"
+        if panel.runModal() == .OK, let url = panel.url, let image = NSImage(contentsOf: url) {
+            setAvatar(image, for: person)
+        }
+    }
+
+    /// Asks LTX (through the runner on this Mac) for a cartoon portrait matching the agent.
+    func generateAvatar(for person: StartupPerson, stackRoot: URL?) async {
+        guard !isDemo else { return }
+        guard let stackRoot,
+              let env = try? String(contentsOf: stackRoot.appendingPathComponent(".env"), encoding: .utf8),
+              let token = HostController.parseEnv(env)["RUNNER_TOKEN"], !token.isEmpty
+        else { avatarError = "agentim isn't set up yet."; return }
+        generatingAvatars.insert(person.key)
+        defer { generatingAvatars.remove(person.key) }
+        avatarError = nil
+        do {
+            let image = try await LTXAvatar.generate(prompt: LTXAvatar.prompt(for: person), token: token)
+            setAvatar(image, for: person)
+        } catch {
+            avatarError = "Couldn't make an avatar: \(error.localizedDescription)"
+        }
+    }
+
+    func applyAvatarEdits(_ edits: [String: AvatarEdit], draftKeys: [String], savedKeys: [String], startup: String) {
+        for (index, draftKey) in draftKeys.enumerated() where index < savedKeys.count {
+            switch edits[draftKey] {
+            case .image(let image): try? CustomAvatars.save(image, startup: startup, key: savedKeys[index])
+            case .useDefault: CustomAvatars.remove(startup: startup, key: savedKeys[index])
+            case nil: break
+            }
+        }
+        avatarEdits = [:]
     }
 
     static let firstNames = ["Jordan", "Riley", "Kai", "Nina", "Theo", "Priya", "Marco", "Elena", "Sami", "Lena"]
@@ -384,12 +473,66 @@ final class StartupModel {
         await act("Calling the agents in…", stackRoot) { client in try await client.meetNow(id) }
     }
 
-    func delete(stackRoot: URL?) async {
-        guard let id = detail?.id else { return }
-        await act(nil, stackRoot) { client in
-            try await client.delete(id)
-            self.selection = nil
-            self.detail = nil
+    // MARK: - Talking to the agents
+
+    var founderDraft = ""
+    static let maxFounderMessage = 2000
+
+    var canSendToAgents: Bool {
+        let text = founderDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !text.isEmpty && text.count <= Self.maxFounderMessage && busy == nil
+    }
+
+    func sendToAgents(stackRoot: URL?) async {
+        guard canSendToAgents, let id = detail?.id else { return }
+        let text = founderDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        founderDraft = ""
+        if isDemo {
+            detail?.appendDemoFounderMessage(text)
+            return
+        }
+        meetingRequested = true  // poll fast for the agents' answers
+        Task {
+            try? await Task.sleep(for: .seconds(20))
+            self.meetingRequested = false
+        }
+        await act(nil, stackRoot) { client in self.detail = try await client.postMessage(id, text: text) }
+        if error != nil { founderDraft = text }  // don't lose what they wrote
+    }
+
+    // MARK: - Deleting (always behind the confirmation screen)
+
+    /// The startup waiting for "Delete" on the confirmation screen.
+    var pendingDelete: StartupSummary?
+
+    func askToDelete(_ startup: StartupSummary?) {
+        pendingDelete = startup
+    }
+
+    /// The selected startup as a summary (for the confirmation screen).
+    var selectedSummary: StartupSummary? {
+        listing?.startups.first { $0.id == selection }
+    }
+
+    func confirmDelete(stackRoot: URL?) async {
+        guard let target = pendingDelete else { return }
+        pendingDelete = nil
+        if isDemo {
+            removeLocally(target.id)
+            return
+        }
+        await act("Deleting \(target.name)…", stackRoot) { client in
+            try await client.delete(target.id)
+            self.removeLocally(target.id)
+        }
+        await refresh(stackRoot: stackRoot)
+    }
+
+    private func removeLocally(_ id: String) {
+        listing?.startups.removeAll { $0.id == id }
+        if selection == id {
+            selection = listing?.startups.last?.id
+            detail = nil
         }
     }
 
@@ -508,5 +651,42 @@ final class StartupModel {
                 .init(round: 6, role: "finance", content: "Ran the pilot math: 50% off month one still clears 31% margin. Let's cap pilots at 3 so we don't train customers on discounts. @Zoe, push annual prepay at signing.", ts: now - 1_250),
                 .init(round: 6, role: "ceo", content: "We're going after coworking landlords with per-floor pricing. Next: Zoe books 3 paid pilots by Friday using Leo's ROI page.", ts: now - 1_100),
             ])
+    }
+}
+
+/// Cartoon avatars from LTX via the native runner (http://localhost:8766), the same style as the built-in ones.
+enum LTXAvatar {
+    static var runner = URL(string: "http://localhost:8766")!
+
+    static func prompt(for person: StartupPerson) -> String {
+        let persona = (person.persona ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return "A friendly cartoon portrait of \(person.name), a \(person.title)"
+            + (persona.isEmpty ? "" : " (\(persona.prefix(160)))")
+            + ". Flat vector sticker illustration, thick dark outlines, soft shading, centered head-and-shoulders, "
+            + "plain pastel background, square composition, no text, no letters, no watermark"
+    }
+
+    static func generate(prompt: String, token: String, session: URLSession = .shared) async throws -> NSImage {
+        var request = URLRequest(url: runner.appendingPathComponent("v1/chat/completions"), timeoutInterval: 900)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": "ltx/image", "stream": false, "messages": [["role": "user", "content": prompt]],
+        ])
+        let (data, _) = try await session.data(for: request)
+        guard let url = imageURL(in: data) else { throw URLError(.cannotParseResponse) }
+        let (imageData, _) = try await session.data(from: url)
+        guard let image = NSImage(data: imageData) else { throw URLError(.cannotDecodeContentData) }
+        return image
+    }
+
+    /// The `[image](http://…png)` link in the runner's reply.
+    static func imageURL(in data: Data) -> URL? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let content = ((json["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any])?["content"] as? String,
+              let range = content.range(of: #"\(https?://[^)\s]+\)"#, options: .regularExpression)
+        else { return nil }
+        return URL(string: String(content[range].dropFirst().dropLast()))
     }
 }
