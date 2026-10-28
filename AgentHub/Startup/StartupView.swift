@@ -24,7 +24,17 @@ struct StartupView: View {
             .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Startups")
+        .sheet(isPresented: $model.editingTeam) {
+            TeamEditor(model: model, presets: model.detail?.presets ?? StartupModel.demoPresets, stackRoot: host.stackRoot)
+        }
         .onAppear { model.startPolling(stackRoot: host.stackRoot) }
+        .task {
+            // `-demo YES -editTeam YES` opens the team editor once the window is up (screenshots).
+            guard model.isDemo, UserDefaults.standard.bool(forKey: "editTeam") else { return }
+            try? await Task.sleep(for: .seconds(1))
+            model.beginTeamEdit()
+            model.hire(StartupModel.demoPresets.first)
+        }
         .onDisappear { model.stopPolling() }
     }
 }
@@ -165,6 +175,7 @@ private struct Interview: View {
                 }
                 HStack {
                     Button("Skip questions") { Task { await model.skipQuestions(stackRoot: stackRoot) } }
+                    Button("Edit the team", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
                     Spacer()
                     Button {
                         Task { await model.submitAnswers(stackRoot: stackRoot) }
@@ -240,6 +251,7 @@ private struct RunningStartup: View {
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.orange) }
             }
             Spacer()
+            Button("Team", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
             Button("Meet now", systemImage: "person.3.fill") { Task { await model.meetNow(stackRoot: stackRoot) } }
                 .disabled(model.busy != nil || !detail.isRunning)
             Toggle("On", isOn: Binding(get: { detail.isRunning },
@@ -298,6 +310,11 @@ private struct TeamRoom: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack(spacing: 6) {
                                         Text(person.name).font(.callout.weight(.semibold))
+                                        if person.former == true {
+                                            Text("former").font(.caption2.weight(.semibold))
+                                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                                .background(Color.secondary.opacity(0.15), in: Capsule())
+                                        }
                                         Text(person.title).font(.caption).foregroundStyle(.secondary)
                                         Text("· meeting \(message.round)").font(.caption).foregroundStyle(.tertiary)
                                     }

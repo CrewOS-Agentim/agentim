@@ -76,6 +76,51 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(model.draftPitch, "")
     }
 
+    func testDecodesFormerEmployeesAndPresets() throws {
+        var json = try JSONSerialization.jsonObject(with: Data(detailJSON.utf8)) as! [String: Any]
+        var people = json["people"] as! [String: Any]
+        people["omar"] = ["name": "Omar Haddad", "title": "Business Development", "emoji": "🤝", "former": true]
+        json["people"] = people
+        json["presets"] = [["title": "CTO", "emoji": "🧠", "owns": "architecture"]]
+        let detail = try JSONDecoder().decode(StartupDetail.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(detail.person("omar").former, true)
+        XCTAssertNil(detail.person("product").former)
+        XCTAssertEqual(detail.presets?.first?.title, "CTO")
+    }
+
+    @MainActor
+    func testTeamEditing() {
+        let model = StartupModel(demo: true)
+        model.beginTeamEdit()
+        XCTAssertTrue(model.editingTeam)
+        let start = model.teamDraft.count
+        model.hire(StartupModel.demoPresets.first)
+        XCTAssertEqual(model.teamDraft.count, start + 1)
+        let hire = model.teamDraft.last!
+        XCTAssertEqual(hire.title, "CTO")
+        XCTAssertFalse(model.teamDraft.dropLast().contains { $0.name == hire.name }, "suggested name is new")
+        XCTAssertTrue(model.teamDraftIsValid)
+        model.teamDraft[model.teamDraft.count - 1].name = ""
+        XCTAssertFalse(model.teamDraftIsValid, "everyone needs a name")
+        model.remove(model.teamDraft.last!)
+        XCTAssertTrue(model.teamDraftIsValid)
+        model.teamDraft.removeAll()
+        XCTAssertFalse(model.teamDraftIsValid, "at least one person")
+        for _ in 0..<13 { model.hire(nil) }
+        XCTAssertFalse(model.teamDraftIsValid, "at most 12")
+    }
+
+    func testSetTeamRequestBody() throws {
+        let client = StartupClient(token: "t")
+        let team = [StartupPerson(key: "", name: "Jordan Lee", title: "Customer Success", emoji: "🫶", owns: "retention")]
+        let members = team.map { ["key": $0.key, "name": $0.name, "title": $0.title, "emoji": $0.emoji, "owns": $0.owns ?? ""] }
+        let request = try client.request("v1/startups/a1/team", method: "POST", body: ["team": members])
+        XCTAssertEqual(request.url?.path, "/v1/startups/a1/team")
+        let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: [[String: String]]]
+        XCTAssertEqual(body["team"]?.first?["name"], "Jordan Lee")
+        XCTAssertEqual(body["team"]?.first?["key"], "", "new hires get their key from the gateway")
+    }
+
     @MainActor
     func testDemoHasManyStartupsAndNamedPeople() {
         let demo = StartupModel(demo: true)

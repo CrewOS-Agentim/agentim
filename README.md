@@ -218,6 +218,16 @@ Run **as many startups as you like**, each with its own team of agents who act l
 /startup off 2  ← pause              /startup on 2                   /startup delete 2
 ```
 
+**Make the team yours.** That's the default team: every startup can have its own (1–12 people plus Tim). In the Mac app, click **Team** to rename anyone, change their title, emoji or what they own, **Hire** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community) or anyone you describe, and let people go. People who leave keep their messages in the team room, marked *former*; the current team stops seeing them. In chat:
+
+```
+/startup team 2                                                    ← who works on #2
+/startup hire 2 Jordan Lee | Customer Success | onboarding pilots  ← name | title | what they own
+/startup fire 2 Omar                                               ← let someone go
+```
+
+<p align="center"><img src="docs/assets/screenshots/startup-team.png" alt="agentim Startup Mode: editing a startup's team" width="70%"></p>
+
 It runs in the always-on gateway, so the teams keep working with the app closed, and uses your local models (routed to the strongest reasoning model you have).
 
 <p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: startups, the living plan and the team room" width="85%"></p>

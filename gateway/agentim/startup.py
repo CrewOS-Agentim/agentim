@@ -48,6 +48,68 @@ TEAM = [
 ]
 CEO = Person("ceo", "Agent Tim", "CEO", "🐙", "the plan, priorities and keeping the founder in the loop")
 PEOPLE = {p.key: p for p in TEAM + [CEO]}
+MAX_TEAM = 12
+
+# Suggestions for hiring beyond the default team (the Mac app's "Hire" menu).
+ROLE_PRESETS = [
+    {"title": "CTO", "emoji": "🧠", "owns": "technical vision, architecture decisions, hiring engineers and technical risk"},
+    {"title": "Customer Success", "emoji": "🫶", "owns": "onboarding customers, retention, support and turning users into advocates"},
+    {"title": "Growth Lead", "emoji": "📈", "owns": "acquisition experiments, referral loops, activation and the weekly growth metric"},
+    {"title": "Data Scientist", "emoji": "📊", "owns": "metrics, dashboards, experiment analysis and pricing data"},
+    {"title": "Head of Operations", "emoji": "📦", "owns": "logistics, suppliers, fulfilment, costs and processes"},
+    {"title": "Legal & Compliance", "emoji": "⚖️", "owns": "contracts, terms, privacy, regulation and company setup"},
+    {"title": "Recruiter", "emoji": "🧲", "owns": "who to hire next, job posts, sourcing and interview loops"},
+    {"title": "Community Manager", "emoji": "💬", "owns": "community, events, user stories and early-adopter relationships"},
+]
+
+
+def slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-") or "person"
+
+
+def person_dict(person):
+    return {"key": person.key, "name": person.name, "title": person.title, "emoji": person.emoji, "owns": person.owns}
+
+
+def normalize_member(raw, taken):
+    """Validates one employee from the app or chat and gives them a unique key."""
+    name = " ".join(str(raw.get("name", "")).split())
+    title = " ".join(str(raw.get("title", "")).split())
+    if not (2 <= len(name) <= 60) or not (2 <= len(title) <= 60):
+        raise ValueError("Every employee needs a name and a title.")
+    if slug(name) == "agent-tim":
+        raise ValueError("Agent Tim is the CEO and is always on the team.")
+    owns = " ".join(str(raw.get("owns") or "").split())[:300] or f"everything a {title} is responsible for"
+    emoji = (str(raw.get("emoji") or "").strip() or "🧑‍💼")[:4]
+    key = slug(str(raw.get("key") or "")) or slug(name.split()[0] + "-" + title)
+    base, n = key, 2
+    while key in taken or key == CEO.key:
+        key, n = f"{base}-{n}", n + 1
+    taken.add(key)
+    return {"key": key, "name": name, "title": title, "emoji": emoji, "owns": owns}
+
+
+def normalize_team(members):
+    if not isinstance(members, list) or not members:
+        raise ValueError("A startup needs at least one employee besides Agent Tim.")
+    if len(members) > MAX_TEAM:
+        raise ValueError(f"Keep the team to {MAX_TEAM} people or fewer.")
+    taken = set()
+    return [normalize_member(m, taken) for m in members]
+
+
+def team_of(startup):
+    """This startup's employees (the default team for startups created before teams were editable)."""
+    members = (startup or {}).get("team") or []
+    return [Person(**m) for m in members] or list(TEAM)
+
+
+def people_of(startup):
+    """Everyone who can appear in the team room: current team, former employees and the CEO."""
+    people = {m["key"]: Person(**m) for m in (startup or {}).get("alumni") or []}
+    people.update({p.key: p for p in team_of(startup)})
+    people[CEO.key] = CEO
+    return people
 
 # Used when no model answers: five YC-partner questions, then five co-founder questions.
 FALLBACK_QUESTIONS = [
@@ -64,8 +126,8 @@ FALLBACK_QUESTIONS = [
 ]
 
 
-def initial_plan(name):
-    areas = "\n".join(f"### {p.emoji} {p.title} ({p.first})\n- …" for p in TEAM)
+def initial_plan(name, team=None):
+    areas = "\n".join(f"### {p.emoji} {p.title} ({p.first})\n- …" for p in (team or TEAM))
     return f"# {name}\n\n## Top 3 priorities\n1. (the team will decide)\n\n## By area\n{areas}\n\n## Experiments this week\n\n## Open questions\n"
 
 
@@ -95,9 +157,9 @@ def parse_questions(text, limit=10):
     return questions[:limit]
 
 
-def pick_speakers(last_spoke, count=3, rng=random):
+def pick_speakers(last_spoke, count=3, rng=random, team=None):
     """Whoever spoke least recently goes first; ties broken randomly."""
-    team = list(TEAM)
+    team = list(team or TEAM)
     rng.shuffle(team)
     team.sort(key=lambda p: last_spoke.get(p.key, -1))
     return team[:count]
@@ -108,8 +170,8 @@ def brief(startup):
     return f"Startup: {startup['name']}\nPitch: {startup['pitch']}" + (f"\n\nFounder's answers:\n{answers}" if answers else "")
 
 
-def person_prompt(person, startup, discussion):
-    colleagues = ", ".join(f"{p.first} ({p.title})" for p in TEAM if p is not person)
+def person_prompt(person, startup, discussion, team=None):
+    colleagues = ", ".join(f"{p.first} ({p.title})" for p in (team or TEAM) if p.key != person.key) or "none yet"
     return f"""You are {person.name}, {person.title} at "{startup['name']}", an early-stage startup. You are a real, \
 experienced employee: you own {person.owns}. Your colleagues: {colleagues}. The CEO is Agent Tim.
 
@@ -131,8 +193,9 @@ Remember: you are {person.first}, the {person.title}. Everything you propose is 
 Short bullets, no headings, start with "{person.first} here:"."""
 
 
-def ceo_prompt(startup, posted):
-    updates = "\n\n".join(f"{PEOPLE[m['role']].name} ({PEOPLE[m['role']].title}):\n{m['content']}" for m in posted)
+def ceo_prompt(startup, posted, people=None):
+    people = people or PEOPLE
+    updates = "\n\n".join(f"{people[m['role']].name} ({people[m['role']].title}):\n{m['content']}" for m in posted)
     return f"""You are Agent Tim, CEO of "{startup['name']}". Keep the company plan short, concrete and current.
 
 {brief(startup)}
@@ -165,7 +228,8 @@ class StartupStore:
     """Startups, their interviews, plans and team messages, in the gateway's SQLite."""
 
     COLUMNS = ["id", "name", "pitch", "questions", "answers", "status", "plan", "min_minutes", "max_minutes",
-               "next_run", "rounds", "notify_channel", "notify_chat", "created", "updated"]
+               "next_run", "rounds", "notify_channel", "notify_chat", "created", "updated", "team", "alumni"]
+    JSON_COLUMNS = ("questions", "answers", "team", "alumni")
 
     def __init__(self, db: sqlite3.Connection, lock: threading.Lock):
         self.db, self.lock = db, lock
@@ -177,13 +241,18 @@ class StartupStore:
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_team_messages (
                 startup_id TEXT, round INTEGER, role TEXT, content TEXT, ts REAL)""")
             self.db.execute("CREATE INDEX IF NOT EXISTS startup_team_messages_id ON startup_team_messages (startup_id, ts)")
+            # Databases from before editable teams: add the new columns in place.
+            existing = {row[1] for row in self.db.execute("PRAGMA table_info(startups)")}
+            for column in ("team", "alumni"):
+                if column not in existing:
+                    self.db.execute(f"ALTER TABLE startups ADD COLUMN {column} TEXT")
 
     def _row(self, row):
         if not row:
             return None
         s = dict(zip(self.COLUMNS, row))
-        s["questions"] = json.loads(s["questions"] or "[]")
-        s["answers"] = json.loads(s["answers"] or "[]")
+        for column in self.JSON_COLUMNS:
+            s[column] = json.loads(s[column] or "[]")
         return s
 
     def get(self, startup_id):
@@ -198,7 +267,9 @@ class StartupStore:
 
     def save(self, startup):
         startup["updated"] = time.time()
-        values = [json.dumps(startup[c]) if c in ("questions", "answers") else startup[c] for c in self.COLUMNS]
+        startup.setdefault("team", [])
+        startup.setdefault("alumni", [])
+        values = [json.dumps(startup[c]) if c in self.JSON_COLUMNS else startup[c] for c in self.COLUMNS]
         with self.lock, self.db:
             self.db.execute(f"INSERT OR REPLACE INTO startups ({', '.join(self.COLUMNS)}) VALUES ({', '.join('?' * len(self.COLUMNS))})",
                             values)
@@ -243,15 +314,17 @@ class StartupMode:
 
     # ---- creating a startup: pitch → follow-up questions → team
 
-    def create(self, pitch, name=None, channel=None, chat_id=None, min_minutes=10, max_minutes=30):
+    def create(self, pitch, name=None, channel=None, chat_id=None, min_minutes=10, max_minutes=30, team=None):
         pitch = pitch.strip()
         if len(pitch) < 10:
             raise ValueError("Tell me the pitch in a sentence or two.")
         min_minutes, max_minutes = sorted((max(1, int(min_minutes)), max(1, int(max_minutes))))
         name = (name or "").strip() or name_from_pitch(pitch)
+        members = normalize_team(team) if team else [person_dict(p) for p in TEAM]
         startup = {
             "id": uuid.uuid4().hex[:12], "name": name, "pitch": pitch, "questions": self.follow_up_questions(pitch),
-            "answers": [], "status": "interview", "plan": initial_plan(name), "min_minutes": min_minutes,
+            "answers": [], "status": "interview", "plan": initial_plan(name, [Person(**m) for m in members]),
+            "team": members, "alumni": [], "min_minutes": min_minutes,
             "max_minutes": max_minutes, "next_run": None, "rounds": 0, "notify_channel": channel,
             "notify_chat": str(chat_id) if chat_id is not None else None, "created": self.clock(), "updated": self.clock(),
         }
@@ -329,6 +402,52 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
     def delete(self, startup_id):
         self.store.delete(startup_id)
 
+    # ---- the team: edit, hire, fire
+
+    def set_team(self, startup_id, members):
+        """Replaces the team. People who leave become alumni (their messages stay in the history)."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        new_team = normalize_team(members)
+        alumni = {m["key"]: m for m in startup.get("alumni") or []}
+        # Rehiring someone by name gives them back their old identity (and their message history).
+        by_name = {m["name"].lower(): key for key, m in alumni.items()}
+        taken = {m["key"] for m in new_team}
+        for member in new_team:
+            old_key = by_name.get(member["name"].lower())
+            if old_key and member["key"] not in alumni and old_key not in taken:
+                taken.discard(member["key"])
+                member["key"] = old_key
+                taken.add(old_key)
+        kept = {m["key"] for m in new_team}
+        for person in team_of(startup):
+            if person.key not in kept:
+                alumni[person.key] = person_dict(person)
+        for key in kept:
+            alumni.pop(key, None)  # rehired
+        startup["team"], startup["alumni"] = new_team, list(alumni.values())
+        return self.store.save(startup)
+
+    def hire(self, startup_id, name, title, owns="", emoji=""):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        members = [person_dict(p) for p in team_of(startup)]
+        return self.set_team(startup_id, members + [{"name": name, "title": title, "owns": owns, "emoji": emoji}])
+
+    def fire(self, startup_id, who):
+        """Removes an employee by key, full name or first name."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        who = who.strip().lower()
+        members = [person_dict(p) for p in team_of(startup)]
+        remaining = [m for m in members if who not in (m["key"], m["name"].lower(), m["name"].split()[0].lower())]
+        if len(remaining) == len(members):
+            raise ValueError(f"No one called {who} works here.")
+        return self.set_team(startup_id, remaining)
+
     # ---- meetings
 
     def due(self):
@@ -353,11 +472,16 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
             if not startup or startup["status"] == "interview":
                 return None
             round_no = startup["rounds"] + 1
-            discussion = "\n".join(f"{PEOPLE[m['role']].name}: {m['content']}"
-                                   for m in self.store.messages(startup_id, limit=12) if m["role"] in PEOPLE)
+            team, people = team_of(startup), people_of(startup)
+            current = {p.key for p in team} | {CEO.key}
+            # Former employees' messages stay in the history but not in the current team's context.
+            discussion = "\n".join(f"{people[m['role']].name}: {m['content']}"
+                                   for m in self.store.messages(startup_id, limit=12) if m["role"] in current)
             posted = []
-            for person in pick_speakers(self.store.last_spoke(startup_id), self.speakers_per_round, self.rng):
-                reply = self._ask(person_prompt(person, startup, discussion))
+            speakers = pick_speakers(self.store.last_spoke(startup_id), min(self.speakers_per_round, len(team)),
+                                     self.rng, team)
+            for person in speakers:
+                reply = self._ask(person_prompt(person, startup, discussion, team))
                 if not reply:
                     continue
                 self.store.add_message(startup_id, round_no, person.key, reply)
@@ -366,13 +490,13 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
             if not posted:
                 self.schedule_next(startup)
                 return None
-            plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted)) or "", startup["plan"])
+            plan, summary = split_ceo(self._ask(ceo_prompt(startup, posted, people)) or "", startup["plan"])
             summary = summary or "The team posted new ideas; see the plan."
             self.store.add_message(startup_id, round_no, CEO.key, summary)
             startup = self.store.get(startup_id) or startup
             startup["plan"], startup["rounds"] = plan, round_no
             self.schedule_next(startup)
-            text = self.digest(startup, posted, summary)
+            text = self.digest(startup, posted, summary, people)
             if self.notify and startup.get("notify_channel") and startup.get("notify_chat"):
                 try:
                     self.notify(startup["notify_channel"], startup["notify_chat"], text)
@@ -399,8 +523,9 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         return None
 
     @staticmethod
-    def digest(startup, posted, summary):
-        who = ", ".join(PEOPLE[m["role"]].first for m in posted)
+    def digest(startup, posted, summary, people=None):
+        people = people or PEOPLE
+        who = ", ".join(people[m["role"]].first for m in posted)
         return f"🚀 *{startup['name']}*, meeting {startup['rounds']} ({who})\n\n{summary}\n\n_/startup to see your startups and plans._"
 
     def loop(self, tick=30, sleep=time.sleep):
@@ -420,7 +545,8 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
     # ---- views
 
     def team(self):
-        return [{"key": p.key, "name": p.name, "title": p.title, "emoji": p.emoji, "owns": p.owns} for p in TEAM]
+        """The default team new startups get."""
+        return [person_dict(p) for p in TEAM]
 
     def summary(self, startup):
         return {k: startup[k] for k in ("id", "name", "pitch", "status", "rounds", "next_run", "min_minutes", "max_minutes",
@@ -430,12 +556,15 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         startup = self.store.get(startup_id)
         if not startup:
             return None
-        people = {k: {"name": p.name, "title": p.title, "emoji": p.emoji} for k, p in PEOPLE.items()}
-        return {**startup, "now": self.clock(), "team": self.team(), "people": people,
-                "messages": self.store.messages(startup_id)}
+        current = {p.key for p in team_of(startup)} | {CEO.key}
+        people = {k: {"name": p.name, "title": p.title, "emoji": p.emoji, "former": k not in current}
+                  for k, p in people_of(startup).items()}
+        return {**startup, "now": self.clock(), "team": [person_dict(p) for p in team_of(startup)], "people": people,
+                "presets": ROLE_PRESETS, "messages": self.store.messages(startup_id)}
 
     def listing(self):
-        return {"now": self.clock(), "team": self.team(), "startups": [self.summary(s) for s in self.store.all()]}
+        return {"now": self.clock(), "team": self.team(), "presets": ROLE_PRESETS,
+                "startups": [self.summary(s) for s in self.store.all()]}
 
     # ---- chat: /startup …  and interview answers
 
@@ -449,7 +578,7 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
             return f"👍 Skipping the rest. The *{startup['name']}* team meets in about a minute."
         startup = self.answer(startup["id"], text)
         if startup["status"] == "running":
-            names = ", ".join(f"{p.emoji} {p.first}" for p in TEAM)
+            names = ", ".join(f"{p.emoji} {p.first}" for p in team_of(startup))
             return (f"🚀 Thanks! *{startup['name']}* has a team now: {names} and me as CEO.\n\n"
                     "We meet every 10–30 minutes and I'll send you a summary after each meeting. "
                     "`/startup` lists your startups.")
@@ -468,6 +597,8 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         verb, _, rest = arg.partition(" ")
         verb = verb.lower()
         startups = self.store.all()
+        if verb in ("team", "hire", "fire"):
+            return self.team_command(verb, rest)
         if verb == "new" or (arg and verb not in ("now", "off", "on", "pause", "resume", "delete") and not verb.isdigit()):
             pitch = rest if verb == "new" else arg
             try:
@@ -504,4 +635,28 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
                 when = f" · next meeting ~{max(1, int((s['next_run'] - self.clock()) / 60))} min"
             lines.append(f"{i}. *{s['name']}*: {s['status']}, {s['rounds']} meetings{when}")
         return ("🚀 *Your startups*\n" + "\n".join(lines) +
-                "\n\n`/startup <n>` plan · `/startup now <n>` meet · `/startup off <n>` pause · `/startup new <pitch>`")
+                "\n\n`/startup <n>` plan · `/startup now <n>` meet · `/startup off <n>` pause · `/startup new <pitch>`"
+                "\n`/startup team <n>` · `/startup hire <n> Name | Title | what they own` · `/startup fire <n> Name`")
+
+    def team_command(self, verb, rest):
+        number, _, details = rest.strip().partition(" ")
+        target = self._by_index(number)
+        if not target:
+            return f"🤔 Which startup? e.g. `/startup {verb} 1 …` (send `/startup` for the list)."
+        try:
+            if verb == "hire":
+                parts = [part.strip() for part in details.split("|")]
+                if len(parts) < 2:
+                    return "🤔 Use `/startup hire 1 Jordan Lee | Customer Success | onboarding and retention`."
+                target = self.hire(target["id"], parts[0], parts[1], parts[2] if len(parts) > 2 else "")
+                person = team_of(target)[-1]
+                return f"👋 {person.emoji} *{person.name}* joined *{target['name']}* as {person.title}."
+            if verb == "fire":
+                if not details.strip():
+                    return "🤔 Who? e.g. `/startup fire 1 Omar`."
+                target = self.fire(target["id"], details)
+                return f"👋 Done. *{target['name']}* has {len(team_of(target))} people now."
+        except ValueError as e:
+            return f"🤔 {e}"
+        lines = [f"{p.emoji} *{p.name}*, {p.title}: {p.owns}" for p in team_of(target)]
+        return f"🧑‍🤝‍🧑 *{target['name']}* team\n" + "\n".join(lines) + f"\n🐙 *Agent Tim*, CEO"

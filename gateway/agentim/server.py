@@ -114,7 +114,8 @@ def make_handler(gateway, channels, catalog):
             try:
                 if len(parts) == 2:  # create: pitch → follow-up questions
                     created = startup.create(body.get("pitch", ""), body.get("name"),
-                                             min_minutes=body.get("min_minutes", 10), max_minutes=body.get("max_minutes", 30))
+                                             min_minutes=body.get("min_minutes", 10), max_minutes=body.get("max_minutes", 30),
+                                             team=body.get("team"))
                     return self.send_json(201, startup.detail(created["id"]))
                 startup_id = parts[2]
                 if not startup.store.get(startup_id):
@@ -125,6 +126,8 @@ def make_handler(gateway, channels, catalog):
                         startup.skip_questions(startup_id)
                     else:
                         startup.answer(startup_id, body.get("answers", []))
+                elif action == "team":
+                    startup.set_team(startup_id, body.get("team"))
                 elif action == "run":
                     threading.Thread(target=startup.run_round, args=(startup_id,), daemon=True).start()
                     return self.send_json(202, {"started": True})

@@ -3,12 +3,21 @@ import Observation
 
 // Shapes of the gateway's Startup Mode API (gateway/agentim/startup.py).
 
-struct StartupPerson: Decodable, Equatable, Identifiable {
-    let key: String
-    let name: String
+struct StartupPerson: Codable, Equatable, Identifiable {
+    var key: String
+    var name: String
+    var title: String
+    var emoji: String
+    var owns: String?
+    var id: String { key }
+}
+
+/// A role you can hire beyond the default team (gateway ROLE_PRESETS).
+struct RolePreset: Decodable, Equatable, Identifiable {
     let title: String
     let emoji: String
-    var id: String { key }
+    let owns: String
+    var id: String { title }
 }
 
 struct StartupSummary: Decodable, Equatable, Identifiable {
@@ -33,6 +42,7 @@ struct StartupDetail: Decodable, Equatable {
         let name: String
         let title: String
         let emoji: String
+        var former: Bool? = nil
     }
 
     struct Message: Decodable, Equatable, Identifiable {
@@ -57,6 +67,7 @@ struct StartupDetail: Decodable, Equatable {
     let now: Double
     let team: [StartupPerson]
     let people: [String: PersonInfo]
+    var presets: [RolePreset]? = nil
     let messages: [Message]
 
     var isInterview: Bool { status == "interview" }
@@ -89,6 +100,11 @@ struct StartupClient {
 
     func skip(_ id: String) async throws -> StartupDetail { try await send("v1/startups/\(id)/answers", body: ["skip": true]) }
     func setEnabled(_ id: String, _ on: Bool) async throws -> StartupDetail { try await send("v1/startups/\(id)", body: ["enabled": on]) }
+
+    func setTeam(_ id: String, _ team: [StartupPerson]) async throws -> StartupDetail {
+        let members = team.map { ["key": $0.key, "name": $0.name, "title": $0.title, "emoji": $0.emoji, "owns": $0.owns ?? ""] }
+        return try await send("v1/startups/\(id)/team", body: ["team": members])
+    }
 
     func meetNow(_ id: String) async throws {
         _ = try await raw("v1/startups/\(id)/run", method: "POST", body: [:])
@@ -139,7 +155,7 @@ final class StartupModel {
     var maxMinutes = 30
 
     private var timer: Timer?
-    private let isDemo: Bool
+    let isDemo: Bool
 
     init(demo: Bool = false) {
         isDemo = demo
@@ -234,6 +250,59 @@ final class StartupModel {
         await act(nil, stackRoot) { client in self.detail = try await client.setEnabled(id, on) }
     }
 
+    // MARK: - Team editing
+
+    var editingTeam = false
+    var teamDraft: [StartupPerson] = []
+
+    func beginTeamEdit() {
+        teamDraft = detail?.team ?? []
+        editingTeam = true
+    }
+
+    func hire(_ preset: RolePreset?) {
+        let title = preset?.title ?? "New role"
+        teamDraft.append(StartupPerson(key: "new-\(UUID().uuidString.prefix(6))", name: Self.suggestedName(for: teamDraft),
+                                       title: title, emoji: preset?.emoji ?? "🧑‍💼", owns: preset?.owns ?? ""))
+    }
+
+    func remove(_ person: StartupPerson) {
+        teamDraft.removeAll { $0.key == person.key }
+    }
+
+    /// The team can be saved when everyone has a name and a title and nobody is left out.
+    var teamDraftIsValid: Bool {
+        !teamDraft.isEmpty && teamDraft.count <= 12 && teamDraft.allSatisfy {
+            $0.name.trimmingCharacters(in: .whitespaces).count >= 2 && $0.title.trimmingCharacters(in: .whitespaces).count >= 2
+        }
+    }
+
+    func saveTeam(stackRoot: URL?) async {
+        guard let id = detail?.id else { return }
+        // New people get their key from the gateway (it keeps keys unique and restores rehired alumni).
+        let team = teamDraft.map { person -> StartupPerson in
+            var person = person
+            if person.key.hasPrefix("new-") { person.key = "" }
+            return person
+        }
+        await act("Updating the team…", stackRoot) { client in
+            self.detail = try await client.setTeam(id, team)
+            self.editingTeam = false
+        }
+        if isDemo { editingTeam = false }
+    }
+
+    static let firstNames = ["Jordan", "Riley", "Kai", "Nina", "Theo", "Priya", "Marco", "Elena", "Sami", "Lena"]
+    static let lastNames = ["Lee", "Moreno", "Ito", "Shah", "Novak", "Brennan", "Okafor", "Silva", "Kowal", "Reyes"]
+
+    static func suggestedName(for team: [StartupPerson]) -> String {
+        let used = Set(team.map(\.name))
+        for (first, last) in zip(firstNames, lastNames) where !used.contains("\(first) \(last)") {
+            return "\(first) \(last)"
+        }
+        return "New Hire \(team.count + 1)"
+    }
+
     func meetNow(stackRoot: URL?) async {
         guard let id = detail?.id else { return }
         await act("Calling the team in…", stackRoot) { client in try await client.meetNow(id) }
@@ -264,14 +333,25 @@ final class StartupModel {
     // MARK: - Demo (screenshots)
 
     static let demoTeam: [StartupPerson] = [
-        .init(key: "product", name: "Maya Chen", title: "Product Manager", emoji: "🧭"),
-        .init(key: "design", name: "Leo Park", title: "Designer", emoji: "🎨"),
-        .init(key: "engineering", name: "Noah Patel", title: "Engineering Lead", emoji: "🛠️"),
-        .init(key: "marketing", name: "Ava Brooks", title: "Marketing & Social Lead", emoji: "📣"),
-        .init(key: "automation", name: "Sam Rivera", title: "Marketing Automation", emoji: "⚙️"),
-        .init(key: "sales", name: "Zoe Kim", title: "Head of Sales", emoji: "💼"),
-        .init(key: "bizdev", name: "Omar Haddad", title: "Business Development", emoji: "🤝"),
-        .init(key: "finance", name: "Grace Liu", title: "Finance & Fundraising", emoji: "💰"),
+        .init(key: "product", name: "Maya Chen", title: "Product Manager", emoji: "🧭", owns: "the problem, MVP scope and success metrics"),
+        .init(key: "design", name: "Leo Park", title: "Designer", emoji: "🎨", owns: "onboarding, key screens and brand"),
+        .init(key: "engineering", name: "Noah Patel", title: "Engineering Lead", emoji: "🛠️", owns: "architecture and the smallest shippable version"),
+        .init(key: "marketing", name: "Ava Brooks", title: "Marketing & Social Lead", emoji: "📣", owns: "positioning, content and launch"),
+        .init(key: "automation", name: "Sam Rivera", title: "Marketing Automation", emoji: "⚙️", owns: "funnels, email sequences and lead scoring"),
+        .init(key: "sales", name: "Zoe Kim", title: "Head of Sales", emoji: "💼", owns: "the first 10 customers, pricing and pipeline"),
+        .init(key: "bizdev", name: "Omar Haddad", title: "Business Development", emoji: "🤝", owns: "partnerships and distribution"),
+        .init(key: "finance", name: "Grace Liu", title: "Finance & Fundraising", emoji: "💰", owns: "unit economics, runway and fundraising"),
+    ]
+
+    static let demoHire = StartupPerson(key: "jordan", name: "Jordan Lee", title: "Customer Success", emoji: "🫶",
+                                        owns: "onboarding pilots and keeping them happy")
+
+    static let demoPresets: [RolePreset] = [
+        .init(title: "CTO", emoji: "🧠", owns: "technical vision, architecture decisions and hiring engineers"),
+        .init(title: "Customer Success", emoji: "🫶", owns: "onboarding, retention and support"),
+        .init(title: "Growth Lead", emoji: "📈", owns: "acquisition experiments and the weekly growth metric"),
+        .init(title: "Data Scientist", emoji: "📊", owns: "metrics, dashboards and experiment analysis"),
+        .init(title: "Legal & Compliance", emoji: "⚖️", owns: "contracts, terms, privacy and regulation"),
     ]
 
     static var demoListing: StartupListing {
@@ -290,6 +370,8 @@ final class StartupModel {
         let now = Date().timeIntervalSince1970
         var people = Dictionary(uniqueKeysWithValues: demoTeam.map { ($0.key, StartupDetail.PersonInfo(name: $0.name, title: $0.title, emoji: $0.emoji)) })
         people["ceo"] = .init(name: "Agent Tim", title: "CEO", emoji: "🐙")
+        people["bizdev"] = .init(name: "Omar Haddad", title: "Business Development", emoji: "🤝", former: true)
+        people[demoHire.key] = .init(name: demoHire.name, title: demoHire.title, emoji: demoHire.emoji)
         return StartupDetail(
             id: "leafy", name: "Leafy",
             pitch: "A monthly subscription that delivers and swaps office plants so offices always look alive.",
@@ -318,7 +400,8 @@ final class StartupModel {
             ## Open questions
             - Own the plants or lease them? (Grace)
             """,
-            min_minutes: 10, max_minutes: 30, next_run: now + 14 * 60, rounds: 6, now: now, team: demoTeam, people: people,
+            min_minutes: 10, max_minutes: 30, next_run: now + 14 * 60, rounds: 6, now: now,
+            team: demoTeam.filter { $0.key != "bizdev" } + [demoHire], people: people, presets: demoPresets,
             messages: [
                 .init(round: 6, role: "sales", content: "Called 4 coworking operators this morning: 2 want a pilot if we handle setup. Next: send the ROI page with every follow-up and book 3 pilots by Friday. @Leo, can I have the ROI page by Thursday?", ts: now - 1_500),
                 .init(round: 6, role: "design", content: "On it. The ROI page is one screen: desks → plants needed → monthly cost vs. a part-time plant person. I'll test it with Zoe's two warm leads. @Sam, can the email sequence link straight to it?", ts: now - 1_380),
