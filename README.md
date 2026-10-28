@@ -155,15 +155,24 @@ Before any download, the runner looks up the real file sizes from the Ollama reg
 
 ## 🖥 The Mac app
 
-<p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: chats" width="90%"></p>
+<p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: a chat with Agent Tim, the big message box and the routing note under each reply" width="90%"></p>
+<p align="center"><b>Chats</b>: a roomy message box (Enter sends, Shift+Enter for a new line), drag in files, and every reply says which model answered and why</p>
 
 <table>
+  <tr>
+    <td><img src="docs/assets/screenshots/agents.png" alt="Agents with their cartoon avatars, including QA Engineer and Data Analyst"></td>
+    <td><img src="docs/assets/screenshots/skills.png" alt="Built-in skills including Web QA, Mobile QA, API Testing and Data Analytics"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Agents</b>: each with its own avatar, skills and model preference</td>
+    <td align="center"><b>Skills</b>: QA, data analytics, startup, product, video and more</td>
+  </tr>
   <tr>
     <td><img src="docs/assets/screenshots/host.png" alt="This Mac control center"></td>
     <td><img src="docs/assets/screenshots/models.png" alt="Models: Hugging Face in Docker and LTX"></td>
   </tr>
   <tr>
-    <td align="center"><b>This Mac</b>: start the stack, keep it awake, launch at login</td>
+    <td align="center"><b>This Mac</b>: start the stack, keep it awake, connect Claude and ChatGPT</td>
     <td align="center"><b>Models</b>: Hugging Face in Docker, LTX, on-Mac MLX, cloud</td>
   </tr>
 </table>
@@ -250,7 +259,8 @@ Run **as many startups as you like**, each with its own team of agents who act l
 |---|---|
 | 🧭 Maya Chen, Product Manager | 🎨 Leo Park, Designer · 🛠️ Noah Patel, Engineering Lead |
 | 📣 Ava Brooks, Marketing & Social | ⚙️ Sam Rivera, Marketing Automation · 💼 Zoe Kim, Head of Sales |
-| 🤝 Omar Haddad, Business Development | 💰 Grace Liu, Finance & Fundraising · 🐙 Agent Tim, CEO |
+| 🤝 Omar Haddad, Business Development | 💰 Grace Liu, Finance & Fundraising · 📊 Nina Shah, Data Analyst |
+| 🐙 Agent Tim, CEO | |
 
 ```
 /startup new Leafy: a monthly subscription that swaps office plants   ← pitch (then answer Tim's 10 questions)
@@ -258,7 +268,7 @@ Run **as many startups as you like**, each with its own team of agents who act l
 /startup off 2  ← pause              /startup on 2                   /startup delete 2
 ```
 
-**Make the team yours.** That's the default team: every startup can have its own (1–12 people plus Tim). In the Mac app, click **Agents** to rename anyone, change their title, emoji or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. People who leave keep their messages in the team room, marked *former*; the current team stops seeing them. In chat:
+**Make the team yours.** That's the default team: every startup can have its own (1–12 agents plus Tim). In the Mac app, click **Agents** to rename anyone, change their title, emoji or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. Agents you remove keep their messages in the agents room, marked *former*; the current team stops seeing them. In chat:
 
 ```
 /startup team 2                                                    ← who works on #2
@@ -266,11 +276,23 @@ Run **as many startups as you like**, each with its own team of agents who act l
 /startup fire 2 Omar                                               ← let someone go
 ```
 
-<p align="center"><img src="docs/assets/screenshots/startup-team.png" alt="agentim Startup Mode: editing a startup's team" width="70%"></p>
+<p align="center"><img src="docs/assets/screenshots/startup-team.png" alt="agentim Startup Mode: editing a startup's agents, each with an avatar" width="80%"></p>
 
 It runs in the always-on gateway, so the teams keep working with the app closed, and uses your local models (routed to the strongest reasoning model you have).
 
-<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: startups, the living plan and the team room" width="85%"></p>
+<table>
+  <tr>
+    <td><img src="docs/assets/screenshots/startup-interview.png" alt="Startup interview: one question at a time with Back, Skip and Next"></td>
+    <td><img src="docs/assets/screenshots/startup-meeting.png" alt="A live meeting in the agents room: who's in the room and who's typing"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>The interview</b>: one question at a time, Back / Skip / Next</td>
+    <td align="center"><b>A live meeting</b>: watch the agents talk as it happens</td>
+  </tr>
+</table>
+
+<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: startups, the living plan and the agents room" width="85%"></p>
+<p align="center"><b>Your startups</b>: the living plan (priorities, metrics, owners) next to the agents room</p>
 
 ## 🎙️ Voice
 
