@@ -238,6 +238,92 @@ class LocalAgentsTests(unittest.TestCase):
                 agents.run_task("claude-code", "hi")
 
 
+class TaskLogTests(unittest.TestCase):
+    def test_running_then_history_newest_first(self):
+        now = [1000.0]
+        log = runner.TaskLog(clock=lambda: now[0])
+        a = log.start("ollama/qwen3", "Startup meeting · Leafy · Maya", "What should we\n ship   first?")
+        b = log.start("ltx/video", "Telegram chat", "a cat surfing")
+        now[0] = 1003.5
+        snap = log.snapshot()
+        self.assertEqual([t["label"] for t in snap["running"]], ["Startup meeting · Leafy · Maya", "Telegram chat"])
+        self.assertEqual(snap["running"][0]["seconds"], 3.5)
+        self.assertEqual(snap["running"][0]["preview"], "What should we ship first?")
+        log.finish(a)
+        now[0] = 1010
+        log.finish(b, error="LTX Desktop is busy")
+        snap = log.snapshot()
+        self.assertEqual(snap["running"], [])
+        self.assertEqual([t["model"] for t in snap["recent"]], ["ltx/video", "ollama/qwen3"], "newest first")
+        self.assertEqual((snap["recent"][0]["ok"], snap["recent"][0]["seconds"]), (False, 10.0))
+        self.assertTrue(snap["recent"][1]["ok"])
+        self.assertIsNone(log.finish("unknown"))
+
+    def test_history_survives_a_restart_and_is_capped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tasks.jsonl")
+            log = runner.TaskLog(path, keep=3)
+            for i in range(5):
+                log.finish(log.start("m", f"task {i}"))
+            again = runner.TaskLog(path, keep=3)
+            self.assertEqual([t["label"] for t in again.snapshot()["recent"]], ["task 4", "task 3", "task 2"])
+
+
+class MemoryControlTests(unittest.TestCase):
+    """Free memory: list what Ollama has loaded, unload it, quit LTX Desktop."""
+
+    def setUp(self):
+        self.calls = []
+        self.originals = (runner.http_json, runner.urllib.request.urlopen, dict(runner.BACKENDS))
+        runner.BACKENDS["ollama"] = "http://ollama:11434"
+        runner.http_json = lambda url, **kw: {"models": [
+            {"name": "qwen3:4b", "size": 3_000_000_000, "size_vram": 0, "expires_at": "soon"},
+            {"name": "coder:7b", "size": 5_000_000_000, "size_vram": 0, "expires_at": "soon"}]}
+
+        class Done:
+            def read(self):
+                return b"{}"
+
+        def urlopen(req, timeout=0):
+            self.calls.append((req.full_url, json.loads(req.data)))
+            return Done()
+
+        runner.urllib.request.urlopen = urlopen
+
+    def tearDown(self):
+        runner.http_json, runner.urllib.request.urlopen, backends = self.originals
+        runner.BACKENDS.clear()
+        runner.BACKENDS.update(backends)
+
+    def test_lists_loaded_models(self):
+        models = runner.loaded_models()
+        self.assertEqual([m["id"] for m in models], ["ollama/qwen3:4b", "ollama/coder:7b"])
+        self.assertEqual(models[1]["size_bytes"], 5_000_000_000)
+
+    def test_unload_all_or_one(self):
+        self.assertEqual(runner.unload_models(), ["ollama/qwen3:4b", "ollama/coder:7b"])
+        self.assertEqual(self.calls[0], ("http://ollama:11434/api/generate", {"model": "qwen3:4b", "keep_alive": 0}))
+        self.calls.clear()
+        self.assertEqual(runner.unload_models("coder:7b"), ["ollama/coder:7b"])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_no_ollama_nothing_loaded(self):
+        runner.BACKENDS.pop("ollama", None)
+        self.assertEqual(runner.loaded_models(), [])
+
+    def test_stop_ltx_quits_the_app(self):
+        ran = []
+        original = runner.IN_CONTAINER
+        runner.IN_CONTAINER = False
+        try:
+            runner.stop_ltx(run=lambda cmd, **kw: ran.append(cmd))
+        finally:
+            runner.IN_CONTAINER = original
+        if runner.platform.system() == "Darwin":
+            self.assertEqual(ran[0][:2], ["osascript", "-e"])
+            self.assertIn('"LTX Desktop" to quit', ran[0][2])
+
+
 class ClaudeSessionsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -15,6 +15,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var isError = false
     /// Files sent with the message (optional so older saved conversations still decode).
     var attachments: [ChatAttachment]?
+    /// In a meeting room: which agent wrote this reply.
+    var agentID: UUID?
 
     /// What the model reads: the text plus every attached file.
     var modelContent: String {
@@ -31,6 +33,10 @@ struct Conversation: Identifiable, Codable, Hashable {
     var messages: [ChatMessage] = []
     /// Sticky per-conversation override. nil = follow the agent / router.
     var pinnedModelID: String?
+    /// A meeting room: these agents all take part (each answers in turn). nil or empty = a normal chat.
+    var participantIDs: [UUID]?
+
+    var isMeeting: Bool { participantIDs != nil }
     var updatedAt = Date()
 
     /// Last message as plain text (markdown markers removed) for list rows.

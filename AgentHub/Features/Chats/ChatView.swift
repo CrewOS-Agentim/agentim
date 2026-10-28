@@ -16,7 +16,12 @@ struct ChatView: View {
     var body: some View {
         if let conversation {
             VStack(spacing: 0) {
-                if conversation.messages.isEmpty {
+                if conversation.isMeeting {
+                    ParticipantsBar(conversation: conversation)
+                }
+                if conversation.isMeeting && store.participants(in: conversation).isEmpty {
+                    PickRoom(conversation: conversation)
+                } else if conversation.messages.isEmpty {
                     EmptyChat { draft = $0 }
                 } else {
                     messages(conversation)
@@ -51,7 +56,10 @@ struct ChatView: View {
                 LazyVStack(alignment: .leading, spacing: Theme.s4) {
                     ForEach(conversation.messages) { message in
                         MessageRow(message: message, model: store.model(id: message.modelID),
-                                   agent: store.agent(for: conversation))
+                                   agent: message.agentID.flatMap { id in store.agents.first { $0.id == id } }
+                                       ?? store.agent(for: conversation),
+                                   showsName: conversation.isMeeting,
+                                   mentionNames: conversation.isMeeting ? store.participants(in: conversation).map(Self.firstName) : [])
                             .id(message.id)
                     }
                 }
@@ -85,9 +93,14 @@ struct ChatView: View {
                 }
             }
             VStack(spacing: 0) {
-                ComposerTextView(text: $draft, placeholder: "Message Agent Tim…  (@model · /skill · drop files)",
-                                 minHeight: 84, maxHeight: 320, onSubmit: { submit(conversation) },
-                                 height: $composerHeight)
+                ComposerTextView(text: $draft,
+                                 placeholder: conversation.isMeeting ? "Message the room…  (@Name asks one agent · Tab completes)"
+                                                                     : "Message Agent Tim…  (@model · /skill · drop files)",
+                                 minHeight: 84, maxHeight: 320,
+                                 mentions: conversation.isMeeting ? store.participants(in: conversation).map(Self.firstName) : [],
+                                 onSubmit: { submit(conversation) },
+                                 height: $composerHeight,
+                                 onTab: { completeMention(in: conversation) })
                     .frame(height: composerHeight)
                     .padding(.horizontal, Theme.s2)
                     .padding(.top, Theme.s1)
@@ -129,8 +142,23 @@ struct ChatView: View {
         .frame(maxWidth: .infinity)
     }
 
+    static func firstName(_ agent: Agent) -> String {
+        agent.name.split(separator: " ").first.map(String.init) ?? agent.name
+    }
+
+    /// Tab after "@Pr" in a meeting → "@Product " (the first agent whose name starts with it).
+    private func completeMention(in conversation: Conversation) -> Bool {
+        guard conversation.isMeeting, let query = StartupModel.mentionQuery(in: draft) else { return false }
+        guard let agent = store.participants(in: conversation).first(where: {
+            Self.firstName($0).lowercased().hasPrefix(query)
+        }) else { return false }
+        draft = String(draft.dropLast(query.count + 1)) + "@\(Self.firstName(agent)) "
+        return true
+    }
+
     private func canSend(_ conversation: Conversation) -> Bool {
-        ChatComposer.canSend(draft: draft, attachments: attachments) && !store.isStreaming(conversation.id)
+        if conversation.isMeeting && store.participants(in: conversation).isEmpty { return false }
+        return ChatComposer.canSend(draft: draft, attachments: attachments) && !store.isStreaming(conversation.id)
     }
 
     private func submit(_ conversation: Conversation) {
@@ -140,7 +168,11 @@ struct ChatView: View {
         draft = ""
         attachments = []
         attachError = nil
-        store.send(text, attachments: files, in: conversation.id)
+        if conversation.isMeeting {
+            store.sendToMeeting(text, attachments: files, in: conversation.id)
+        } else {
+            store.send(text, attachments: files, in: conversation.id)
+        }
     }
 
     private func addFiles(_ urls: [URL]) {
@@ -248,6 +280,9 @@ struct MessageRow: View {
     let message: ChatMessage
     let model: AIModel?
     var agent: Agent?
+    /// Meeting rooms show who's talking above each reply.
+    var showsName = false
+    var mentionNames: [String] = []
 
     private var isUser: Bool { message.role == .user }
 
@@ -255,12 +290,16 @@ struct MessageRow: View {
         HStack(alignment: .top, spacing: Theme.s3) {
             if isUser { Spacer(minLength: 60) } else { AvatarView(agent: agent, size: 32).padding(.top, 2) }
             VStack(alignment: isUser ? .trailing : .leading, spacing: Theme.s1 + 2) {
+                if showsName, !isUser, let agent {
+                    Text(agent.name).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }
                 if !(isUser && message.content.isEmpty) {
                     Group {
                         if message.content.isEmpty && message.role == .assistant {
                             ProgressView().controlSize(.small).padding(Theme.s3)
                         } else {
-                            Text(LocalizedStringKey(message.content))
+                            Text(LocalizedStringKey(mentionNames.isEmpty ? message.content
+                                                    : StartupDetail.boldMentions(message.content, names: mentionNames)))
                                 .font(.system(size: 14))
                                 .lineSpacing(3)
                                 .textSelection(.enabled)
@@ -396,5 +435,96 @@ private struct DropHint: View {
             }
             .padding(8)
             .allowsHitTesting(false)
+    }
+}
+
+/// Who's in the meeting room: their avatars, remove with ×, and Add agent.
+private struct ParticipantsBar: View {
+    @Environment(AppStore.self) private var store
+    let conversation: Conversation
+
+    var body: some View {
+        let inRoom = store.participants(in: conversation)
+        HStack(spacing: Theme.s2) {
+            Label("Meeting room", systemImage: "person.3.fill").font(.callout.weight(.semibold)).foregroundStyle(.tint)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(inRoom) { agent in
+                        HStack(spacing: 5) {
+                            AvatarView(agent: agent, size: 22)
+                            Text(agent.name).font(.callout)
+                            Button { remove(agent) } label: { Image(systemName: "xmark.circle.fill") }
+                                .buttonStyle(.borderless).foregroundStyle(.secondary)
+                                .help("Remove \(agent.name) from the room")
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Theme.surface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.border))
+                    }
+                }
+            }
+            Menu {
+                ForEach(store.agents.filter { agent in !inRoom.contains { $0.id == agent.id } }) { agent in
+                    Button("\(agent.emoji) \(agent.name)") { add(agent) }
+                }
+            } label: {
+                Label("Add agent", systemImage: "person.badge.plus")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.horizontal, Theme.s6)
+        .padding(.vertical, Theme.s2)
+        .background(.bar)
+    }
+
+    private func add(_ agent: Agent) {
+        store.setParticipants((conversation.participantIDs ?? []) + [agent.id], in: conversation.id)
+    }
+
+    private func remove(_ agent: Agent) {
+        store.setParticipants((conversation.participantIDs ?? []).filter { $0 != agent.id }, in: conversation.id)
+    }
+}
+
+/// An empty meeting room: pick who joins.
+private struct PickRoom: View {
+    @Environment(AppStore.self) private var store
+    let conversation: Conversation
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: Theme.s4) {
+                Image(systemName: "person.3.fill").font(.system(size: 40)).foregroundStyle(.tint)
+                Text("Who's in the meeting?").headlineStyle(26)
+                Text("Pick the agents. Everyone answers each message in turn, or tag @Name to ask one.")
+                    .foregroundStyle(.secondary)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 200), spacing: Theme.s3)], spacing: Theme.s3) {
+                    ForEach(store.agents) { agent in
+                        Button {
+                            store.setParticipants((conversation.participantIDs ?? []) + [agent.id], in: conversation.id)
+                        } label: {
+                            HStack(spacing: Theme.s2) {
+                                AvatarView(agent: agent, size: 34)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(agent.name).font(.callout.weight(.semibold))
+                                    Text(agent.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(Theme.s2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border))
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: 820)
+            }
+            .padding(Theme.s8)
+            .frame(maxWidth: .infinity)
+        }
     }
 }

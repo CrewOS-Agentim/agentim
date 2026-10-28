@@ -1,10 +1,22 @@
 import SwiftUI
 
+/// Edits one agent in place (the right side of Agents). Changes apply when you press Save.
 struct AgentEditorView: View {
     @Environment(AppStore.self) private var store
-    @Environment(\.dismiss) private var dismiss
-    @State var agent: Agent
+    @State private var agent: Agent
+    private let original: Agent
+    let isNew: Bool
     let onSave: (Agent) -> Void
+    var onDelete: ((Agent) -> Void)?
+    @State private var confirmingDelete = false
+
+    init(agent: Agent, isNew: Bool = false, onSave: @escaping (Agent) -> Void, onDelete: ((Agent) -> Void)? = nil) {
+        _agent = State(initialValue: agent)
+        original = agent
+        self.isNew = isNew
+        self.onSave = onSave
+        self.onDelete = onDelete
+    }
 
     @State private var isRemote = false
     @State private var endpoint = ""
@@ -12,14 +24,15 @@ struct AgentEditorView: View {
     @State private var remoteKey = ""
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            header
+            Divider()
             Form {
                 Section {
-                    HStack {
-                        TextField("🤖", text: $agent.emoji).frame(width: 44).font(.largeTitle)
-                        TextField("Name", text: $agent.name).font(.title3)
-                    }
-                    TextField("What is this agent for?", text: $agent.summary)
+                    TextField("Name", text: $agent.name)
+                    TextField("Emoji", text: $agent.emoji)
+                    TextField("What is this agent for?", text: $agent.summary, axis: .vertical)
+                        .lineLimit(1...3)
                 }
 
                 Section {
@@ -72,13 +85,7 @@ struct AgentEditorView: View {
                     }
                 }
             }
-            .navigationTitle(agent.name.isEmpty ? "New Agent" : agent.name)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: save).disabled(!isValid)
-                }
-            }
+            .formStyle(.grouped)
             .onAppear {
                 if case .remote(let url, let model) = agent.kind {
                     isRemote = true
@@ -88,6 +95,47 @@ struct AgentEditorView: View {
                 }
             }
         }
+    }
+
+    /// Avatar, name and the actions, always visible above the form.
+    private var header: some View {
+        HStack(spacing: Theme.s3) {
+            AvatarView(agent: agent, size: 48)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(agent.name.isEmpty ? "New agent" : agent.name).headlineStyle(20).lineLimit(1)
+                if hasChanges {
+                    Text("Unsaved changes").font(.caption).foregroundStyle(.orange)
+                } else if !agent.summary.isEmpty {
+                    Text(agent.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer()
+            if let onDelete {
+                Button(role: .destructive) { confirmingDelete = true } label: { Image(systemName: "trash") }
+                    .help(isNew ? "Discard this agent" : "Delete \(agent.name)")
+                    .confirmationDialog(isNew ? "Discard this new agent?" : "Delete \(agent.name)?", isPresented: $confirmingDelete) {
+                        Button(isNew ? "Discard" : "Delete", role: .destructive) { onDelete(agent) }
+                    } message: {
+                        Text(isNew ? "It hasn't been saved yet." : "Its conversations stay, but they'll use the default agent.")
+                    }
+            }
+            Button("Revert") { agent = original }
+                .disabled(!hasChanges || isNew)
+            Button(isNew ? "Create" : "Save", action: save)
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(!isValid || !(hasChanges || isNew))
+        }
+        .padding(.horizontal, Theme.s6)
+        .padding(.vertical, Theme.s3)
+    }
+
+    private var hasChanges: Bool {
+        if agent != original { return true }
+        if case .remote(let url, let model) = original.kind {
+            return !isRemote || endpoint != url.absoluteString || remoteModel != model
+        }
+        return isRemote
     }
 
     private var isValid: Bool {
@@ -111,6 +159,5 @@ struct AgentEditorView: View {
             agent.kind = .assistant
         }
         onSave(agent)
-        dismiss()
     }
 }

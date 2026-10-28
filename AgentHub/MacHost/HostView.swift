@@ -24,6 +24,49 @@ struct HostView: View {
                     .padding(.vertical, 4)
                 }
 
+                Section {
+                    HStack(spacing: 10) {
+                        Button { Task { await host.start() } } label: { Label("Start", systemImage: "play.fill") }
+                            .buttonStyle(.borderedProminent).tint(.green)
+                        Button { Task { await host.restart() } } label: { Label("Restart", systemImage: "arrow.clockwise") }
+                        Button { Task { await host.stop() } } label: { Label("Stop", systemImage: "stop.fill") }
+                            .tint(.red)
+                        Spacer()
+                        Text(host.summary).font(.callout).foregroundStyle(.secondary)
+                    }
+                    .controlSize(.large)
+                    .disabled(host.busy != nil || !host.dockerRunning)
+                    LabeledContent {
+                        HStack {
+                            Text(host.loadedModels.isEmpty ? "None loaded" : host.memoryInUse).foregroundStyle(.secondary)
+                            Button("Free memory", systemImage: "memorychip") { Task { await host.freeMemory() } }
+                                .disabled(host.loadedModels.isEmpty || host.busy != nil)
+                                .help("Unload the models now. They load again on the next message.")
+                        }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Label("Models in memory", systemImage: "cpu")
+                            ForEach(host.loadedModels) { model in
+                                Text("\(model.name) · \(model.gigabytes)").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    LabeledContent {
+                        HStack {
+                            Text(host.ltxRunning ? "Running" : "Closed").foregroundStyle(.secondary)
+                            Button("Stop LTX", systemImage: "stop.circle") { Task { await host.stopLTX() } }
+                                .disabled(!host.ltxRunning || host.busy != nil)
+                                .help("Quit LTX Desktop to free its GPU memory. It opens again when you ask for a video or image.")
+                        }
+                    } label: {
+                        Label("LTX Desktop (video & images)", systemImage: "film")
+                    }
+                } header: {
+                    Text("Quick controls")
+                } footer: {
+                    Text("Start, stop or restart all the Docker containers. Models unload by themselves 5 minutes after their last use; Free memory does it now.")
+                }
+
                 Section("Stack") {
                     LabeledContent("Folder") {
                         HStack {
@@ -181,6 +224,9 @@ struct MenuBarContent: View {
         Button("Start stack") { Task { await host.start() } }
         Button("Restart stack") { Task { await host.restart() } }
         Button("Stop stack") { Task { await host.stop() } }
+        Divider()
+        Button("Free memory (unload models)") { Task { await host.freeMemory() } }
+        Button("Stop LTX Desktop") { Task { await host.stopLTX() } }
         Divider()
         Button("Open agentim") {
             openWindow(id: "main")

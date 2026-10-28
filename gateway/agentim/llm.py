@@ -1,13 +1,31 @@
 """Non-streaming completions: channels send whole messages."""
 
+import contextvars
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
 class LLMError(Exception):
     pass
+
+
+# What the current model call is for ("Telegram chat", "Startup meeting · Leafy · Maya"); the runner shows it
+# on the Status page. Set it around a call with `labelled(...)`.
+task_label = contextvars.ContextVar("task_label", default=None)
+
+
+class labelled:
+    def __init__(self, label):
+        self.label = label
+
+    def __enter__(self):
+        self.token = task_label.set(self.label)
+
+    def __exit__(self, *exc):
+        task_label.reset(self.token)
 
 
 def post(url, body, headers, timeout):
@@ -45,6 +63,8 @@ class LLM:
             url, headers = "https://api.openai.com/v1/chat/completions", {"Authorization": f"Bearer {self.config.openai_key}"}
         else:
             url, headers = f"{model.runner_url}/v1/chat/completions", {"Authorization": f"Bearer {self.config.runner_token}"}
+            if task_label.get():
+                headers["X-Agentim-Task"] = urllib.parse.quote(task_label.get()[:120])  # headers are ASCII
         full = ([{"role": "system", "content": system}] if system else []) + messages
         # Media models only need the last prompt.
         if model.is_media:

@@ -193,6 +193,121 @@ final class AppStore {
 
     func agent(for conversation: Conversation) -> Agent? { agents.first { $0.id == conversation.agentID } }
 
+    // MARK: - Meeting rooms
+
+    /// A chat with several agents; each answers in turn (or only the ones you @mention).
+    @discardableResult
+    func newMeeting(with participants: [Agent]) -> Conversation {
+        var conversation = Conversation(title: "Meeting", agentID: participants.first?.id ?? agents.first?.id ?? UUID())
+        conversation.participantIDs = participants.map(\.id)
+        conversation.title = "Meeting: " + participants.prefix(3).map(\.name).joined(separator: ", ")
+            + (participants.count > 3 ? " +\(participants.count - 3)" : "")
+        conversations.insert(conversation, at: 0)
+        return conversation
+    }
+
+    func participants(in conversation: Conversation) -> [Agent] {
+        (conversation.participantIDs ?? []).compactMap { id in agents.first { $0.id == id } }
+    }
+
+    func setParticipants(_ ids: [UUID], in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].participantIDs = ids
+    }
+
+    /// The agents a message is for: the ones @mentioned by name (first word, case-insensitive), else everyone.
+    nonisolated static func addressed(_ text: String, among agents: [Agent]) -> [Agent] {
+        let mentions = Set(text.matches(of: /@([\w-]+)/).map { $0.1.lowercased() })
+        guard !mentions.isEmpty else { return agents }
+        let picked = agents.filter { agent in
+            let words = agent.name.lowercased().split(separator: " ").map(String.init)
+            return mentions.contains(words.first ?? "") || mentions.contains(words.joined(separator: "-"))
+        }
+        return picked.isEmpty ? agents : picked
+    }
+
+    /// The meeting so far as a transcript, with the person each line is from.
+    func transcript(_ conversation: Conversation, limit: Int = 16) -> String {
+        conversation.messages.suffix(limit).filter { !$0.isError && !$0.content.isEmpty }.map { message in
+            let who = message.role == .user ? "You (the founder)"
+                : message.agentID.flatMap { id in agents.first { $0.id == id }?.name } ?? "Assistant"
+            return "\(who): \(message.modelContent)"
+        }.joined(separator: "\n\n")
+    }
+
+    /// Posts the message, then lets each addressed agent answer in turn, each seeing the replies before it.
+    func sendToMeeting(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID) {
+        guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[index].messages.append(ChatMessage(role: .user, content: text, attachments: attachments.nilIfEmpty))
+        let everyone = participants(in: conversations[index])
+        let speakers = Self.addressed(text, among: everyone)
+        streamingConversationIDs.insert(conversationID)
+        Task {
+            defer { streamingConversationIDs.remove(conversationID) }
+            for agent in speakers {
+                await meetingReply(from: agent, others: everyone.filter { $0.id != agent.id }, in: conversationID)
+            }
+        }
+    }
+
+    private func meetingReply(from agent: Agent, others: [Agent], in conversationID: UUID) async {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
+        let names = others.map(\.name).joined(separator: ", ")
+        let ask = """
+        You're in a meeting with the founder\(names.isEmpty ? "" : " and \(names)"). Here's the conversation so far:
+
+        \(transcript(conversation))
+
+        Reply now as \(agent.name), from your own expertise. Build on (or push back on) what others said, address them \
+        by name when you do, don't repeat their points, and keep it under 180 words. Start with "\(agent.name):".
+        """
+        let reply = ChatMessage(role: .assistant, content: "", agentID: agent.id)
+        guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[c].messages.append(reply)
+        do {
+            let decision = try ModelRouter(available: availableModels, settings: router).route(
+                RoutingRequest(text: ask, history: [], agent: agent, conversationPin: conversation.pinnedModelID, isOnline: isOnline))
+            let targets = ([decision.model] + decision.fallbacks.prefix(1)).compactMap { model in client(for: model).map { (model, $0) } }
+            guard !targets.isEmpty else { throw RoutingError.noModelsAvailable }
+            let system = systemPrompt(agent: agent, message: ask)
+            for (model, client) in targets {
+                updateReply(reply.id, in: conversationID) {
+                    $0.content = ""
+                    $0.modelID = model.id
+                    $0.routingReason = "\(agent.name) in the meeting"
+                }
+                do {
+                    let request = ChatRequest(model: model.modelName, system: system,
+                                              messages: [ChatMessage(role: .user, content: ask)])
+                    for try await chunk in client.stream(request) {
+                        updateReply(reply.id, in: conversationID) { $0.content += chunk }
+                    }
+                    // Small models often echo "Name:"; the bubble already shows who's talking.
+                    updateReply(reply.id, in: conversationID) {
+                        $0.content = Self.withoutSpeakerPrefix($0.content, name: agent.name)
+                    }
+                    return
+                } catch {
+                    if let content = message(reply.id, in: conversationID)?.content, !content.isEmpty { return }
+                }
+            }
+            throw RoutingError.noModelsAvailable
+        } catch {
+            updateReply(reply.id, in: conversationID) {
+                $0.isError = true
+                $0.content = "\(agent.name) couldn't answer: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    nonisolated static func withoutSpeakerPrefix(_ text: String, name: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["**\(name):**", "**\(name)**:", "\(name):"] where trimmed.hasPrefix(prefix) {
+            return String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
+    }
+
     func isStreaming(_ id: UUID) -> Bool { streamingConversationIDs.contains(id) }
 
     /// Router preview for the composer ("will go to …").

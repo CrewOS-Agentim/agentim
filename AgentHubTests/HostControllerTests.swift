@@ -104,4 +104,69 @@ final class HostControllerTests: XCTestCase {
         XCTAssertLessThanOrEqual(DeviceMemory.availableToAppBytes, DeviceMemory.physicalBytes)
         XCTAssertEqual(DeviceMemory.appCeilingBytes, Int64(Double(DeviceMemory.physicalBytes) * 0.75))
     }
+
+    func testDecodesModelsInMemory() throws {
+        let json = #"{"models":[{"id":"ollama/qwen3:4b","name":"qwen3:4b","size_bytes":5100000000,"vram_bytes":0}],"ltx_running":true}"#
+        let loaded = try JSONDecoder().decode(HostController.LoadedResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(loaded.models.first?.name, "qwen3:4b")
+        XCTAssertEqual(loaded.models.first?.gigabytes, "5.1 GB")
+        XCTAssertEqual(loaded.ltx_running, true)
+    }
+
+    func testParsesDockerPS() {
+        let output = """
+        {"Names":"agentim-ollama-1","State":"running","Status":"Up 2 hours","Labels":"com.docker.compose.project=agentim,com.docker.compose.service=ollama"}
+        {"Names":"agentim-gateway-1","State":"running","Status":"Up 1 minute (unhealthy)","Labels":"com.docker.compose.service=gateway,x=y"}
+        {"Names":"agentim-voice-1","State":"exited","Status":"Exited (1) 3 minutes ago","Labels":"com.docker.compose.service=voice"}
+        not json
+        """
+        let containers = HostController.parseDockerPS(output)
+        XCTAssertEqual(containers.map(\.service), ["gateway", "ollama", "voice"])
+        XCTAssertEqual(containers.first { $0.service == "voice" }?.isRunning, false)
+        XCTAssertEqual(containers.first { $0.service == "gateway" }?.status, "Up 1 minute (unhealthy)")
+        XCTAssertEqual(containers.first { $0.service == "ollama" }?.name, "agentim-ollama-1")
+    }
+
+    func testLogFilter() {
+        let log = "loading model qwen\nserving on :11434\nModel unloaded"
+        XCTAssertEqual(LogsView.filter(log, by: "model"), "loading model qwen\nModel unloaded")
+        XCTAssertEqual(LogsView.filter(log, by: "  "), log, "blank filter shows everything")
+        let ollama = """
+        [GIN] 2026/10/28 - 18:44:41 | 200 | 21µs | 172.21.0.4 | GET      "/api/ps"
+        time=2026-10-28T18:45:00 level=INFO msg="loading model" model=qwen3
+        [GIN] 2026/10/28 - 18:45:25 | 200 | 38µs | 172.21.0.4 | GET      "/api/version"
+        [GIN] 2026/10/28 - 18:45:30 | 200 | 2.1s | 172.21.0.4 | POST     "/v1/chat/completions"
+        """
+        XCTAssertEqual(LogsView.withoutStatusChecks(ollama).split(separator: "\n").count, 2,
+                       "model loading and chat requests stay; polling goes")
+    }
+
+    func testParsesDockerStats() {
+        let output = """
+        {"Name":"agentim-ollama-1","CPUPerc":"312.50%","MemUsage":"2.71GiB / 7.65GiB","MemPerc":"35.43%"}
+        {"Name":"someone-else-1","CPUPerc":"1.00%","MemUsage":"1MiB / 7.65GiB","MemPerc":"0.01%"}
+        {"Name":"agentim-gateway-1","CPUPerc":"0.40%","MemUsage":"61MiB / 7.65GiB","MemPerc":"0.78%"}
+        """
+        let stats = StatusModel.parseDockerStats(output)
+        XCTAssertEqual(stats.map(\.service), ["gateway", "ollama"], "only agentim's containers")
+        XCTAssertEqual(stats[1].cpuPercent, 312.5)
+        XCTAssertEqual(stats[1].memoryUsage, "2.71GiB / 7.65GiB")
+    }
+
+    func testDecodesTasks() throws {
+        let json = #"{"running":[{"id":"a","model":"ollama/qwen3:4b","label":"Telegram chat","preview":"hi","started":10,"seconds":2.5}],"recent":[{"id":"b","model":"ltx/video","label":"API chat","started":5,"ended":8,"seconds":75.0,"ok":false,"error":"busy"}],"now":12}"#
+        let snapshot = try JSONDecoder().decode(StatusModel.TaskSnapshot.self, from: Data(json.utf8))
+        XCTAssertEqual(snapshot.running.first?.modelName, "qwen3:4b")
+        XCTAssertEqual(snapshot.running.first?.duration, "2.5 s")
+        XCTAssertEqual(snapshot.recent.first?.duration, "1 min 15 s")
+        XCTAssertEqual(snapshot.recent.first?.ok, false)
+    }
+
+    func testMacCPUAndMemoryReadings() {
+        XCTAssertNotNil(StatusModel.cpuTicks())
+        let memory = StatusModel.memory()
+        XCTAssertEqual(memory.total, ProcessInfo.processInfo.physicalMemory)
+        XCTAssertGreaterThan(memory.used, 0)
+        XCTAssertLessThan(memory.fraction, 1.0)
+    }
 }

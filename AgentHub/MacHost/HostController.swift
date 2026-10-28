@@ -39,6 +39,47 @@ final class HostController {
     /// The ChatGPT connector URL while the tunnel is up (it contains the MCP secret: show, don't log).
     private(set) var chatGPTConnectorURL: String?
     private(set) var connectorNote: String?
+    /// Models in memory right now (from the Docker runner) and whether LTX Desktop is running (native runner).
+    private(set) var loadedModels: [LoadedModel] = []
+    /// agentim's containers as `docker ps` sees them (running or not).
+    private(set) var containers: [Container] = []
+
+    struct Container: Identifiable, Equatable {
+        let name: String      // agentim-ollama-1
+        let service: String   // ollama
+        let state: String     // running / exited / restarting
+        let status: String    // "Up 2 hours (healthy)"
+        var id: String { name }
+        var isRunning: Bool { state == "running" }
+    }
+
+    /// Where logs come from: a container, or the native runner on this Mac (LTX, local coding agents).
+    enum LogSource: Hashable, Identifiable {
+        case container(String)  // compose service name
+        case nativeRunner
+        var id: String { title }
+        var title: String {
+            switch self {
+            case .container(let service): service
+            case .nativeRunner: "runner (this Mac)"
+            }
+        }
+    }
+
+    /// The log the Logs window shows.
+    var logSource: LogSource = .container("ollama")
+    private(set) var ltxRunning = false
+
+    struct LoadedModel: Decodable, Identifiable, Equatable {
+        let id: String
+        let name: String
+        let size_bytes: Int64?
+        var gigabytes: String { String(format: "%.1f GB", Double(size_bytes ?? 0) / 1_000_000_000) }
+    }
+
+    var memoryInUse: String {
+        String(format: "%.1f GB", Double(loadedModels.compactMap(\.size_bytes).reduce(0, +)) / 1_000_000_000)
+    }
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
@@ -75,7 +116,7 @@ final class HostController {
     func startPolling() {
         guard timer == nil, !isDemo else { return }
         Task { await refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
             Task { await self?.refresh() }
         }
     }
@@ -86,14 +127,77 @@ final class HostController {
         if dockerRunning, let root = stackRoot {
             let ps = await Shell.run(["docker", "compose", "ps", "--all", "--format", "json"], in: root)
             services = ps.ok ? Self.parseComposePS(ps.output) : []
+            let docker = await Shell.run(["docker", "ps", "--all", "--filter", "label=com.docker.compose.project=agentim",
+                                          "--format", "{{json .}}"])
+            containers = docker.ok ? Self.parseDockerPS(docker.output) : []
         } else {
             services = []
+            containers = []
         }
+        await refreshMemory()
         power = Self.parsePower(await Shell.run(["pmset", "-g", "ps"]).output)
         lidSleepDisabled = Self.parseSleepDisabled(await Shell.run(["pmset", "-g"]).output)
         helpers = Self.helperPlists.mapValues {
             FileManager.default.fileExists(atPath: NSString(string: $0).expandingTildeInPath)
         }
+    }
+
+    // MARK: - Memory: models and LTX
+
+    private var runnerToken: String? {
+        guard let root = stackRoot,
+              let env = try? String(contentsOf: root.appendingPathComponent(".env"), encoding: .utf8)
+        else { return nil }
+        return Self.parseEnv(env)["RUNNER_TOKEN"]
+    }
+
+    /// GET a runner endpoint with the stack's token (nil if it isn't reachable).
+    func runnerData(_ port: Int, _ path: String) async -> Data? { await runner(port, path) }
+
+    private func runner(_ port: Int, _ path: String, post: Bool = false) async -> Data? {
+        guard let token = runnerToken, let url = URL(string: "http://localhost:\(port)/\(path)") else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: post ? 90 : 5)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if post {
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = Data("{}".utf8)
+        }
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
+        return data
+    }
+
+    struct LoadedResponse: Decodable { let models: [LoadedModel]; let ltx_running: Bool? }
+
+    func refreshMemory() async {
+        if let data = await runner(8765, "v1/models/loaded"),
+           let loaded = try? JSONDecoder().decode(LoadedResponse.self, from: data) {
+            loadedModels = loaded.models
+        } else {
+            loadedModels = []
+        }
+        if let data = await runner(8766, "v1/models/loaded"),
+           let native = try? JSONDecoder().decode(LoadedResponse.self, from: data) {
+            ltxRunning = native.ltx_running ?? false
+        }
+    }
+
+    /// Unloads every model from memory now; they load again on the next chat.
+    func freeMemory() async {
+        busy = "Freeing memory…"
+        defer { busy = nil }
+        _ = await runner(8765, "v1/models/unload", post: true)
+        await refreshMemory()
+    }
+
+    /// Quits LTX Desktop (it opens again by itself when someone asks for a video or image).
+    func stopLTX() async {
+        busy = "Stopping LTX…"
+        defer { busy = nil }
+        _ = await runner(8766, "v1/ltx/stop", post: true)
+        try? await Task.sleep(for: .seconds(2))
+        await refreshMemory()
     }
 
     // MARK: - Actions
@@ -218,6 +322,61 @@ final class HostController {
     // MARK: - Parsing (pure, unit-tested)
 
     /// `docker compose ps --format json` prints one object per line (newer) or one array (older).
+    /// `docker ps --format '{{json .}}'` lines → containers, by compose service.
+    nonisolated static func parseDockerPS(_ output: String) -> [Container] {
+        struct Row: Decodable {
+            let Names: String
+            let State: String
+            let Status: String
+            let Labels: String?
+        }
+        return output.split(separator: "\n").compactMap { line -> Container? in
+            guard let row = try? JSONDecoder().decode(Row.self, from: Data(line.utf8)) else { return nil }
+            let service = (row.Labels ?? "").split(separator: ",")
+                .first { $0.hasPrefix("com.docker.compose.service=") }
+                .map { String($0.dropFirst("com.docker.compose.service=".count)) } ?? row.Names
+            return Container(name: row.Names, service: service, state: row.State, status: row.Status)
+        }
+        .sorted { $0.service < $1.service }
+    }
+
+    // MARK: - Logs
+
+    static let nativeRunnerLog = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/agentim/runner.log")
+
+    var logSources: [LogSource] {
+        containers.map { LogSource.container($0.service) } + [.nativeRunner]
+    }
+
+    /// The last `lines` lines of a log (stdout and stderr together).
+    func logs(_ source: LogSource, lines: Int = 300) async -> String {
+        switch source {
+        case .container(let service):
+            guard let container = containers.first(where: { $0.service == service }) else {
+                return "\(service) isn't created yet. Start the stack in This Mac."
+            }
+            let result = await Shell.run(["docker", "logs", "--tail", String(lines), "--timestamps", container.name])
+            return result.output.isEmpty ? "(no output yet)" : result.output
+        case .nativeRunner:
+            guard let text = try? String(contentsOf: Self.nativeRunnerLog, encoding: .utf8) else {
+                return "No log yet at \(Self.nativeRunnerLog.path). Install the always-on helpers in This Mac."
+            }
+            return text.split(separator: "\n", omittingEmptySubsequences: false).suffix(lines).joined(separator: "\n")
+        }
+    }
+
+    /// Follows the log live in Terminal.
+    func openLogsInTerminal(_ source: LogSource) {
+        switch source {
+        case .container(let service):
+            guard let container = containers.first(where: { $0.service == service }) else { return }
+            Shell.runInTerminal("docker logs -f --tail 200 \(container.name)")
+        case .nativeRunner:
+            Shell.runInTerminal("tail -n 200 -f '\(Self.nativeRunnerLog.path)'")
+        }
+    }
+
     nonisolated static func parseComposePS(_ output: String) -> [Service] {
         struct Row: Decodable {
             let Service: String
@@ -285,6 +444,14 @@ final class HostController {
     }
 
     private func seedDemo() {
+        containers = [
+            Container(name: "agentim-gateway-1", service: "gateway", state: "running", status: "Up 3 hours (healthy)"),
+            Container(name: "agentim-ollama-1", service: "ollama", state: "running", status: "Up 3 hours"),
+            Container(name: "agentim-runner-1", service: "runner", state: "running", status: "Up 3 hours"),
+            Container(name: "agentim-voice-1", service: "voice", state: "running", status: "Up 3 hours"),
+            Container(name: "agentim-whatsapp-1", service: "whatsapp", state: "running", status: "Up 3 hours"),
+        ]
+        loadedModels = [LoadedModel(id: "ollama/qwen3-4b", name: "qwen3-4b-instruct-2507", size_bytes: 2_500_000_000)]
         stackRoot = URL(fileURLWithPath: "/Users/you/agentim")
         dockerRunning = true
         services = Self.services.map { Service(name: $0, state: "running", health: $0 == "gateway" ? "healthy" : "") }
