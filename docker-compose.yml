@@ -57,7 +57,8 @@ services:
 
   # WhatsApp bridge (WAHA). Link your number once: open http://localhost:3000/dashboard and scan the QR.
   whatsapp:
-    image: devlikeapro/waha:latest
+    # Apple silicon needs the arm build (WAHA_TAG=arm); onboarding and install.sh set it.
+    image: devlikeapro/waha:${WAHA_TAG:-latest}
     environment:
       WAHA_API_KEY: ${WAHA_API_KEY:-}
       WHATSAPP_API_KEY: ${WAHA_API_KEY:-}

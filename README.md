@@ -37,6 +37,7 @@
 - 💬 answers you on **Telegram, WhatsApp and Slack**, in text or 🎙️ **voice notes**
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
+- 🚀 **Startup Mode**: a team of agents meets every 10–30 minutes to improve your startup idea
 - 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
 - 🔌 **stays up**: the lid closes, the Mac is on the charger, and Tim is still answering. Anything that stops gets started again.
@@ -196,6 +197,30 @@ triggers: release notes, changelog
 ---
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
+
+## 🚀 Startup Mode
+
+Turn it on, describe your idea, and a whole founding team of agents gets to work. **Every 10–30 minutes (at a random time) the team meets.** Three teammates who haven't spoken recently each:
+
+- read the idea, the living plan and what the others said
+- post concrete improvements
+- hand a question to a teammate (`@Design, can you…`)
+
+After each meeting the 🗂️ Chief of Staff updates the plan and sends you a two-line summary in your chat.
+
+| | Team |
+|---|---|
+| 💼 Sales | 🤝 Business Development · 📣 Marketing & Social · ⚙️ Marketing Automation |
+| 🛠️ Engineering | 🧭 Product · 🎨 Design · 💰 Finance & Fundraising |
+
+```
+/startup A monthly subscription that delivers and swaps office plants   ← start (from Telegram, WhatsApp or Slack)
+/startup        ← see the plan       /startup now   ← meet right away       /startup off   ← pause
+```
+
+Or use **Startup** in the Mac app: write the idea, set how often they meet, watch the team room, and read the plan as it evolves. It runs in the always-on gateway, so the team keeps working with the app closed. Rounds use your local models (routed to the strongest reasoning model you have).
+
+<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: the plan and the team room" width="85%"></p>
 
 ## 🎙️ Voice
 

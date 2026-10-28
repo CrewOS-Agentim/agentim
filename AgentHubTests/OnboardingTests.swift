@@ -90,6 +90,25 @@ final class EnvFileTests: XCTestCase {
         XCTAssertEqual(plan.ollamaRefs.count, 2)
     }
 
+    func testAppleSiliconGetsTheArmWhatsAppBridge() {
+        let plan = OnboardingPlan(chat: ModelCatalog.choice(id: "chat-qwen3-4b")!, coding: ModelCatalog.choice(id: "code-same")!,
+                                  voice: ModelCatalog.choice(id: "voice-off")!, media: ModelCatalog.choice(id: "media-off")!)
+        var arm = EnvFile(text: "WAHA_TAG=latest\n")
+        plan.apply(to: &arm, appleSilicon: true)
+        XCTAssertEqual(arm["WAHA_TAG"], "arm")
+        var intel = EnvFile(text: "")
+        plan.apply(to: &intel, appleSilicon: false)
+        XCTAssertEqual(intel["WAHA_TAG"], "latest")
+    }
+
+    /// Every image the stack pulls must exist for the Mac it runs on (WAHA's :latest is Intel-only).
+    func testComposeLetsTheWhatsAppTagFollowTheMac() throws {
+        let stack = try XCTUnwrap(StackFiles.bundled)
+        let compose = try String(contentsOf: stack.appendingPathComponent("docker-compose.yml"), encoding: .utf8)
+        XCTAssertTrue(compose.contains("devlikeapro/waha:${WAHA_TAG:-latest}"))
+        XCTAssertFalse(compose.contains("image: devlikeapro/waha:latest"))
+    }
+
     func testDockerFailuresAreExplained() {
         let creds = OnboardingModel.explainDockerFailure("Error getting credentials - err: signal: terminated, out: ``")
         XCTAssertTrue(creds.contains("Keychain"))
@@ -150,6 +169,12 @@ final class StackBundleTests: XCTestCase {
         _ = try StackFiles.ensureInstalled(repoRoot: nil)  // a second run (app update) keeps .env
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(".env"), encoding: .utf8), "KEEP=me\n")
         XCTAssertTrue(fm.isExecutableFile(atPath: root.appendingPathComponent("deploy/macos/install.sh").path))
+        // A stale copy (from an older app version) is refreshed even when passed back in as the root.
+        let compose = root.appendingPathComponent("docker-compose.yml")
+        try "image: devlikeapro/waha:latest\n".write(to: compose, atomically: true, encoding: .utf8)
+        _ = try StackFiles.ensureInstalled(repoRoot: root)
+        XCTAssertTrue(try String(contentsOf: compose, encoding: .utf8).contains("${WAHA_TAG:-latest}"))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent(".env"), encoding: .utf8), "KEEP=me\n")
         let repo = URL(fileURLWithPath: "/tmp/some-repo")
         XCTAssertEqual(try StackFiles.ensureInstalled(repoRoot: repo), repo, "a repo checkout is used as-is")
     }
