@@ -83,6 +83,24 @@ struct StartupDetail: Decodable, Equatable {
 
     var isInterview: Bool { status == "interview" }
 
+    /// Makes "@Name" bold (markdown) for agents of this startup, in any message.
+    func boldMentions(_ text: String) -> String {
+        let names = people.values.map { StartupModel.firstName($0.name) } + Array(people.keys)
+        return Self.boldMentions(text, names: names)
+    }
+
+    static func boldMentions(_ text: String, names: [String]) -> String {
+        var result = text
+        for range in ComposerTextView.mentionRanges(in: text, names: names).reversed() {
+            guard let swiftRange = Range(range, in: result) else { continue }
+            // Already bold ("**@Leo**")? Leave it.
+            let before = result[..<swiftRange.lowerBound].suffix(2)
+            if before == "**" { continue }
+            result.replaceSubrange(swiftRange, with: "**\(result[swiftRange])**")
+        }
+        return result
+    }
+
     /// Demo mode: show the founder's message without a gateway.
     mutating func appendDemoFounderMessage(_ text: String) {
         messages.append(Message(round: meeting?.round ?? rounds + 1, role: "founder", content: text,
@@ -527,6 +545,22 @@ final class StartupModel {
         return team.filter { person in
             query.isEmpty || person.name.lowercased().hasPrefix(query) || person.key.lowercased().hasPrefix(query)
         }
+    }
+
+    /// First names (and keys) of the agents you can tag, for highlighting.
+    var mentionNames: [String] {
+        (detail?.team ?? []).flatMap { [Self.firstName($0.name), $0.key] }
+    }
+
+    nonisolated static func firstName(_ name: String) -> String {
+        name.split(separator: " ").first.map(String.init) ?? name
+    }
+
+    /// Tab: complete the mention being typed with the first suggestion. Returns whether it did.
+    func completeMentionWithTab() -> Bool {
+        guard let first = mentionSuggestions().first else { return false }
+        completeMention(first)
+        return true
     }
 
     /// Replaces the partial "@na" with "@Nina ".

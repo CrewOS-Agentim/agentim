@@ -308,6 +308,41 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(meetings.first?.endDate.timeIntervalSince1970, 1300)
     }
 
+    func testMentionsAreBoldInMessages() {
+        let names = ["Sam", "Leo", "automation"]
+        XCTAssertEqual(StartupDetail.boldMentions("@Sam come up with 2 designs, @leo help", names: names),
+                       "**@Sam** come up with 2 designs, **@leo** help")
+        XCTAssertEqual(StartupDetail.boldMentions("**@Sam** already bold", names: names), "**@Sam** already bold")
+        XCTAssertEqual(StartupDetail.boldMentions("mail sam@leo.com or @Samantha", names: names),
+                       "mail sam@leo.com or @Samantha", "no partial names or emails")
+    }
+
+    func testMentionRangesForHighlighting() {
+        let text = "Hi @Nina and @nina, not @Ninja"
+        let ranges = ComposerTextView.mentionRanges(in: text, names: ["Nina"])
+        XCTAssertEqual(ranges.map { (text as NSString).substring(with: $0) }, ["@Nina", "@nina"])
+    }
+
+    @MainActor
+    func testTabCompletesTheMention() {
+        let model = StartupModel(demo: true)
+        model.founderDraft = "@Le"
+        XCTAssertTrue(model.completeMentionWithTab())
+        XCTAssertEqual(model.founderDraft, "@Leo ")
+        XCTAssertFalse(model.completeMentionWithTab(), "nothing left to complete: Tab acts normally")
+        XCTAssertTrue(model.mentionNames.contains("Leo"))
+    }
+
+    @MainActor
+    func testTabKeyGoesToTheOwnerFirst() {
+        let view = SubmitTextView()
+        var handled = 0
+        view.onTab = { handled += 1; return true }
+        view.insertTab(nil)
+        XCTAssertEqual(handled, 1)
+        XCTAssertEqual(view.string, "", "a handled Tab doesn't insert a tab character")
+    }
+
     @MainActor
     func testDemoHasManyStartupsAndNamedPeople() {
         let demo = StartupModel(demo: true)

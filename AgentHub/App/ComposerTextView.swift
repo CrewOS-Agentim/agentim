@@ -11,8 +11,12 @@ struct ComposerTextView: NSViewRepresentable {
     var maxHeight: CGFloat = 260
     var font: NSFont = .systemFont(ofSize: NSFont.systemFontSize + 2)
     var focusOnAppear = true
+    /// Names shown bold (and in the accent color) after "@" while typing, e.g. ["Sam", "Nina"].
+    var mentions: [String] = []
     var onSubmit: () -> Void
     @Binding var height: CGFloat
+    /// Tab: return true when handled (e.g. a mention was completed); otherwise Tab behaves normally.
+    var onTab: (() -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -26,6 +30,7 @@ struct ComposerTextView: NSViewRepresentable {
         let textView = SubmitTextView()
         textView.delegate = context.coordinator
         textView.onSubmit = { context.coordinator.parent.onSubmit() }
+        textView.onTab = { context.coordinator.parent.onTab?() ?? false }
         textView.isRichText = false
         textView.allowsUndo = true
         textView.font = font
@@ -54,9 +59,11 @@ struct ComposerTextView: NSViewRepresentable {
         guard let textView = scroll.documentView as? SubmitTextView else { return }
         if textView.string != text {
             textView.string = text
+            textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
             textView.needsDisplay = true
         }
         textView.placeholder = placeholder
+        context.coordinator.highlightMentions(textView)
         context.coordinator.recalculateHeight(textView)
     }
 
@@ -69,7 +76,23 @@ struct ComposerTextView: NSViewRepresentable {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
             textView.needsDisplay = true  // placeholder
+            highlightMentions(textView)
             recalculateHeight(textView)
+        }
+
+        /// Bold + accent color on "@Name" for the agents in `mentions`; plain text everywhere else.
+        func highlightMentions(_ textView: NSTextView) {
+            guard let storage = textView.textStorage else { return }
+            let font = parent.font
+            let whole = NSRange(location: 0, length: storage.length)
+            storage.beginEditing()
+            storage.setAttributes([.font: font, .foregroundColor: NSColor.labelColor], range: whole)
+            for range in ComposerTextView.mentionRanges(in: storage.string, names: parent.mentions) {
+                storage.addAttributes([.font: NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask),
+                                       .foregroundColor: NSColor.controlAccentColor], range: range)
+            }
+            storage.endEditing()
+            textView.typingAttributes = [.font: font, .foregroundColor: NSColor.labelColor]
         }
 
         func recalculateHeight(_ textView: NSTextView) {
@@ -84,9 +107,27 @@ struct ComposerTextView: NSViewRepresentable {
     }
 }
 
-/// NSTextView that turns plain Return into "submit".
+extension ComposerTextView {
+    /// Ranges of "@Name" (case-insensitive, whole word) for the given names.
+    static func mentionRanges(in text: String, names: [String]) -> [NSRange] {
+        let words = names.filter { !$0.isEmpty }.map(NSRegularExpression.escapedPattern(for:))
+        guard !words.isEmpty,
+              let regex = try? NSRegularExpression(pattern: "(?<![\\w@])@(\(words.joined(separator: "|")))\\b",
+                                                   options: .caseInsensitive)
+        else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).map(\.range)
+    }
+}
+
+/// NSTextView that turns plain Return into "submit" (and lets the owner handle Tab).
 final class SubmitTextView: NSTextView {
     var onSubmit: (() -> Void)?
+    var onTab: (() -> Bool)?
+
+    override func insertTab(_ sender: Any?) {
+        if onTab?() == true { return }
+        super.insertTab(sender)
+    }
     var placeholder = "" { didSet { if oldValue != placeholder { needsDisplay = true } } }
 
     override func keyDown(with event: NSEvent) {

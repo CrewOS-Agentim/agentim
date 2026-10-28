@@ -410,7 +410,7 @@ private struct TeamRoom: View {
                         }
                         ForEach(detail.messages) { message in
                             if message.role == "founder" {
-                                FounderBubble(message: message).id(message.id)
+                                FounderBubble(message: message, text: detail.boldMentions(message.content)).id(message.id)
                             } else {
                                 AgentMessageRow(detail: detail, message: message).id(message.id)
                             }
@@ -458,7 +458,8 @@ private struct TeamRoom: View {
                 ComposerTextView(text: $model.founderDraft,
                                  placeholder: detail.meeting != nil ? "Jump into the meeting… (@name to tag)" : "Message the agents… (@name to tag one)",
                                  minHeight: 44, maxHeight: 140, font: .systemFont(ofSize: NSFont.systemFontSize + 1),
-                                 focusOnAppear: false, onSubmit: { send() }, height: $draftHeight)
+                                 focusOnAppear: false, mentions: model.mentionNames, onSubmit: { send() },
+                                 height: $draftHeight, onTab: { model.completeMentionWithTab() })
                     .frame(height: draftHeight)
                     .padding(.horizontal, 6)
                     .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
@@ -510,7 +511,7 @@ private struct AgentMessageRow: View {
                     Text(person.title).font(.caption).foregroundStyle(.secondary)
                     Text("· meeting \(message.round)").font(.caption).foregroundStyle(.tertiary)
                 }
-                Text(LocalizedStringKey(message.content)).font(.callout).textSelection(.enabled)
+                Text(LocalizedStringKey(detail.boldMentions(message.content))).font(.callout).textSelection(.enabled)
             }
         }
         .padding(12)
@@ -521,13 +522,15 @@ private struct AgentMessageRow: View {
 /// The founder's own messages in the agents room, on the right like a chat.
 private struct FounderBubble: View {
     let message: StartupDetail.Message
+    /// The message with @mentions in bold.
+    let text: String
 
     var body: some View {
         HStack {
             Spacer(minLength: 50)
             VStack(alignment: .trailing, spacing: 3) {
                 Text("You · meeting \(message.round)").font(.caption).foregroundStyle(.secondary)
-                Text(LocalizedStringKey(message.content))
+                Text(LocalizedStringKey(text))
                     .font(.callout)
                     .foregroundStyle(.white)
                     .textSelection(.enabled)
@@ -760,7 +763,7 @@ private struct MeetingNotesView: View {
                                     Text(Date(timeIntervalSince1970: message.ts).formatted(date: .omitted, time: .shortened))
                                         .font(.caption).foregroundStyle(.tertiary)
                                 }
-                                Text(LocalizedStringKey(message.content)).font(.callout).textSelection(.enabled)
+                                Text(LocalizedStringKey(startup.boldMentions(message.content))).font(.callout).textSelection(.enabled)
                             }
                         }
                     }
