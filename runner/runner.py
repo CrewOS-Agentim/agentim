@@ -31,6 +31,7 @@ VERSION = "0.1.0"
 MB = 1024 * 1024
 IN_CONTAINER = os.path.exists("/.dockerenv") or os.environ.get("RUNNER_IN_CONTAINER") == "1"
 STATE_DIR = os.path.expanduser(os.environ.get("RUNNER_STATE_DIR", "~/.agenthub-runner"))
+REPOS_DIR = os.path.join(STATE_DIR, "repos")  # GitHub repos cloned for Startups & Ideas
 FILES_DIR = os.path.join(STATE_DIR, "files")
 
 
@@ -521,18 +522,31 @@ class LocalAgents:
     def mode(self):
         return "edit" if self.env.get("AGENTIM_LOCAL_AGENTS_MODE", "read").lower() == "edit" else "read"
 
-    def command(self, name, prompt):
+    def command(self, name, prompt, mode=None):
         spec = self.COMMANDS[name]
-        return [self.binary(name)] + [prompt if part == "{prompt}" else part for part in spec[self.mode()]]
+        return [self.binary(name)] + [prompt if part == "{prompt}" else part for part in spec[mode or self.mode()]]
 
-    def run_task(self, name, prompt, timeout=None):
+    def allowed_path(self, path):
+        """Inside a workspace, or one of the GitHub repos agentim cloned."""
+        path = os.path.realpath(path)
+        roots = self.workspaces() + [os.path.realpath(REPOS_DIR)]
+        return any(path == r or path.startswith(r + os.sep) for r in roots)
+
+    def run_task(self, name, prompt, timeout=None, cwd=None, mode=None):
+        """Runs a task with a local coding agent. `cwd` must be inside a workspace (or a cloned repo); `mode`
+        "edit" is used only when the caller confirmed it (the app's "Build it")."""
         if name not in self.available():
             raise RuntimeError(f"{name} isn't enabled on this Mac (AGENTIM_LOCAL_AGENTS) or isn't installed.")
         if not prompt.strip():
             raise RuntimeError("Tell the agent what to do.")
-        cwd = self.workspace_for(prompt)
+        if cwd:
+            cwd = os.path.realpath(os.path.expanduser(cwd))
+            if not self.allowed_path(cwd):
+                raise RuntimeError(f"{cwd} isn't in AGENTIM_WORKSPACES.")
+        else:
+            cwd = self.workspace_for(prompt)
         timeout = timeout or int(self.env.get("AGENTIM_LOCAL_AGENTS_TIMEOUT", "900"))
-        cmd = self.command(name, prompt)
+        cmd = self.command(name, prompt, mode)
         if self.env.get("AGENTIM_LOCAL_AGENTS_TMUX") in ("1", "true", "yes") and self.which("tmux"):
             return self.run_in_tmux(name, cmd, cwd, timeout)
         result = self.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
@@ -562,6 +576,103 @@ class LocalAgents:
 
 
 LOCAL_AGENTS = LocalAgents()
+
+
+# ---------------------------------------------------------------- projects (Startups & Ideas)
+
+class Projects:
+    """What the agents should know about a codebase: a local folder or a GitHub repo (cloned under REPOS_DIR)."""
+
+    REPO = re.compile(r"^(?:https?://github\.com/)?([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$")
+    SKIP = {".git", "node_modules", ".build", "build", "dist", "DerivedData", "__pycache__", ".venv", "venv",
+            ".next", "Pods", "target", ".idea", ".claude"}
+    MANIFESTS = ["package.json", "pyproject.toml", "requirements.txt", "go.mod", "Cargo.toml", "Package.swift",
+                 "project.yml", "Gemfile", "pom.xml", "build.gradle", "docker-compose.yml", "Dockerfile", "Makefile"]
+
+    def __init__(self, agents=None, run=subprocess.run, which=shutil.which):
+        self.agents, self.run, self.which = agents or LOCAL_AGENTS, run, which
+
+    def checkout(self, repo):
+        """Clones (or fast-forwards) a GitHub repo and returns its folder. Uses gh when available (private repos)."""
+        match = self.REPO.match(repo.strip())
+        if not match:
+            raise RuntimeError(f"{repo!r} isn't a GitHub repo (use owner/name).")
+        owner, name = match.groups()
+        path = os.path.join(REPOS_DIR, owner, name)
+        if os.path.isdir(os.path.join(path, ".git")):
+            self.run(["git", "-C", path, "pull", "--ff-only", "--quiet"], capture_output=True, timeout=120)
+            return path
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if self.which("gh"):
+            cmd = ["gh", "repo", "clone", f"{owner}/{name}", path, "--", "--depth", "50"]
+        else:
+            cmd = ["git", "clone", "--depth", "50", f"https://github.com/{owner}/{name}.git", path]
+        result = self.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0:
+            raise RuntimeError(f"Couldn't clone {owner}/{name}: {(result.stderr or '').strip()[-300:]}")
+        return path
+
+    def resolve(self, source):
+        """A source dict → its folder: {"type": "dir", "path": …} or {"type": "github", "repo": "owner/name"}."""
+        if source.get("type") == "github":
+            return self.checkout(source.get("repo", ""))
+        path = os.path.realpath(os.path.expanduser(source.get("path", "")))
+        if not os.path.isdir(path):
+            raise RuntimeError(f"{path} isn't a folder on this Mac.")
+        if not self.agents.allowed_path(path):
+            raise RuntimeError(f"{path} isn't in AGENTIM_WORKSPACES (add it from the app).")
+        return path
+
+    def tree(self, root, depth=2, limit=60):
+        lines = []
+        for current, dirs, files in os.walk(root):
+            level = current[len(root):].count(os.sep)
+            dirs[:] = sorted(d for d in dirs if d not in self.SKIP and not d.startswith("."))
+            if level >= depth:
+                dirs[:] = []
+            indent = "  " * level
+            if current != root:
+                lines.append(f"{indent[:-2]}{os.path.basename(current)}/")
+            for name in sorted(f for f in files if not f.startswith("."))[:12]:
+                lines.append(f"{indent}{name}")
+            if len(lines) >= limit:
+                break
+        return lines[:limit]
+
+    def summary(self, path, max_chars=1400):
+        """README start, stack (manifests), structure and recent commits, kept short for small models."""
+        name = os.path.basename(path.rstrip("/"))
+        parts = [f"## {name} ({path})"]
+        readme = next((os.path.join(path, f) for f in ("README.md", "README", "readme.md", "README.rst")
+                       if os.path.isfile(os.path.join(path, f))), None)
+        if readme:
+            text = open(readme, errors="replace").read(1500)
+            text = re.sub(r"<[^>]+>|!\[[^\]]*\]\([^)]*\)", "", text)
+            parts.append("README: " + " ".join(text.split())[:500])
+        stack = [m for m in self.MANIFESTS if os.path.exists(os.path.join(path, m))]
+        if stack:
+            parts.append("Stack files: " + ", ".join(stack))
+        parts.append("Structure:\n" + "\n".join(self.tree(path)[:30]))
+        log = self.run(["git", "-C", path, "log", "--oneline", "-8"], capture_output=True, text=True, timeout=20)
+        if log.returncode == 0 and log.stdout.strip():
+            parts.append("Recent commits:\n" + log.stdout.strip())
+        return "\n".join(parts)[:max_chars]
+
+    def context(self, sources, max_chars=3000):
+        """Summaries of every source; problems are reported inline instead of failing the whole call."""
+        out, folders = [], []
+        for source in sources:
+            try:
+                path = self.resolve(source)
+                folders.append({**source, "folder": path})
+                out.append(self.summary(path, max_chars=max_chars // max(1, len(sources))))
+            except Exception as e:
+                folders.append({**source, "error": str(e)})
+                out.append(f"## {source.get('repo') or source.get('path')}: unavailable ({e})")
+        return {"context": "\n\n".join(out)[:max_chars], "folders": folders}
+
+
+PROJECTS = Projects()
 
 
 class ClaudeSessions:
@@ -796,6 +907,28 @@ class Handler(BaseHTTPRequestHandler):
             session_id = path[len("/v1/claude/sessions/"):-len("/continue")]
             try:
                 return self.send_json(200, CLAUDE_SESSIONS.continue_session(session_id, body.get("prompt", "")))
+            except Exception as e:
+                return self.error(400, str(e))
+        if path == "/v1/projects/context":
+            if IN_CONTAINER:
+                return self.error(404, "Projects are read by the runner on the Mac.")
+            return self.send_json(200, PROJECTS.context(body.get("sources", []), int(body.get("max_chars", 3000))))
+        if path == "/v1/projects/task":
+            # One coding-agent task in one project folder: plan (read-only) or build (edit, confirmed in the app).
+            if IN_CONTAINER:
+                return self.error(404, "Projects are read by the runner on the Mac.")
+            try:
+                folder = PROJECTS.resolve(body.get("source", {}))
+                mode = "edit" if body.get("mode") == "edit" and body.get("confirmed") is True else "read"
+                output, cwd = LOCAL_AGENTS.run_task(body.get("agent", "claude-code"), body.get("prompt", ""),
+                                                    cwd=folder, mode=mode)
+                changed = ""
+                if mode == "edit":
+                    stat = subprocess.run(["git", "-C", cwd, "diff", "--stat"], capture_output=True, text=True, timeout=30)
+                    changed = stat.stdout.strip()[-1500:]
+                return self.send_json(200, {"folder": cwd, "mode": mode, "output": output[-6000:], "changed": changed})
+            except subprocess.TimeoutExpired:
+                return self.error(504, "The coding agent took too long and was stopped.")
             except Exception as e:
                 return self.error(400, str(e))
         if path == "/v1/models/unload":

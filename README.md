@@ -260,7 +260,7 @@ triggers: release notes, changelog
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
 
-## 🚀 Startup Mode
+## 🚀 Startups & Ideas
 
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 
@@ -285,6 +285,10 @@ Run **as many startups as you like**, each with its own team of agents who act l
 **Talk to your agents.** Type in the agents room (or `/startup say <n> <message>` in chat). During a meeting, the agents who speak next answer you first; between meetings, the next one starts from your message. **Tag someone** with `@`: "@Sam come up with 2 designs for the welcome email" and Sam answers right away. Typing `@` suggests your agents.
 
 **Review every meeting.** The **Meetings** tab lists each meeting with its date and time, who was there and Tim's summary; open one to read the whole conversation.
+
+**Link your code.** A startup can point at local folders and GitHub repos (`owner/name`, cloned on your Mac): every meeting starts with a short brief of each codebase (README, structure, stack, recent commits), so the agents improve what's really there.
+
+**Ideas for your code.** Choose **New → Idea for my code**, describe a feature, and pick the services it touches (one folder or repo each). **Plan with Claude Code** asks your local Claude Code to plan the change in *each* service, read-only, and posts every plan in the agents room before the team meets on it. **Build it…** (after you confirm) lets Claude Code make the changes in each service and reports the changed files; it never commits or pushes. Folders you pick are added to `AGENTIM_WORKSPACES`; agentim can't read anything else.
 
 **Make the team yours.** That's the default team: every startup can have its own (1–12 agents plus Tim). In the Mac app, click **Agents** to rename anyone, change their title, emoji or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. Agents you remove keep their messages in the agents room, marked *former*; the current team stops seeing them. In chat:
 

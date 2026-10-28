@@ -238,6 +238,71 @@ class LocalAgentsTests(unittest.TestCase):
                 agents.run_task("claude-code", "hi")
 
 
+class ProjectsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ws = os.path.realpath(os.path.join(self.tmp.name, "code"))
+        self.svc = os.path.join(self.ws, "orders-service")
+        os.makedirs(os.path.join(self.svc, "src", "api"))
+        open(os.path.join(self.svc, "README.md"), "w").write("# Orders service\n\nHandles <b>orders</b> and payments.")
+        open(os.path.join(self.svc, "package.json"), "w").write("{}")
+        open(os.path.join(self.svc, "src", "api", "orders.ts"), "w").write("")
+        os.makedirs(os.path.join(self.svc, "node_modules", "junk"))
+        self.calls = []
+
+        class Result:
+            returncode, stdout, stderr = 0, "abc123 Add refunds\ndef456 Initial commit", ""
+
+        def run(cmd, **kwargs):
+            self.calls.append(cmd)
+            return Result()
+
+        agents = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "claude-code", "AGENTIM_WORKSPACES": self.ws},
+                                    which=lambda n, path=None: f"/fake/{n}", run=run)
+        self.projects = runner.Projects(agents=agents, run=run, which=lambda n: None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_summary_has_readme_stack_structure_and_commits(self):
+        summary = self.projects.summary(self.svc)
+        self.assertIn("## orders-service", summary)
+        self.assertIn("README: # Orders service Handles orders and payments.", summary, "HTML stripped, whitespace folded")
+        self.assertIn("Stack files: package.json", summary)
+        self.assertIn("api/", summary)
+        self.assertNotIn("node_modules", summary)
+        self.assertIn("abc123 Add refunds", summary)
+
+    def test_folders_outside_the_workspaces_are_refused(self):
+        outside = os.path.join(self.tmp.name, "secret")
+        os.makedirs(outside)
+        context = self.projects.context([{"type": "dir", "path": self.svc}, {"type": "dir", "path": outside}])
+        self.assertIn("## orders-service", context["context"])
+        self.assertIn("isn't in AGENTIM_WORKSPACES", context["context"])
+        self.assertIn("error", context["folders"][1])
+
+    def test_github_repos_are_cloned_shallow(self):
+        original = runner.REPOS_DIR
+        runner.REPOS_DIR = os.path.join(self.tmp.name, "repos")
+        try:
+            path = self.projects.checkout("https://github.com/CrewOS-Agentim/agentim.git")
+            self.assertTrue(path.endswith(os.path.join("CrewOS-Agentim", "agentim")))
+            self.assertEqual(self.calls[-1][:4], ["git", "clone", "--depth", "50"])
+            with self.assertRaisesRegex(RuntimeError, "isn't a GitHub repo"):
+                self.projects.checkout("not a repo")
+        finally:
+            runner.REPOS_DIR = original
+
+    def test_edit_mode_only_when_asked_for(self):
+        agents = self.projects.agents
+        agents.run_task("claude-code", "plan the refunds feature", cwd=self.svc)
+        self.assertIn("plan", self.calls[-1])
+        agents.run_task("claude-code", "add the refunds feature", cwd=self.svc, mode="edit")
+        self.assertIn("acceptEdits", self.calls[-1])
+        with self.assertRaisesRegex(RuntimeError, "isn't in AGENTIM_WORKSPACES"):
+            agents.run_task("claude-code", "x", cwd=self.tmp.name)
+
+
 class TaskLogTests(unittest.TestCase):
     def test_running_then_history_newest_first(self):
         now = [1000.0]

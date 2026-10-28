@@ -9,6 +9,7 @@ the meeting into a living plan and sends the founder a short summary.
 """
 
 import json
+import os
 import logging
 import random
 import re
@@ -52,6 +53,8 @@ TEAM = [
 ]
 CEO = Person("ceo", "Agent Tim", "CEO", "🐙", "the plan, priorities and keeping the founder in the loop")
 FOUNDER = Person("founder", "Founder", "Founder", "🧑‍🚀", "the vision and the final call")
+# Claude Code on the founder's Mac, posting plans and build results for ideas.
+CODER = Person("claude-code", "Claude Code", "Coding agent on your Mac", "🤖", "planning and building changes in the code")
 MAX_FOUNDER_MESSAGE = 2000
 PEOPLE = {p.key: p for p in TEAM + [CEO]}
 MAX_TEAM = 12
@@ -151,6 +154,7 @@ def people_of(startup):
     people.update({p.key: p for p in team_of(startup)})
     people[CEO.key] = CEO
     people[FOUNDER.key] = FOUNDER
+    people[CODER.key] = CODER
     return people
 
 # Used when no model answers: five YC-partner questions, then five co-founder questions.
@@ -234,6 +238,29 @@ def mentioned(text, team, limit=3):
     return found[:limit]
 
 
+def normalize_sources(sources):
+    """[{"type": "dir", "path": …} | {"type": "github", "repo": "owner/name"}], deduplicated, at most 8."""
+    clean, seen = [], set()
+    for source in sources or []:
+        if not isinstance(source, dict):
+            continue
+        if source.get("type") == "github" and str(source.get("repo", "")).strip():
+            item = {"type": "github", "repo": str(source["repo"]).strip()}
+        elif source.get("type") == "dir" and str(source.get("path", "")).strip():
+            item = {"type": "dir", "path": str(source["path"]).strip()}
+        else:
+            continue
+        key = item.get("repo") or item.get("path")
+        if key not in seen:
+            seen.add(key)
+            clean.append(item)
+    return clean[:8]
+
+
+def source_label(source):
+    return source.get("repo") or os.path.basename(str(source.get("path", "")).rstrip("/")) or "project"
+
+
 def pick_speakers(last_spoke, count=3, rng=random, team=None):
     """Whoever spoke least recently goes first; ties broken randomly."""
     team = list(team or TEAM)
@@ -244,7 +271,13 @@ def pick_speakers(last_spoke, count=3, rng=random, team=None):
 
 def brief(startup):
     answers = "\n".join(f"Q: {q}\nA: {a}" for q, a in zip(startup["questions"], startup["answers"]) if a)
-    return f"Startup: {startup['name']}\nPitch: {startup['pitch']}" + (f"\n\nFounder's answers:\n{answers}" if answers else "")
+    if startup.get("kind") == "idea":
+        head = f"Idea: {startup['name']}\nThe feature to add (across the services below): {startup['pitch']}"
+    else:
+        head = f"Startup: {startup['name']}\nPitch: {startup['pitch']}"
+    code = startup.get("codebase")
+    return (head + (f"\n\nFounder's answers:\n{answers}" if answers else "")
+            + (f"\n\nThe code (improve it based on what's really there; name files when you can):\n{code}" if code else ""))
 
 
 def person_prompt(person, startup, discussion, team=None, playbook=""):
@@ -368,8 +401,9 @@ class StartupStore:
     """Startups, their interviews, plans and team messages, in the gateway's SQLite."""
 
     COLUMNS = ["id", "name", "pitch", "questions", "answers", "status", "plan", "min_minutes", "max_minutes",
-               "next_run", "rounds", "notify_channel", "notify_chat", "created", "updated", "team", "alumni"]
-    JSON_COLUMNS = ("questions", "answers", "team", "alumni")
+               "next_run", "rounds", "notify_channel", "notify_chat", "created", "updated", "team", "alumni",
+               "kind", "sources"]
+    JSON_COLUMNS = ("questions", "answers", "team", "alumni", "sources")
 
     def __init__(self, db: sqlite3.Connection, lock: threading.Lock):
         self.db, self.lock = db, lock
@@ -385,7 +419,7 @@ class StartupStore:
                 startup_id TEXT, round INTEGER, minutes TEXT, created REAL, PRIMARY KEY (startup_id, round))""")
             # Databases from before editable teams: add the new columns in place.
             existing = {row[1] for row in self.db.execute("PRAGMA table_info(startups)")}
-            for column in ("team", "alumni"):
+            for column in ("team", "alumni", "kind", "sources"):
                 if column not in existing:
                     self.db.execute(f"ALTER TABLE startups ADD COLUMN {column} TEXT")
 
@@ -492,18 +526,29 @@ class StartupMode:
 
     # ---- creating a startup: pitch → follow-up questions → team
 
-    def create(self, pitch, name=None, channel=None, chat_id=None, min_minutes=10, max_minutes=30, team=None):
+    def create(self, pitch, name=None, channel=None, chat_id=None, min_minutes=10, max_minutes=30, team=None,
+               kind="startup", sources=None):
+        """A startup (pitch → interview → team) or an idea (a feature for the linked code → straight to the team)."""
         pitch = pitch.strip()
+        kind = "idea" if kind == "idea" else "startup"
+        sources = normalize_sources(sources)
         if len(pitch) < 10:
-            raise ValueError("Tell me the pitch in a sentence or two.")
+            raise ValueError("Describe the feature in a sentence or two." if kind == "idea"
+                             else "Tell me the pitch in a sentence or two.")
+        if kind == "idea" and not sources:
+            raise ValueError("Pick at least one folder or GitHub repo for the idea.")
         min_minutes, max_minutes = sorted((max(1, int(min_minutes)), max(1, int(max_minutes))))
         name = (name or "").strip() or name_from_pitch(pitch)
         members = normalize_team(team) if team else [person_dict(p) for p in TEAM]
         startup = {
-            "id": uuid.uuid4().hex[:12], "name": name, "pitch": pitch, "questions": self.follow_up_questions(pitch),
-            "answers": [], "status": "interview", "plan": initial_plan(name, [Person(**m) for m in members]),
+            "id": uuid.uuid4().hex[:12], "name": name, "pitch": pitch,
+            # Ideas skip the founder interview: the code and the feature are the brief.
+            "questions": [] if kind == "idea" else self.follow_up_questions(pitch),
+            "answers": [], "status": "running" if kind == "idea" else "interview",
+            "plan": initial_plan(name, [Person(**m) for m in members]), "kind": kind, "sources": sources,
             "team": members, "alumni": [], "min_minutes": min_minutes,
-            "max_minutes": max_minutes, "next_run": None, "rounds": 0, "notify_channel": channel,
+            "max_minutes": max_minutes, "next_run": self.clock() + 60 if kind == "idea" else None, "rounds": 0,
+            "notify_channel": channel,
             "notify_chat": str(chat_id) if chat_id is not None else None, "created": self.clock(), "updated": self.clock(),
         }
         return self.store.save(startup)
@@ -571,6 +616,8 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         for key in ("name", "min_minutes", "max_minutes", "notify_channel", "notify_chat"):
             if fields.get(key) is not None:
                 startup[key] = fields[key]
+        if fields.get("sources") is not None:
+            startup["sources"] = normalize_sources(fields["sources"])
         startup["min_minutes"], startup["max_minutes"] = sorted((int(startup["min_minutes"]), int(startup["max_minutes"])))
         if fields.get("enabled") is not None:
             self.store.save(startup)
@@ -625,6 +672,75 @@ under 180 words, start with "{person.first} here:"."""
         finally:
             if owns_live and self.live.get(startup_id, {}).get("direct"):
                 self.live.pop(startup_id, None)
+
+    # ---- code: context for meetings, and planning/building ideas with Claude Code on the Mac
+
+    def codebase(self, startup, max_chars=1500):
+        """A short brief of the linked folders/repos from the runner on the Mac ("" when none or unreachable)."""
+        if not startup.get("sources"):
+            return ""
+        try:
+            return self.gateway.claude.call("/v1/projects/context",
+                                            {"sources": startup["sources"], "max_chars": max_chars}, timeout=600)["context"]
+        except Exception as e:
+            log.warning("startup: no codebase context: %s", e)
+            return ""
+
+    def work_on_code(self, startup_id, mode="plan", confirmed=False):
+        """Claude Code plans (read-only) or builds (edit, confirmed by the founder) the idea in each linked project.
+        Each result lands in the agents room; then the team meets on it."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        if not startup.get("sources"):
+            raise ValueError("Link a folder or GitHub repo first.")
+        if mode == "build" and not confirmed:
+            raise ValueError("Building changes the code: confirm it first.")
+        round_no = startup["rounds"] + 1
+        notes = "\n".join(f"- {m['content']}" for m in self.store.messages(startup_id, limit=30)
+                          if m["role"] == FOUNDER.key)[-1500:]
+        for source in startup["sources"]:
+            label = source_label(source)
+            self.live[startup_id] = {"round": round_no, "speaking": CODER.key, "started": self.clock(),
+                                     "speakers": [CODER.key], "direct": True}
+            if mode == "build":
+                prompt = (f"Implement this feature in this service: {startup['pitch']}\n"
+                          + (f"Founder's notes:\n{notes}\n" if notes else "")
+                          + "Follow the codebase's conventions, keep the change focused, add or update tests, and end "
+                            "with a short summary of what you changed.")
+            else:
+                prompt = (f"Plan how to add this feature in this service, without changing any files: {startup['pitch']}\n"
+                          + (f"Founder's notes:\n{notes}\n" if notes else "")
+                          + "Answer in under 250 words: whether this service needs changes at all, the files to change, "
+                            "the steps in order, API or data changes other services depend on, risks, and the tests to add.")
+            try:
+                result = self.gateway.claude.call("/v1/projects/task", {
+                    "source": source, "prompt": prompt, "agent": "claude-code",
+                    "mode": "edit" if mode == "build" else "read", "confirmed": mode == "build" and confirmed},
+                    timeout=1800)
+                body = result["output"].strip()[:2500]
+                if mode == "build":
+                    changed = result.get("changed") or "no files changed"
+                    text = f"**{label}**: built.\n\n{body}\n\nChanged:\n```\n{changed}\n```"
+                else:
+                    text = f"**{label}**: plan\n\n{body}"
+            except Exception as e:
+                text = f"**{label}**: couldn't {'build' if mode == 'build' else 'plan'} ({e})"
+            self.store.add_message(startup_id, round_no, CODER.key, text)
+        self.live.pop(startup_id, None)
+        # The team discusses the plans (or reviews the build) right away.
+        return self.run_round(startup_id)
+
+    def start_work(self, startup_id, mode="plan", confirmed=False):
+        """Runs work_on_code in the background (it can take minutes)."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        if mode == "build" and not confirmed:
+            raise ValueError("Building changes the code: confirm it first.")
+        if not startup.get("sources"):
+            raise ValueError("Link a folder or GitHub repo first.")
+        threading.Thread(target=self.work_on_code, args=(startup_id, mode, confirmed), daemon=True).start()
 
     def meetings(self, startup_id):
         if not self.store.get(startup_id):
@@ -730,8 +846,9 @@ under 180 words, start with "{person.first} here:"."""
             if not startup or startup["status"] == "interview":
                 return None
             round_no = startup["rounds"] + 1
+            startup["codebase"] = self.codebase(startup)
             team, people = team_of(startup), people_of(startup)
-            current = {p.key for p in team} | {CEO.key, FOUNDER.key}
+            current = {p.key for p in team} | {CEO.key, FOUNDER.key, CODER.key}
 
             def discussion():
                 # Re-read before each speaker: the founder may have posted mid-meeting. Former employees'
@@ -838,8 +955,9 @@ under 180 words, start with "{person.first} here:"."""
         return [person_dict(p) for p in TEAM]
 
     def summary(self, startup):
-        return {k: startup[k] for k in ("id", "name", "pitch", "status", "rounds", "next_run", "min_minutes", "max_minutes",
-                                        "created", "updated")}
+        return {**{k: startup[k] for k in ("id", "name", "pitch", "status", "rounds", "next_run", "min_minutes",
+                                           "max_minutes", "created", "updated")},
+                "kind": startup.get("kind") or "startup", "sources": startup.get("sources") or []}
 
     def detail(self, startup_id):
         startup = self.store.get(startup_id)

@@ -156,7 +156,8 @@ def make_handler(gateway, channels, catalog):
                 if len(parts) == 2:  # create: pitch → follow-up questions
                     created = startup.create(body.get("pitch", ""), body.get("name"),
                                              min_minutes=body.get("min_minutes", 10), max_minutes=body.get("max_minutes", 30),
-                                             team=body.get("team"))
+                                             team=body.get("team"), kind=body.get("kind", "startup"),
+                                             sources=body.get("sources"))
                     return self.send_json(201, startup.detail(created["id"]))
                 startup_id = parts[2]
                 if not startup.store.get(startup_id):
@@ -177,6 +178,9 @@ def make_handler(gateway, channels, catalog):
                     except KeyError:
                         return self.send_json(404, {"error": "no such meeting"})
                     return self.send_json(200, startup.meeting(startup_id, int(parts[4])))
+                elif action in ("plan", "build"):
+                    startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
+                    return self.send_json(202, {"started": action})
                 elif action == "run":
                     threading.Thread(target=startup.run_round, args=(startup_id,), daemon=True).start()
                     return self.send_json(202, {"started": True})

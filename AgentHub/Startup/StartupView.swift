@@ -23,7 +23,7 @@ struct StartupView: View {
             }
             .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationTitle("Startups")
+        .navigationTitle("Startups & Ideas")
         .sheet(item: $model.pendingDelete) { startup in
             DeleteStartupConfirmation(startup: startup,
                                       onCancel: { model.askToDelete(nil) },
@@ -56,6 +56,11 @@ private struct StartupList: View {
                         HStack {
                             Text(startup.name).font(.headline).lineLimit(1)
                             Spacer()
+                            if startup.isIdea {
+                                Text("Idea").font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.accentColor.opacity(0.15), in: Capsule()).foregroundStyle(.tint)
+                            }
                             StatusBadge(status: startup.status)
                         }
                         Text(startup.pitch).font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -106,8 +111,17 @@ private struct NewStartup: View {
         ScrollView {
             VStack(spacing: 20) {
                 TimAvatar(size: 84)
-                Text("Pitch me your startup").headlineStyle(34)
-                Text("I'll ask a few follow-up questions, then put a team of agents on it. They work every 10–30 minutes, like a real company.")
+                Picker("", selection: $model.draftKind) {
+                    Label("Startup", systemImage: "lightbulb.max.fill").tag("startup")
+                    Label("Idea for my code", systemImage: "hammer.fill").tag("idea")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 360)
+                Text(isIdea ? "What should we build?" : "Pitch me your startup").headlineStyle(34)
+                Text(isIdea
+                     ? "Describe a feature and pick the services it touches. Claude Code plans it in each one, the team meets on it, and you decide when to build."
+                     : "I'll ask a few follow-up questions, then put a team of agents on it. They work every 10–30 minutes, like a real company.")
                     .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 600)
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
@@ -125,13 +139,16 @@ private struct NewStartup: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Name (optional)", text: $model.draftName).textFieldStyle(.roundedBorder)
-                    Text("The pitch").font(.headline)
+                    Text(isIdea ? "The feature" : "The pitch").font(.headline)
                     TextEditor(text: $model.draftPitch)
                         .frame(height: 120).padding(6)
                         .background(.background, in: RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
-                    Text("What it is, who it's for, and why now. Two or three sentences is plenty.")
+                    Text(isIdea ? "What it should do and for whom, e.g. \"Add refunds: a refund button in the web app, a refunds API in orders, and a refund email\"."
+                                : "What it is, who it's for, and why now. Two or three sentences is plenty.")
                         .font(.caption).foregroundStyle(.secondary)
+                    CodeSources(model: model, sources: model.draftSources, stackRoot: stackRoot, forDraft: true,
+                                required: isIdea)
                     HStack {
                         Stepper("Meet every \(model.minMinutes)", value: $model.minMinutes, in: 5...model.maxMinutes)
                         Stepper("to \(model.maxMinutes) min", value: $model.maxMinutes, in: model.minMinutes...240)
@@ -143,14 +160,65 @@ private struct NewStartup: View {
                 Button {
                     Task { await model.submitPitch(stackRoot: stackRoot) }
                 } label: {
-                    if let busy = model.busy { Label(busy, systemImage: "hourglass") } else { Label("Pitch it", systemImage: "paperplane.fill") }
+                    if let busy = model.busy { Label(busy, systemImage: "hourglass") }
+                    else if isIdea { Label("Start the idea", systemImage: "hammer.fill") }
+                    else { Label("Pitch it", systemImage: "paperplane.fill") }
                 }
                 .buttonStyle(.borderedProminent).controlSize(.large)
-                .disabled(model.draftPitch.trimmingCharacters(in: .whitespacesAndNewlines).count < 10 || model.busy != nil)
+                .disabled(model.draftPitch.trimmingCharacters(in: .whitespacesAndNewlines).count < 10 || model.busy != nil
+                          || (isIdea && model.draftSources.isEmpty))
                 if let error = model.error { Text(error).foregroundStyle(.orange).font(.callout) }
             }
             .padding(36)
             .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var isIdea: Bool { model.draftKind == "idea" }
+}
+
+/// The folders and GitHub repos a startup or idea is about.
+private struct CodeSources: View {
+    @Bindable var model: StartupModel
+    let sources: [ProjectSource]
+    let stackRoot: URL?
+    let forDraft: Bool
+    var required = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(required ? "The services" : "The code (optional)").font(.headline)
+                Spacer()
+                Button("Add folder…", systemImage: "folder.badge.plus") {
+                    Task { await model.chooseFolders(stackRoot: stackRoot, forDraft: forDraft) }
+                }
+            }
+            HStack {
+                TextField("GitHub repo, e.g. owner/name", text: $model.draftRepo)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { Task { await model.addRepo(stackRoot: stackRoot, forDraft: forDraft) } }
+                Button("Add repo") { Task { await model.addRepo(stackRoot: stackRoot, forDraft: forDraft) } }
+                    .disabled(model.draftRepo.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            ForEach(sources) { source in
+                HStack {
+                    Label(source.label, systemImage: source.symbol)
+                    Text(source.isRepo ? "GitHub" : (source.path ?? "")).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button { Task { await model.removeSource(source, stackRoot: stackRoot, forDraft: forDraft) } } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border))
+            }
+            Text(required ? "One folder per service the feature touches. Folders you pick become readable by agentim (AGENTIM_WORKSPACES); nothing else is."
+                          : "Link your code and the agents improve it from what's really there. Folders you pick become readable by agentim.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -332,6 +400,30 @@ private struct RunningStartup: View {
         }
     }
 
+    /// The linked folders and repos, as chips (remove with ×).
+    @ViewBuilder private var codeBar: some View {
+        let sources = detail.sources ?? []
+        if !sources.isEmpty {
+            HStack(spacing: 6) {
+                ForEach(sources) { source in
+                    HStack(spacing: 4) {
+                        Image(systemName: source.symbol)
+                        Text(source.label)
+                        Button { Task { await model.removeSource(source, stackRoot: stackRoot, forDraft: false) } } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.borderless).foregroundStyle(.secondary)
+                        .help("Unlink \(source.label)")
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Theme.surface, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Theme.border))
+                }
+            }
+        }
+    }
+
     private var header: some View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
@@ -348,9 +440,27 @@ private struct RunningStartup: View {
                     Label("Every \(detail.min_minutes)–\(detail.max_minutes) min", systemImage: "shuffle")
                 }
                 .font(.callout).foregroundStyle(.secondary)
+                codeBar
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.orange) }
             }
             Spacer()
+            if detail.isIdea {
+                Button("Plan with Claude Code", systemImage: "list.bullet.clipboard") {
+                    Task { await model.planIdea(stackRoot: stackRoot) }
+                }
+                .disabled(model.busy != nil || (detail.sources ?? []).isEmpty)
+                .help("Claude Code plans the feature in each service, read-only. Then the team meets on it.")
+                Button("Build it…", systemImage: "hammer.fill") { model.confirmingBuild = true }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.busy != nil || (detail.sources ?? []).isEmpty)
+                    .confirmationDialog("Let Claude Code change the code?", isPresented: $model.confirmingBuild) {
+                        Button("Build in \((detail.sources ?? []).count) project\((detail.sources ?? []).count == 1 ? "" : "s")") {
+                            Task { await model.buildIdea(stackRoot: stackRoot) }
+                        }
+                    } message: {
+                        Text("Claude Code will edit files in: \((detail.sources ?? []).map(\.label).joined(separator: ", ")). It doesn't commit or push; review the changes with git before you do.")
+                    }
+            }
             Button("Agents", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
             Button("Meet now", systemImage: "person.3.fill") { Task { await model.meetNow(stackRoot: stackRoot) } }
                 .disabled(model.busy != nil || !detail.isRunning)
@@ -358,7 +468,13 @@ private struct RunningStartup: View {
                                        set: { on in Task { await model.setEnabled(on, stackRoot: stackRoot) } }))
                 .toggleStyle(.switch)
             Menu {
-                Button("Delete startup…", systemImage: "trash", role: .destructive) { model.askToDelete(model.selectedSummary) }
+                Button("Add folder…", systemImage: "folder.badge.plus") {
+                    Task { await model.chooseFolders(stackRoot: stackRoot, forDraft: false) }
+                }
+                Divider()
+                Button(detail.isIdea ? "Delete idea…" : "Delete startup…", systemImage: "trash", role: .destructive) {
+                    model.askToDelete(model.selectedSummary)
+                }
             } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton).fixedSize()
         }
