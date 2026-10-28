@@ -288,6 +288,20 @@ Run **as many startups as you like**, each with its own team of agents who act l
 
 **Link your code.** A startup can point at local folders and GitHub repos (`owner/name`, cloned on your Mac): every meeting starts with a short brief of each codebase (README, structure, stack, recent commits), so the agents improve what's really there.
 
+**Launch it: design → code → test → deploy → live.** Every startup and idea has a **Launch** tab with its own settings: the project folder (created for you if there's no code yet), the stack, the test command, where to deploy (Vercel, Netlify, Cloudflare Pages, Fly.io, Docker on this Mac, or your own command) and the live URL. Then the pipeline really ships it:
+
+| Stage | What happens | Needs your OK |
+|---|---|---|
+| 📐 Design | Claude Code designs v1 from the team's plan: screens, look, data model, stack, files. Read-only. The team meets on it. | No |
+| 🛠️ Build | Claude Code writes the code in the project folder, adds tests and a README, and reports the test command. | Yes |
+| 🧪 Test | Your test command runs; if it fails, Claude Code gets one try to fix it (without weakening the tests). | Part of the build |
+| 🚀 Deploy | Your deploy command runs with your own CLI login (`vercel`, `netlify`, `fly`…); the live URL is read from its output. | Yes |
+| 🌍 Live | agentim checks the URL answers, posts it in the agents room, and the team meets to plan the launch. | No |
+
+Every step reports in the agents room, and the agents see where the launch stands in every meeting. agentim never pushes your code, never stores deploy secrets (your CLIs keep their own logins), and only works in folders you picked.
+
+**Action items with owners and ETAs.** Every meeting ends with action items, and every one has an owner and an ETA (a real date). Dates the meeting didn't set are marked *proposed*, and if a meeting forgot action items, each person who spoke gets one. You'll find them as a table in the meeting notes, in the summary Tim sends you, and as `action_items` in `GET /v1/startups/{id}/meetings/{n}`.
+
 **Ideas for your code.** Choose **New → Idea for my code**, describe a feature, and pick the services it touches (one folder or repo each). **Plan with Claude Code** asks your local Claude Code to plan the change in *each* service, read-only, and posts every plan in the agents room before the team meets on it. **Build it…** (after you confirm) lets Claude Code make the changes in each service and reports the changed files; it never commits or pushes. Folders you pick are added to `AGENTIM_WORKSPACES`; agentim can't read anything else.
 
 **Make the team yours.** That's the default team: every startup can have its own (1–12 agents plus Tim). In the Mac app, click **Agents** to open the team page (full screen, no pop-up): every agent as a card, and an editor beside it to rename anyone, change their title, emoji, avatar, persona or what they own, **Add agent** from presets (CTO, Customer Success, Growth, Data, Operations, Legal, Recruiter, Community, QA Engineer, Penetration Tester, Security Researcher, Compliance & GRC) or anyone you describe, and remove agents. Agents you remove keep their messages in the agents room, marked *former*; the current team stops seeing them. In chat:

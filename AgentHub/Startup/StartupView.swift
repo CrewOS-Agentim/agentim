@@ -775,7 +775,7 @@ private struct RoomOrNotes: View {
     let stackRoot: URL?
     @State private var tab = Tab.room
 
-    enum Tab: String, CaseIterable { case room = "Agents room", notes = "Meetings" }
+    enum Tab: String, CaseIterable { case room = "Agents room", launch = "Launch", notes = "Meetings" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -787,6 +787,7 @@ private struct RoomOrNotes: View {
             .padding(.horizontal, 20).padding(.top, 14)
             switch tab {
             case .room: TeamRoom(model: model, detail: detail, stackRoot: stackRoot)
+            case .launch: LaunchPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .notes: MeetingNotesList(model: model, detail: detail, stackRoot: stackRoot)
             }
         }
@@ -889,6 +890,9 @@ private struct MeetingNotesView: View {
                                     .controlSize(.small)
                             }
                         }
+                        if let items = notes.action_items, !items.isEmpty {
+                            ActionItemsTable(items: items)
+                        }
                         if let minutes = notes.minutes {
                             PlanText(markdown: minutes)
                         } else if let summary = notes.summary {
@@ -961,5 +965,38 @@ private struct MeetingOverCard: View {
         .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.accentColor.opacity(0.25)))
         .padding(.top, 4)
+    }
+}
+
+/// Every action item with its owner and ETA ("proposed" when the meeting didn't set a date).
+private struct ActionItemsTable: View {
+    let items: [MeetingNotes.ActionItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Action items", systemImage: "checklist").font(.headline)
+            Grid(alignment: .leading, horizontalSpacing: Theme.s3, verticalSpacing: 6) {
+                GridRow {
+                    Text("Owner"); Text("What"); Text("ETA")
+                }
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Divider()
+                ForEach(items, id: \.self) { item in
+                    GridRow {
+                        Text(item.owner).font(.callout.weight(.semibold))
+                        Text(LocalizedStringKey(item.task)).font(.callout).fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 4) {
+                            Text(item.eta).font(.callout)
+                            if item.proposed == true {
+                                Text("proposed").font(.caption2).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(Theme.s3)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border))
     }
 }

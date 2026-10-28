@@ -391,7 +391,7 @@ class MinutesTests(unittest.TestCase):
         text = mode.run_round(startup["id"])
         self.assertIn("meeting 1 is over", text)
         self.assertIn("✅ *Action items*", text)
-        self.assertIn("**Zoe**: book 3 pilots (by Friday)", text)
+        self.assertIn("**Zoe**: book 3 pilots — ETA: Friday", text)
 
     def test_deleting_a_startup_deletes_its_minutes(self):
         _, mode, _ = self.mode_with_minutes(self.MINUTES)

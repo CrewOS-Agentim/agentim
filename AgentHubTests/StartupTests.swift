@@ -375,6 +375,22 @@ final class StartupTests: XCTestCase {
         XCTAssertNotEqual(StartupModel.withWorkspace("/Users/me/githubber", in: env), env, "a prefix that isn't a parent folder")
     }
 
+    func testDecodesLaunchAndActionItems() throws {
+        var json = try JSONSerialization.jsonObject(with: Data(detailJSON.utf8)) as! [String: Any]
+        json["config"] = ["deploy": "vercel", "live_url": "https://leafy.vercel.app"]
+        json["pipeline"] = [["stage": "design", "status": "done", "output": "One page"], ["stage": "build", "status": "waiting"]]
+        json["providers"] = [["id": "vercel", "name": "Vercel", "command": "npx vercel"]]
+        let detail = try JSONDecoder().decode(StartupDetail.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(detail.config?.deploy, "vercel")
+        XCTAssertEqual(detail.config?.test_command, "", "missing settings decode as empty")
+        XCTAssertEqual(detail.pipeline?.map(\.statusText), ["Done", "Ready"])
+        XCTAssertEqual(LaunchConfig().json["deploy"] as? String, "none")
+
+        let notes = #"{"round":1,"started":0,"ended":1,"summary":null,"messages":[],"people":{},"action_items":[{"owner":"Zoe","task":"Book pilots","eta":"Fri, Oct 30","proposed":true}]}"#
+        let decoded = try JSONDecoder().decode(MeetingNotes.self, from: Data(notes.utf8))
+        XCTAssertEqual(decoded.action_items?.first?.owner, "Zoe")
+    }
+
     func testDecodesIdeas() throws {
         var json = try JSONSerialization.jsonObject(with: Data(detailJSON.utf8)) as! [String: Any]
         json["kind"] = "idea"

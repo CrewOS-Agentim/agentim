@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 import urllib.request
 
 import runner
@@ -263,6 +264,28 @@ class ProjectsTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_launch_create_run_and_check(self):
+        with mock.patch.object(runner, "REPOS_DIR", os.path.join(self.tmp.name, "repos")):
+            first = self.projects.create("Leafy Plants!")
+            second = self.projects.create("Leafy Plants!")
+        self.assertTrue(first.endswith(os.path.join("startups", "leafy-plants")))
+        self.assertTrue(second.endswith("leafy-plants-2"), "never reuses another startup's folder")
+        self.assertIn(["git", "init", "--quiet", first], self.calls)
+
+        result = self.projects.run_command(self.svc, "npm test")
+        self.assertEqual(self.calls[-1], ["/bin/zsh", "-lc", "npm test"])
+        self.assertEqual(result["exit_code"], 0)
+        with self.assertRaises(RuntimeError):
+            self.projects.run_command(self.svc, "  ")
+
+        class Resp:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        self.assertTrue(runner.Projects.check("https://leafy.app", opener=lambda req, timeout: Resp())["ok"])
+        self.assertFalse(runner.Projects.check("file:///etc/passwd")["ok"], "only http(s)")
 
     def test_summary_has_readme_stack_structure_and_commits(self):
         summary = self.projects.summary(self.svc)

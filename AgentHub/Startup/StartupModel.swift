@@ -100,6 +100,10 @@ struct StartupDetail: Decodable, Equatable {
     var kind: String? = nil
     var sources: [ProjectSource]? = nil
     var isIdea: Bool { kind == "idea" }
+    var config: LaunchConfig? = nil
+    var pipeline: [LaunchStage]? = nil
+    var providers: [DeployProvider]? = nil
+    var launch_running: Bool? = nil
     let next_run: Double?
     var rounds: Int
     let now: Double
@@ -217,6 +221,14 @@ struct StartupClient {
         _ = try await raw("v1/startups/\(id)", method: "DELETE", body: nil)
     }
 
+    func sendDetail(_ path: String, body: [String: Any]) async throws -> StartupDetail {
+        try await send(path, body: body)
+    }
+
+    func post(_ path: String, body: [String: Any]) async throws {
+        _ = try await raw(path, method: "POST", body: body)
+    }
+
     private func send<T: Decodable>(_ path: String, body: [String: Any]? = nil) async throws -> T {
         try JSONDecoder().decode(T.self, from: try await raw(path, method: body == nil ? "GET" : "POST", body: body))
     }
@@ -257,6 +269,10 @@ final class StartupModel {
     var draftKind = "startup"
     var draftSources: [ProjectSource] = []
     var draftRepo = ""
+    /// The launch settings being edited (nil when not editing).
+    var launchDraft: LaunchConfig?
+    /// "build" or "deploy" while its confirmation dialog is open.
+    var confirmingStage: String?
     var draftAnswers: [String] = []
     /// The interview question on screen (0-based).
     var questionIndex = 0
@@ -792,7 +808,7 @@ final class StartupModel {
         }
     }
 
-    private func act(_ label: String?, _ stackRoot: URL?, _ work: (StartupClient) async throws -> Void) async {
+    func act(_ label: String?, _ stackRoot: URL?, _ work: (StartupClient) async throws -> Void) async {
         guard !isDemo, let client = Self.client(stackRoot: stackRoot) else { return }
         busy = label ?? "…"
         defer { busy = nil }
@@ -1000,7 +1016,16 @@ struct MeetingNotes: Decodable, Identifiable {
     var minutes: String? = nil
     let messages: [StartupDetail.Message]
     let people: [String: StartupDetail.PersonInfo]
+    var action_items: [ActionItem]? = nil
     var id: Int { round }
+
+    /// Who does what by when, from the meeting's minutes.
+    struct ActionItem: Decodable, Equatable, Hashable {
+        let owner: String
+        let task: String
+        let eta: String
+        var proposed: Bool? = nil
+    }
 
     /// The body of one "## Section" of the minutes.
     static func section(_ name: String, in minutes: String?) -> String? {

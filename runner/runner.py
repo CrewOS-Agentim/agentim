@@ -612,6 +612,47 @@ class Projects:
             raise RuntimeError(f"Couldn't clone {owner}/{name}: {(result.stderr or '').strip()[-300:]}")
         return path
 
+    def create(self, name):
+        """A new, empty project folder (a git repo) for a startup that has no code yet."""
+        slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")[:40] or "startup"
+        path, n = os.path.join(REPOS_DIR, "startups", slug), 2
+        while os.path.exists(path):
+            path, n = os.path.join(REPOS_DIR, "startups", f"{slug}-{n}"), n + 1
+        os.makedirs(path)
+        self.run(["git", "init", "--quiet", path], capture_output=True, timeout=30)
+        return path
+
+    def run_command(self, folder, command, timeout=900):
+        """Runs the founder's own test or deploy command in a project folder, with their login shell (so CLIs like
+        vercel, fly or npm are on PATH and use their own saved logins). Returns the exit code and the output's tail."""
+        if not command.strip():
+            raise RuntimeError("No command to run.")
+        started = time.time()
+        try:
+            result = self.run(["/bin/zsh", "-lc", command], cwd=folder, capture_output=True, text=True,
+                              timeout=min(int(timeout), 3600), stdin=subprocess.DEVNULL)
+            code, output = result.returncode, (result.stdout or "") + (result.stderr or "")
+        except subprocess.TimeoutExpired:
+            code, output = 124, f"Stopped after {timeout} s."
+        return {"folder": folder, "exit_code": code, "output": output.strip()[-6000:],
+                "seconds": round(time.time() - started, 1)}
+
+    @staticmethod
+    def check(url, opener=urllib.request.urlopen):
+        """Is the live URL answering? (http/https only)."""
+        if not str(url).startswith(("http://", "https://")):
+            return {"ok": False, "error": "Not an http(s) URL."}
+        started = time.time()
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "agentim-live-check"})
+            with opener(req, timeout=20) as resp:
+                status = resp.status
+        except urllib.error.HTTPError as e:
+            status = e.code
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "error": str(e)[:200]}
+        return {"ok": 200 <= status < 400, "status": status, "ms": int((time.time() - started) * 1000)}
+
     def resolve(self, source):
         """A source dict → its folder: {"type": "dir", "path": …} or {"type": "github", "repo": "owner/name"}."""
         if source.get("type") == "github":
@@ -920,15 +961,35 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 folder = PROJECTS.resolve(body.get("source", {}))
                 mode = "edit" if body.get("mode") == "edit" and body.get("confirmed") is True else "read"
+                timeout = min(int(body.get("timeout") or 0), 3600) or None
                 output, cwd = LOCAL_AGENTS.run_task(body.get("agent", "claude-code"), body.get("prompt", ""),
-                                                    cwd=folder, mode=mode)
+                                                    cwd=folder, mode=mode, timeout=timeout)
                 changed = ""
                 if mode == "edit":
                     stat = subprocess.run(["git", "-C", cwd, "diff", "--stat"], capture_output=True, text=True, timeout=30)
-                    changed = stat.stdout.strip()[-1500:]
+                    new = subprocess.run(["git", "-C", cwd, "status", "--short", "--untracked-files=all"],
+                                         capture_output=True, text=True, timeout=30)
+                    added = [line[3:] for line in new.stdout.splitlines() if line.startswith("??")]
+                    changed = (stat.stdout.strip() + (f"\nNew files ({len(added)}): " + ", ".join(added[:25])
+                                                      if added else "")).strip()[-1500:]
                 return self.send_json(200, {"folder": cwd, "mode": mode, "output": output[-6000:], "changed": changed})
             except subprocess.TimeoutExpired:
                 return self.error(504, "The coding agent took too long and was stopped.")
+            except Exception as e:
+                return self.error(400, str(e))
+        if path in ("/v1/projects/create", "/v1/projects/run", "/v1/projects/check"):
+            # The launch pipeline: a new project folder, the founder's own test/deploy command, a live check.
+            if IN_CONTAINER:
+                return self.error(404, "Projects are run by the runner on the Mac.")
+            try:
+                if path == "/v1/projects/create":
+                    return self.send_json(200, {"folder": PROJECTS.create(body.get("name", ""))})
+                if path == "/v1/projects/check":
+                    return self.send_json(200, PROJECTS.check(body.get("url", "")))
+                if body.get("confirmed") is not True:
+                    return self.error(400, "Running a command needs the founder's confirmation.")
+                folder = PROJECTS.resolve(body.get("source", {}))
+                return self.send_json(200, PROJECTS.run_command(folder, body.get("command", ""), body.get("timeout") or 900))
             except Exception as e:
                 return self.error(400, str(e))
         if path == "/v1/models/unload":

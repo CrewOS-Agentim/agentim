@@ -181,6 +181,12 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "launch":
+                    # One pipeline step: design, build, test, deploy or live (build/test/deploy confirmed in the app).
+                    startup.launch.start(startup_id, body.get("stage", ""), confirmed=body.get("confirmed") is True)
+                    return self.send_json(202, {"started": body.get("stage")})
+                elif action == "config":
+                    startup.launch.configure(startup_id, body)
                 elif action == "run":
                     threading.Thread(target=startup.run_round, args=(startup_id,), daemon=True).start()
                     return self.send_json(202, {"started": True})

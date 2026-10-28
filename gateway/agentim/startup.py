@@ -19,6 +19,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from .launch import PROVIDERS, Launch, pipeline_view, status_line
 from .llm import LLMError, labelled
 
 log = logging.getLogger("agentim.startup")
@@ -276,8 +277,10 @@ def brief(startup):
     else:
         head = f"Startup: {startup['name']}\nPitch: {startup['pitch']}"
     code = startup.get("codebase")
+    launch = status_line(startup)
     return (head + (f"\n\nFounder's answers:\n{answers}" if answers else "")
-            + (f"\n\nThe code (improve it based on what's really there; name files when you can):\n{code}" if code else ""))
+            + (f"\n\nThe code (improve it based on what's really there; name files when you can):\n{code}" if code else "")
+            + (f"\n\n{launch}" if launch else ""))
 
 
 def person_prompt(person, startup, discussion, team=None, playbook=""):
@@ -337,9 +340,12 @@ SUMMARY:
 MINUTES_SECTIONS = ["Summary", "Decisions", "Action items", "Metrics", "Open questions"]
 
 
-def minutes_prompt(startup, round_no, transcript):
-    return f"""You are the note-taker for "{startup['name']}" (meeting {round_no}). Write the meeting minutes from \
-this transcript. Only what was actually said: never invent numbers, owners or dates.
+def minutes_prompt(startup, round_no, transcript, today=None):
+    today = today or time.strftime("%A, %b %d, %Y")
+    return f"""You are the note-taker for "{startup['name']}" (meeting {round_no}, today is {today}). Write the \
+meeting minutes from this transcript. Only what was actually said: never invent numbers or decisions.
+Every action item needs ONE owner (a first name from the meeting) and an ETA as a real date. If the meeting said \
+when ("by Friday"), turn it into the date; if it didn't, propose a realistic date and add "(proposed)".
 
 Transcript:
 {transcript}
@@ -350,7 +356,8 @@ Reply in markdown with exactly these sections, short bullets:
 ## Decisions
 - <decision> (who decided or proposed it)
 ## Action items
-- **<Owner first name>**: <task> (by <when, if said>)
+- **<Owner first name>**: <task> — ETA: <Weekday, Mon DD> [(proposed)]
+(at least one per person who committed to something; never leave the owner or the ETA out)
 ## Metrics
 - <metric: value or target, as mentioned> (or "- None mentioned")
 ## Open questions
@@ -375,6 +382,48 @@ def minutes_section(minutes, name):
     match = re.search(rf"^## {re.escape(name)}\s*$(.*?)(?=^## |\Z)", minutes, re.MULTILINE | re.DOTALL)
     body = match.group(1).strip() if match else ""
     return body or None
+
+
+ACTION = re.compile(r"^-\s*(?:\[[ x]\]\s*)?(?:\*\*(?P<owner>[^*]+?)\*\*\s*[:\-–—]?\s*)?(?P<rest>.+)$")
+ETA = re.compile(r"\s*(?:[—–-]\s*)?\(?\s*(?:ETA|by|due)\s*:?\s*(?P<eta>[^)]+?)\)?\s*(?P<proposed>\(proposed\))?\s*$",
+                 re.IGNORECASE)
+
+
+def parse_action_items(minutes):
+    """The minutes' action items as [{"owner", "task", "eta", "proposed"}]."""
+    items = []
+    for line in (minutes_section(minutes, "Action items") or "").splitlines():
+        match = ACTION.match(line.strip())
+        if not match or line.strip().lower().startswith(("- none", "- no action")):
+            continue
+        rest = match.group("rest").strip()
+        eta = ETA.search(rest)
+        task = rest[:eta.start()].strip(" —–-:") if eta else rest
+        items.append({"owner": (match.group("owner") or "").strip().rstrip(":"), "task": task,
+                      "eta": eta.group("eta").strip() if eta else "",
+                      "proposed": bool(eta and (eta.group("proposed") or "proposed" in eta.group("eta").lower()))})
+    for item in items:
+        item["eta"] = re.sub(r"\s*\(?proposed\)?\s*$", "", item["eta"], flags=re.IGNORECASE).strip()
+    return items
+
+
+def with_owners_and_etas(minutes, speakers, now, days=2):
+    """Makes sure every action item has an owner and an ETA (and that the meeting has action items at all):
+    a missing owner becomes Tim (the CEO follows up), a missing ETA becomes a proposed date."""
+    default_eta = time.strftime("%a, %b %d", time.localtime(now + days * 86400))
+    items = parse_action_items(minutes) or [
+        {"owner": name, "task": "follow up on what they committed to in this meeting", "eta": "", "proposed": True}
+        for name in speakers] or [{"owner": "Tim", "task": "set next steps", "eta": "", "proposed": True}]
+    lines = []
+    for item in items:
+        eta = item["eta"] or default_eta
+        proposed = item["proposed"] or not item["eta"]
+        lines.append(f"- **{item['owner'] or 'Tim'}**: {item['task']} — ETA: {eta}{' (proposed)' if proposed else ''}")
+    body = "\n".join(lines)
+    if minutes_section(minutes, "Action items") is None and "## Action items" not in minutes:
+        return minutes.rstrip() + f"\n\n## Action items\n{body}\n"
+    return re.sub(r"(^## Action items\s*$)(.*?)(?=^## |\Z)", lambda m: f"{m.group(1)}\n{body}\n\n", minutes,
+                  count=1, flags=re.MULTILINE | re.DOTALL).rstrip() + "\n"
 
 
 def fallback_minutes(messages, people):
@@ -402,8 +451,10 @@ class StartupStore:
 
     COLUMNS = ["id", "name", "pitch", "questions", "answers", "status", "plan", "min_minutes", "max_minutes",
                "next_run", "rounds", "notify_channel", "notify_chat", "created", "updated", "team", "alumni",
-               "kind", "sources"]
-    JSON_COLUMNS = ("questions", "answers", "team", "alumni", "sources")
+               "kind", "sources", "config", "pipeline"]
+    JSON_COLUMNS = ("questions", "answers", "team", "alumni", "sources", "config", "pipeline")
+    # Written only by save_launch, so a long meeting saving its plan never overwrites launch progress.
+    LAUNCH_COLUMNS = ("config", "pipeline")
 
     def __init__(self, db: sqlite3.Connection, lock: threading.Lock):
         self.db, self.lock = db, lock
@@ -419,7 +470,7 @@ class StartupStore:
                 startup_id TEXT, round INTEGER, minutes TEXT, created REAL, PRIMARY KEY (startup_id, round))""")
             # Databases from before editable teams: add the new columns in place.
             existing = {row[1] for row in self.db.execute("PRAGMA table_info(startups)")}
-            for column in ("team", "alumni", "kind", "sources"):
+            for column in ("team", "alumni", "kind", "sources", "config", "pipeline"):
                 if column not in existing:
                     self.db.execute(f"ALTER TABLE startups ADD COLUMN {column} TEXT")
 
@@ -428,7 +479,7 @@ class StartupStore:
             return None
         s = dict(zip(self.COLUMNS, row))
         for column in self.JSON_COLUMNS:
-            s[column] = json.loads(s[column] or "[]")
+            s[column] = json.loads(s[column] or ("{}" if column in self.LAUNCH_COLUMNS else "[]"))
         return s
 
     def get(self, startup_id):
@@ -445,11 +496,21 @@ class StartupStore:
         startup["updated"] = time.time()
         startup.setdefault("team", [])
         startup.setdefault("alumni", [])
-        values = [json.dumps(startup[c]) if c in self.JSON_COLUMNS else startup[c] for c in self.COLUMNS]
+        columns = [c for c in self.COLUMNS if c not in self.LAUNCH_COLUMNS]
+        values = [json.dumps(startup[c]) if c in self.JSON_COLUMNS else startup[c] for c in columns]
+        updates = ", ".join(f"{c} = excluded.{c}" for c in columns if c != "id")
         with self.lock, self.db:
-            self.db.execute(f"INSERT OR REPLACE INTO startups ({', '.join(self.COLUMNS)}) VALUES ({', '.join('?' * len(self.COLUMNS))})",
-                            values)
+            self.db.execute(f"INSERT INTO startups ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))}) "
+                            f"ON CONFLICT(id) DO UPDATE SET {updates}", values)
         return startup
+
+    def save_launch(self, startup_id, config=None, pipeline=None):
+        """Writes only the launch columns (config and/or pipeline)."""
+        with self.lock, self.db:
+            if config is not None:
+                self.db.execute("UPDATE startups SET config = ? WHERE id = ?", (json.dumps(config), startup_id))
+            if pipeline is not None:
+                self.db.execute("UPDATE startups SET pipeline = ? WHERE id = ?", (json.dumps(pipeline), startup_id))
 
     def delete(self, startup_id):
         with self.lock, self.db:
@@ -523,6 +584,7 @@ class StartupMode:
         self.locks = {}
         self.locks_guard = threading.Lock()
         self.live = {}  # startup id → {"round", "speaking", "started"} while a meeting runs
+        self.launch = Launch(self)  # design → build → test → deploy → live
 
     # ---- creating a startup: pitch → follow-up questions → team
 
@@ -758,6 +820,7 @@ under 180 words, start with "{person.first} here:"."""
         summary = next((m["content"] for m in reversed(messages) if m["role"] == CEO.key), None)
         return {"round": round_no, "started": messages[0]["ts"], "ended": messages[-1]["ts"],
                 "summary": summary, "minutes": self.store.minutes(startup_id, round_no),
+                "action_items": parse_action_items(self.store.minutes(startup_id, round_no)),
                 "messages": messages, "people": people}
 
     def write_minutes(self, startup_id, round_no):
@@ -773,6 +836,9 @@ under 180 words, start with "{person.first} here:"."""
         reply = self._ask(minutes_prompt(startup, round_no, transcript),
                           f"Startup meeting · {startup['name']} · minutes") or ""
         minutes = clean_minutes(reply) or fallback_minutes(messages, people)
+        speakers = [people[m["role"]].first for m in messages if m["role"] in people
+                    and m["role"] not in ("founder", "ceo", "claude-code")]
+        minutes = with_owners_and_etas(minutes, list(dict.fromkeys(speakers)), messages[-1]["ts"])
         self.store.save_minutes(startup_id, round_no, minutes)
         return minutes
 
@@ -957,7 +1023,10 @@ under 180 words, start with "{person.first} here:"."""
     def summary(self, startup):
         return {**{k: startup[k] for k in ("id", "name", "pitch", "status", "rounds", "next_run", "min_minutes",
                                            "max_minutes", "created", "updated")},
-                "kind": startup.get("kind") or "startup", "sources": startup.get("sources") or []}
+                "kind": startup.get("kind") or "startup", "sources": startup.get("sources") or [],
+                "live_url": (startup.get("config") or {}).get("live_url") or None,
+                "launch_stage": next((s["stage"] for s in reversed(pipeline_view(startup))
+                                      if s["status"] in ("done", "running", "waiting", "failed")), None)}
 
     def detail(self, startup_id):
         startup = self.store.get(startup_id)
@@ -968,7 +1037,9 @@ under 180 words, start with "{person.first} here:"."""
                   for k, p in people_of(startup).items()}
         return {**startup, "now": self.clock(), "team": [person_dict(p) for p in team_of(startup)], "people": people,
                 "presets": ROLE_PRESETS, "messages": self.store.messages(startup_id),
-                "meeting": self.live.get(startup_id)}
+                "meeting": self.live.get(startup_id),
+                "pipeline": pipeline_view(startup), "launch_running": startup_id in self.launch.running,
+                "providers": [{"id": k, **v} for k, v in PROVIDERS.items()]}
 
     def listing(self):
         return {"now": self.clock(), "team": self.team(), "presets": ROLE_PRESETS,
