@@ -48,6 +48,8 @@ class Gateway:
     # ---- access
 
     def allowed(self, channel, user_id):
+        if channel == "api":
+            return True  # the HTTP API already requires the gateway token (the Mac app, scripts)
         users = self.config.allowed.get(channel, set())
         return "*" in users or str(user_id) in users
 

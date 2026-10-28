@@ -163,6 +163,10 @@ class StoreTests(unittest.TestCase):
 
 
 class GatewayTests(unittest.TestCase):
+    def test_token_authenticated_api_needs_no_allow_list_entry(self):
+        gateway = make_gateway(AGENTIM_ALLOWED_USERS="telegram:1")
+        self.assertIn("answer from", gateway.handle("api", "c", "api", "hi")[0].text)
+
     def test_strangers_get_their_id_only(self):
         llm = FakeLLM()
         replies = make_gateway(llm=llm).handle("telegram", "c", "999", "hello")
