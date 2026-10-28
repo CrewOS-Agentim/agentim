@@ -164,6 +164,12 @@
   .card h3 { font-size: 24px; letter-spacing: -.01em; margin: 14px 0 6px; }
   .card p { color: var(--muted); font-size: 17px; }
   .card code { font-size: 13px; color: var(--purple-deep); }
+  .dark .card { background: #1d1d1f; box-shadow: none; }
+  .dark .card h3 { color: #f5f5f7; }
+  .dark .card p { color: #a1a1a6; }
+  .dark .card b { color: #f5f5f7; }
+  .dark .card code { color: #c4b5fd; }
+  .card .btn { margin-top: 16px; font-size: 15px; padding: 9px 18px; }
 
   /* ---------- video ---------- */
   .video-split { display: grid; grid-template-columns: 1fr 1.3fr; gap: 50px; align-items: center; margin-top: 60px; }
@@ -220,14 +226,12 @@
     <a class="brand" href="#top"><img src="assets/agent-tim.png" alt="">agentim</a>
     <div class="links">
       <a href="#channels">Channels</a>
-      <a href="#private">Private</a>
       <a href="#mac">Mac app</a>
-      <a href="#setup">Setup</a>
-      <a href="#startup">Startup Mode</a>
+      <a href="#startup">Startups</a>
       <a href="#skills">Skills</a>
-      <a href="#video">Video</a>
-      <a href="#start">Get started</a>
-      <a href="https://github.com/doron2402/agentim">GitHub</a>
+      <a href="#connect">Integrations</a>
+      <a href="#community">Community</a>
+      <a href="https://github.com/CrewOS-Agentim/agentim">GitHub</a>
     </div>
     <a class="cta" href="#start">Get started</a>
   </div>
@@ -238,10 +242,10 @@
     <p class="eyebrow reveal">agentim</p>
     <h1 class="headline reveal">Meet <span class="grad">Agent Tim.</span></h1>
     <p class="sub reveal">Your AI agents. Every chat app. Your Mac.</p>
-    <p class="lead reveal" style="margin: 16px auto 0">A secret-agent octopus on a switchboard of AI models. Message him on Telegram, WhatsApp or Slack, and he plugs every chat into the right model, running privately on your own Mac.</p>
+    <p class="lead reveal" style="margin: 16px auto 0">A secret-agent octopus on a switchboard of AI models. Message him on Telegram, WhatsApp, Slack, Claude or ChatGPT, and he plugs every chat into the right model, running privately on your own Mac. Free and open source.</p>
     <div class="buttons reveal">
       <a class="btn primary" href="#start">Get started</a>
-      <a class="btn ghost" href="https://github.com/doron2402/agentim">View on GitHub ›</a>
+      <a class="btn ghost" href="https://github.com/CrewOS-Agentim/agentim">View on GitHub ›</a>
     </div>
     <div class="hero-stage reveal">
       <video src="assets/agent-tim-demo.mp4" poster="assets/agent-tim.png" autoplay muted loop playsinline aria-label="Agent Tim, a cartoon octopus with sunglasses and a headset, juggling a phone, a laptop and a film clapper"></video>
@@ -337,6 +341,11 @@
     <p class="eyebrow reveal">Startup Mode</p>
     <h2 class="title reveal">Pitch a startup.<br><span class="grad-purple">Get a whole team.</span></h2>
     <p class="lead reveal" style="margin-top:16px">Pitch as many startups as you like. Agent Tim interviews you with ten questions, five as a YC partner and five as a co-founder. Then a team of agents who act like real employees gets to work, meeting every 10–30 minutes, handing work to each other by name, and keeping a living plan. You get a short summary after every meeting.</p>
+    <div class="grid" style="text-align:left;margin-top:36px">
+      <div class="card reveal" style="background:var(--light)"><div class="icon">💬</div><h3>Jump into the meeting</h3><p>Type in the agents room and the agents speaking next answer you first. Watch who's in the room and who's typing, live.</p></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">🏷️</div><h3>Tag anyone with @</h3><p>"<b>@Sam</b> come up with 2 designs" and Sam answers right away. Tab completes the name.</p></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">📝</div><h3>A summary after every meeting</h3><p>Decisions, action items with owners, metrics and open questions, with the date and time, ready to review.</p></div>
+    </div>
     <div class="mac reveal">
       <div class="screen"><img class="on" src="assets/screenshots/startup.png" alt="agentim Startup Mode: your startups, the living plan and the agents room" loading="lazy"></div>
       <div class="base"></div>
@@ -387,6 +396,12 @@
       <div class="card reveal" style="background:var(--light)"><div class="icon">🧭</div><h3>Product Manager</h3><p>One-page PRDs, RICE prioritization, and metrics with real baselines.</p><code>/product-manager</code></div>
       <div class="card reveal" style="background:var(--light)"><div class="icon">📋</div><h3>Project Manager</h3><p>Plans, critical paths, risk registers, and status updates under 150 words.</p><code>/project-manager</code></div>
       <div class="card reveal" style="background:var(--light)"><div class="icon">🎥</div><h3>Video Director</h3><p>Turns an idea into on-model shot prompts, then renders each clip with LTX.</p><code>/video-director</code></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">🌐</div><h3>Web QA</h3><p>Risk-based test plans, Playwright tests, accessibility checks and bug reports you can act on.</p><code>/web-qa</code></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">📱</div><h3>Mobile QA</h3><p>Device matrix, Maestro/XCUITest/Espresso flows, offline and interruption testing, store readiness.</p><code>/mobile-qa</code></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">🔌</div><h3>API Testing</h3><p>Contract and negative tests, OWASP API Top 10 checks, pytest suites and k6 load tests.</p><code>/api-testing</code></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">📊</div><h3>Data Analytics</h3><p>North star, funnels, retention, tracking plans, dashboards and clean experiments.</p><code>/data-analytics</code></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">🧠</div><h3>CTO &amp; CPO</h3><p>Architecture, build vs. buy, delivery speed; product strategy, discovery and roadmaps.</p><code>/cto · /cpo</code></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">📣</div><h3>CMO &amp; CISO</h3><p>Positioning, channels and launches; security programs, compliance and incident readiness.</p><code>/cmo · /ciso</code></div>
     </div>
   </div>
 </section>
@@ -418,6 +433,19 @@
   </div>
 </section>
 
+<section class="dark" id="connect">
+  <div class="wrap center">
+    <p class="eyebrow reveal">Works with what you already use</p>
+    <h2 class="title reveal">Claude. ChatGPT.<br><span class="grad">Claude Code.</span></h2>
+    <p class="lead reveal" style="margin-top:16px">agentim is an MCP connector, so Claude and ChatGPT can ask your local models and agents, make images and videos with LTX, and run your startups. And Agent Tim can hand coding tasks to the Claude Code or Codex already on your Mac.</p>
+    <div class="grid" style="text-align:left">
+      <div class="card reveal"><div class="icon">✳️</div><h3>Claude Desktop &amp; Claude Code</h3><p>One click in <b>This Mac → Add to Claude</b>. Everything stays on your Mac.</p></div>
+      <div class="card reveal"><div class="icon">💬</div><h3>ChatGPT</h3><p><b>This Mac → Connect ChatGPT</b> opens a private HTTPS link to paste into ChatGPT's connectors.</p></div>
+      <div class="card reveal"><div class="icon">🤖</div><h3>Your local coding agents</h3><p><code>@claude-code review the auth module</code>. Continue your existing Claude Code sessions with <code>/claude</code>. Read-only unless you allow edits.</p></div>
+    </div>
+  </div>
+</section>
+
 <section class="gray" id="start">
   <div class="wrap">
     <div class="center">
@@ -428,13 +456,13 @@
       <div class="step reveal"><div>
         <h3>Open the Mac app</h3>
         <p>Onboarding installs Docker if needed, lets you pick chat, coding, voice and video models, and sets everything up. It's the whole quick start. Prefer the terminal? Read on.</p>
-        <pre><button class="copy">Copy</button>git clone https://github.com/doron2402/agentim.git &amp;&amp; cd agentim
+        <pre><button class="copy">Copy</button>git clone https://github.com/CrewOS-Agentim/agentim.git &amp;&amp; cd agentim
 brew install xcodegen &amp;&amp; xcodegen generate &amp;&amp; open agentim.xcodeproj   <span class="c"># ⌘R</span></pre>
       </div></div>
       <div class="step reveal"><div>
         <h3>…or get the code</h3>
         <p>You need a Mac with Apple silicon and Docker Desktop.</p>
-        <pre><button class="copy">Copy</button>git clone https://github.com/doron2402/agentim.git
+        <pre><button class="copy">Copy</button>git clone https://github.com/CrewOS-Agentim/agentim.git
 cd agentim</pre>
       </div></div>
       <div class="step reveal"><div>
@@ -460,8 +488,25 @@ open agentim.xcodeproj   <span class="c"># ⌘R</span></pre>
       </div></div>
     </div>
     <div class="buttons reveal" style="margin-top:50px">
-      <a class="btn primary" href="https://github.com/doron2402/agentim">Star on GitHub</a>
-      <a class="btn ghost" href="https://github.com/doron2402/agentim#readme">Read the docs ›</a>
+      <a class="btn primary" href="https://github.com/CrewOS-Agentim/agentim">Star on GitHub</a>
+      <a class="btn ghost" href="https://github.com/CrewOS-Agentim/agentim#readme">Read the docs ›</a>
+    </div>
+  </div>
+</section>
+
+<section id="community">
+  <div class="wrap center">
+    <p class="eyebrow reveal">Open source</p>
+    <h2 class="title reveal">Built together.<br><span class="grad-purple">Come build with us.</span></h2>
+    <p class="lead reveal" style="margin-top:16px">agentim is MIT licensed and made in the open. Every star, idea, bug report and pull request makes Agent Tim better for everyone.</p>
+    <div class="grid" style="text-align:left">
+      <div class="card reveal" style="background:var(--light)"><div class="icon">🐞</div><h3>Report an issue</h3><p>Something broken? Tell us what happened; the app's <b>Help → Report an Issue</b> fills in your Mac's details.</p><a class="btn ghost" href="https://github.com/CrewOS-Agentim/agentim/issues/new?template=bug_report.md">Report a bug</a></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">💡</div><h3>Suggest a feature</h3><p>A skill, channel or model you'd love to see? Ask for it, or start with an idea in Discussions.</p><a class="btn ghost" href="https://github.com/CrewOS-Agentim/agentim/issues/new?template=feature_request.md">Suggest a feature</a></div>
+      <div class="card reveal" style="background:var(--light)"><div class="icon">💬</div><h3>Join the discussion</h3><p>Questions, setups, show and tell: meet the people running Agent Tim on their Macs.</p><a class="btn ghost" href="https://github.com/CrewOS-Agentim/agentim/discussions">Open Discussions</a></div>
+    </div>
+    <div class="buttons reveal" style="margin-top:40px">
+      <a class="btn primary" href="https://github.com/CrewOS-Agentim/agentim">⭐ Star on GitHub</a>
+      <a class="btn ghost" href="https://github.com/CrewOS-Agentim/agentim/blob/master/CONTRIBUTING.md">Contribute ›</a>
     </div>
   </div>
 </section>
@@ -469,7 +514,7 @@ open agentim.xcodeproj   <span class="c"># ⌘R</span></pre>
 <footer>
   <div class="wrap">
     <span>🐙 agentim · MIT License · Mascot and demo clips generated locally with LTX Desktop.</span>
-    <span><a href="https://github.com/doron2402/agentim">GitHub</a> · <a href="https://github.com/doron2402/agentim/issues/new?labels=bug">Report an issue</a> · <a href="https://github.com/doron2402/agentim/issues/new?labels=enhancement">Request a feature</a></span>
+    <span><a href="https://github.com/CrewOS-Agentim/agentim">GitHub</a> · <a href="https://github.com/CrewOS-Agentim/agentim/issues/new?template=bug_report.md">Report an issue</a> · <a href="https://github.com/CrewOS-Agentim/agentim/issues/new?template=feature_request.md">Suggest a feature</a> · <a href="https://github.com/CrewOS-Agentim/agentim/discussions">Discussions</a></span>
   </div>
 </footer>
 

@@ -4,13 +4,19 @@ import Foundation
 /// "Report an issue": opens a new GitHub issue for agentim, prefilled with what helps triage
 /// (app and macOS version, chip, memory). Nothing is sent until the user submits it on GitHub.
 enum IssueReporter {
-    static let repository = URL(string: "https://github.com/doron2402/agentim")!
+    static let repository = URL(string: "https://github.com/CrewOS-Agentim/agentim")!
 
     enum Kind: String {
         case bug, feature
 
         var label: String { self == .bug ? "bug" : "enhancement" }
+        /// The matching template in .github/ISSUE_TEMPLATE.
+        var template: String { self == .bug ? "bug_report.md" : "feature_request.md" }
     }
+
+    /// Ideas and questions that aren't issues yet.
+    static var ideas: URL { repository.appendingPathComponent("discussions/new").appending(queryItems: [.init(name: "category", value: "ideas")]) }
+    static var questions: URL { repository.appendingPathComponent("discussions/new").appending(queryItems: [.init(name: "category", value: "q-a")]) }
 
     static func url(kind: Kind = .bug, title: String = "", details: String? = nil,
                     environment: [String: String] = currentEnvironment()) -> URL {
@@ -45,6 +51,7 @@ enum IssueReporter {
         }
         var components = URLComponents(url: repository.appendingPathComponent("issues/new"), resolvingAgainstBaseURL: false)!
         components.queryItems = [
+            URLQueryItem(name: "template", value: kind.template),
             URLQueryItem(name: "title", value: title),
             URLQueryItem(name: "body", value: body),
             URLQueryItem(name: "labels", value: kind.label),
@@ -55,6 +62,9 @@ enum IssueReporter {
     static func open(kind: Kind = .bug, title: String = "", details: String? = nil) {
         NSWorkspace.shared.open(url(kind: kind, title: title, details: details))
     }
+
+    static func openIdeas() { NSWorkspace.shared.open(ideas) }
+    static func openQuestions() { NSWorkspace.shared.open(questions) }
 
     static func currentEnvironment() -> [String: String] {
         let info = Bundle.main.infoDictionary ?? [:]

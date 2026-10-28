@@ -319,6 +319,88 @@ class MentionAndNotesTests(unittest.TestCase):
             server.shutdown()
 
 
+class MinutesTests(unittest.TestCase):
+    MINUTES = ("## Summary\nWe chose coworking landlords.\n## Decisions\n- Per-floor pricing (Grace)\n"
+               "## Action items\n- **Zoe**: book 3 pilots (by Friday)\n## Metrics\n- 62% margin\n## Open questions\n- None")
+
+    def mode_with_minutes(self, minutes_reply):
+        class NoteTaker(TeamLLM):
+            def complete(inner, model, system, messages):
+                if messages[-1]["content"].startswith("You are the note-taker"):
+                    inner.prompts.append(messages[-1]["content"])
+                    return minutes_reply
+                return super().complete(model, system, messages)
+
+        llm = NoteTaker()
+        gateway, mode = make_startup_mode(llm=llm)
+        return gateway, mode, llm
+
+    def test_minutes_are_written_after_every_meeting(self):
+        _, mode, llm = self.mode_with_minutes(self.MINUTES)
+        startup = running(mode)
+        mode.run_round(startup["id"])
+        notes = mode.meeting(startup["id"], 1)
+        self.assertTrue(notes["minutes"].startswith("## Summary"))
+        self.assertIn("**Zoe**: book 3 pilots", notes["minutes"])
+        self.assertEqual(mode.meetings(startup["id"])[0]["minutes"], notes["minutes"], "the list carries them too")
+        prompt = next(p for p in llm.prompts if p.startswith("You are the note-taker"))
+        self.assertIn("never invent numbers", prompt)
+        self.assertIn("Transcript:", prompt)
+
+    def test_headings_are_normalised_and_junk_falls_back(self):
+        from agentim.startup import clean_minutes
+        messy = "```\n### summary:\nok\n**Decisions**\n# DECISIONS\n- x\n### Action Items\n- y\n```"
+        cleaned = clean_minutes(messy)
+        self.assertTrue(cleaned.startswith("## Summary"))
+        self.assertIn("## Decisions", cleaned)
+        self.assertIn("## Action items", cleaned)
+        self.assertIsNone(clean_minutes("Sure! Here are some thoughts."))
+
+        _, mode, _ = self.mode_with_minutes("I can't help with that.")
+        startup = running(mode)
+        mode.run_round(startup["id"])
+        minutes = mode.meeting(startup["id"], 1)["minutes"]
+        self.assertTrue(minutes.startswith("## Summary"), "a usable fallback when the model rambles")
+        self.assertIn("## Action items", minutes)
+
+    def test_older_meetings_get_minutes_on_request(self):
+        gateway, mode, _ = self.mode_with_minutes(self.MINUTES)
+        startup = running(mode)
+        mode.run_round(startup["id"])
+        mode.store.db.execute("DELETE FROM startup_meeting_minutes")  # as if it predates minutes
+        self.assertIsNone(mode.meeting(startup["id"], 1)["minutes"])
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gateway, {}, lambda: [QWEN]))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/startups/{startup['id']}/meetings/1/minutes",
+                data=b"{}", method="POST", headers={"Authorization": "Bearer tok", "Content-Type": "application/json"})
+            body = json.loads(urllib.request.urlopen(req, timeout=10).read())
+            self.assertTrue(body["minutes"].startswith("## Summary"))
+            missing = urllib.request.Request(req.full_url.replace("/1/", "/9/"), data=b"{}", method="POST",
+                                             headers=req.headers)
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                urllib.request.urlopen(missing, timeout=10)
+            self.assertEqual(caught.exception.code, 404)
+        finally:
+            server.shutdown()
+
+    def test_the_founder_gets_the_summary_and_action_items_when_it_ends(self):
+        _, mode, _ = self.mode_with_minutes(self.MINUTES)
+        startup = running(mode)
+        text = mode.run_round(startup["id"])
+        self.assertIn("meeting 1 is over", text)
+        self.assertIn("✅ *Action items*", text)
+        self.assertIn("**Zoe**: book 3 pilots (by Friday)", text)
+
+    def test_deleting_a_startup_deletes_its_minutes(self):
+        _, mode, _ = self.mode_with_minutes(self.MINUTES)
+        startup = running(mode)
+        mode.run_round(startup["id"])
+        mode.delete(startup["id"])
+        self.assertEqual(mode.store.all_minutes(startup["id"]), {})
+
+
 class MigrationTests(unittest.TestCase):
     def test_old_database_gets_team_columns(self):
         db = sqlite3.connect(":memory:", check_same_thread=False)

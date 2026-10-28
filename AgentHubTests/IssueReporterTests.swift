@@ -11,10 +11,11 @@ final class IssueReporterTests: XCTestCase {
         let url = IssueReporter.url(kind: .bug, title: "Crash", details: "It broke & stopped",
                                     environment: ["agentim": "1.0 (1)", "macOS": "26.5"])
         XCTAssertEqual(url.host, "github.com")
-        XCTAssertEqual(url.path, "/doron2402/agentim/issues/new")
+        XCTAssertEqual(url.path, "/CrewOS-Agentim/agentim/issues/new")
         let q = query(url)
         XCTAssertEqual(q["title"], "Crash")
         XCTAssertEqual(q["labels"], "bug")
+        XCTAssertEqual(q["template"], "bug_report.md")
         XCTAssertTrue(q["body"]!.contains("It broke & stopped"), "special characters survive encoding")
         XCTAssertTrue(q["body"]!.contains("- agentim: 1.0 (1)\n- macOS: 26.5"))
         XCTAssertTrue(q["body"]!.contains("### Steps to reproduce"))
@@ -23,6 +24,9 @@ final class IssueReporterTests: XCTestCase {
     func testFeatureRequest() {
         let q = query(IssueReporter.url(kind: .feature, environment: [:]))
         XCTAssertEqual(q["labels"], "enhancement")
+        XCTAssertEqual(q["template"], "feature_request.md")
+        XCTAssertEqual(IssueReporter.ideas.absoluteString,
+                       "https://github.com/CrewOS-Agentim/agentim/discussions/new?category=ideas")
         XCTAssertTrue(q["body"]!.contains("What would you like agentim to do?"))
     }
 

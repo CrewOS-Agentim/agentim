@@ -244,11 +244,13 @@ class ClaudeSessionsTests(unittest.TestCase):
         root = os.path.join(self.tmp.name, "projects")
         self.ws = os.path.realpath(os.path.join(self.tmp.name, "my-app"))
         self.other = os.path.realpath(os.path.join(self.tmp.name, "secret"))
-        os.makedirs(os.path.join(root, "p1"))
         os.makedirs(self.ws)
 
         def session(name, cwd, records):
-            with open(os.path.join(root, "p1", f"{name}.jsonl"), "w") as f:
+            # Claude Code keeps each project's sessions in a folder named after the path.
+            folder = os.path.join(root, runner.ClaudeSessions.encoded(cwd))
+            os.makedirs(folder, exist_ok=True)
+            with open(os.path.join(folder, f"{name}.jsonl"), "w") as f:
                 for r in records:
                     f.write(json.dumps({**r, "cwd": cwd}) + "\n")
 
@@ -302,6 +304,19 @@ class ClaudeSessionsTests(unittest.TestCase):
         self.assertEqual(cmd[:5], ["/fake/claude", "-p", "Now write the fix", "--resume", "aaaaaaaa-1111"])
         self.assertIn("plan", cmd)
         self.assertEqual(kwargs["cwd"], self.ws)
+
+    def test_session_that_started_elsewhere_belongs_to_its_project(self):
+        folder = os.path.join(self.sessions.root, runner.ClaudeSessions.encoded(self.ws))
+        with open(os.path.join(folder, "cccccccc-3333.jsonl"), "w") as f:
+            f.write(json.dumps({"type": "mode", "cwd": os.path.expanduser("~")}) + "\n")  # started in ~
+            for _ in range(2):
+                f.write(json.dumps({"type": "user", "cwd": self.ws, "message": {"content": "Ship it"}}) + "\n")
+        listed = {s["id"]: s for s in self.sessions.list()}
+        self.assertEqual(listed["cccccccc-3333"]["cwd"], self.ws)
+
+    def test_folder_names_match_claude_code(self):
+        self.assertEqual(runner.ClaudeSessions.encoded("/Users/me/github/AgentHub"), "-Users-me-github-AgentHub")
+        self.assertEqual(runner.ClaudeSessions.encoded("/Users/me/code/my.app"), "-Users-me-code-my-app")
 
     def test_off_unless_claude_code_is_enabled(self):
         off = runner.ClaudeSessions(agents=runner.LocalAgents(env={}), root=self.sessions.root)
