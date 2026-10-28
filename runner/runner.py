@@ -486,11 +486,21 @@ class ClaudeSessions:
         cwd = os.path.realpath(cwd or "")
         return any(cwd == w or cwd.startswith(w + os.sep) for w in self.agents.workspaces())
 
-    def files(self):
+    @staticmethod
+    def encoded(path):
+        """Claude Code names a project folder after its path: /Users/me/code.app → -Users-me-code-app."""
+        return re.sub(r"[^A-Za-z0-9-]", "-", path)
+
+    def files(self, workspaces_only=False):
         try:
-            folders = [os.path.join(self.root, d) for d in os.listdir(self.root)]
+            names = os.listdir(self.root)
         except OSError:
             return []
+        if workspaces_only:
+            # Skip other projects without opening their (often large) transcripts.
+            prefixes = [self.encoded(w) for w in self.agents.workspaces()]
+            names = [n for n in names if any(n == p or n.startswith(p + "-") for p in prefixes)]
+        folders = [os.path.join(self.root, d) for d in names]
         found = [os.path.join(f, n) for f in folders if os.path.isdir(f) for n in os.listdir(f) if n.endswith(".jsonl")]
         return sorted(found, key=os.path.getmtime, reverse=True)
 
@@ -504,6 +514,7 @@ class ClaudeSessions:
         info = {"id": os.path.basename(path)[:-6], "cwd": None, "title": None, "updated": os.path.getmtime(path),
                 "messages": 0, "first_prompt": None, "branch": None}
         messages = []
+        cwds = {}
         with open(path, errors="replace") as f:
             for line in f:
                 try:
@@ -511,7 +522,8 @@ class ClaudeSessions:
                 except ValueError:
                     continue
                 kind = record.get("type")
-                info["cwd"] = info["cwd"] or record.get("cwd")
+                if record.get("cwd"):
+                    cwds[record["cwd"]] = cwds.get(record["cwd"], 0) + 1
                 info["branch"] = record.get("gitBranch") or info["branch"]
                 if kind == "custom-title" and record.get("customTitle"):
                     info["title"] = record["customTitle"]
@@ -527,13 +539,18 @@ class ClaudeSessions:
                     info["first_prompt"] = text[:200]
                 if keep_messages:
                     messages.append({"role": kind, "text": text, "time": record.get("timestamp")})
+        # Claude Code files a session under the folder it belongs to (and resumes it from there); a session may
+        # have started somewhere else (e.g. ~) before moving into the project.
+        folder = os.path.basename(os.path.dirname(path))
+        owner = next((c for c in cwds if self.encoded(c) == folder), None)
+        info["cwd"] = owner or (max(cwds, key=cwds.get) if cwds else None)
         return (info, messages) if keep_messages else info
 
     def list(self, limit=20):
         if not self.enabled():
             raise RuntimeError("Enable Claude Code first: AGENTIM_LOCAL_AGENTS=claude-code and AGENTIM_WORKSPACES in .env.")
         sessions = []
-        for path in self.files():
+        for path in self.files(workspaces_only=True):
             info = self.parse(path)
             if info["messages"] and self.in_workspace(info["cwd"]):
                 sessions.append(info)

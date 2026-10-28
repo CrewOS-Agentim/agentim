@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 💡 Share an idea
+    url: https://github.com/CrewOS-Agentim/agentim/discussions/new?category=ideas
+    about: Not sure it's a feature request yet? Start a discussion and let others weigh in.
+  - name: ❓ Ask a question
+    url: https://github.com/CrewOS-Agentim/agentim/discussions/new?category=q-a
+    about: Setup help, how-tos and "is this possible?" questions.

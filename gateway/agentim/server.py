@@ -161,7 +161,7 @@ def make_handler(gateway, channels, catalog):
                 startup_id = parts[2]
                 if not startup.store.get(startup_id):
                     return self.send_json(404, {"error": "no such startup"})
-                action = parts[3] if len(parts) == 4 else ""
+                action = parts[3] if len(parts) >= 4 else ""
                 if action == "answers":
                     if body.get("skip"):
                         startup.skip_questions(startup_id)
@@ -171,6 +171,12 @@ def make_handler(gateway, channels, catalog):
                     startup.set_team(startup_id, body.get("team"))
                 elif action == "messages":
                     startup.post_founder(startup_id, body.get("text", ""))
+                elif action == "meetings" and len(parts) == 6 and parts[4].isdigit() and parts[5] == "minutes":
+                    try:
+                        startup.write_minutes(startup_id, int(parts[4]))
+                    except KeyError:
+                        return self.send_json(404, {"error": "no such meeting"})
+                    return self.send_json(200, startup.meeting(startup_id, int(parts[4])))
                 elif action == "run":
                     threading.Thread(target=startup.run_round, args=(startup_id,), daemon=True).start()
                     return self.send_json(202, {"started": True})

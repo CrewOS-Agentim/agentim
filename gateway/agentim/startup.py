@@ -284,6 +284,58 @@ SUMMARY:
 <2–3 sentences for the founder: what the team decided and the single next action, with the owner's name.>"""
 
 
+MINUTES_SECTIONS = ["Summary", "Decisions", "Action items", "Metrics", "Open questions"]
+
+
+def minutes_prompt(startup, round_no, transcript):
+    return f"""You are the note-taker for "{startup['name']}" (meeting {round_no}). Write the meeting minutes from \
+this transcript. Only what was actually said: never invent numbers, owners or dates.
+
+Transcript:
+{transcript}
+
+Reply in markdown with exactly these sections, short bullets:
+## Summary
+<2–3 sentences: what the meeting was about and the outcome>
+## Decisions
+- <decision> (who decided or proposed it)
+## Action items
+- **<Owner first name>**: <task> (by <when, if said>)
+## Metrics
+- <metric: value or target, as mentioned> (or "- None mentioned")
+## Open questions
+- <question> (or "- None")"""
+
+
+def clean_minutes(text):
+    """Keeps the reply only if it has the expected sections; normalises the headings."""
+    text = text.strip().strip("`").strip()
+    found = [s for s in MINUTES_SECTIONS if re.search(rf"^#+\s*{s}\b", text, re.IGNORECASE | re.MULTILINE)]
+    if len(found) < 3:
+        return None
+    for section in MINUTES_SECTIONS:
+        text = re.sub(rf"^#+\s*{section}\b.*$", f"## {section}", text, flags=re.IGNORECASE | re.MULTILINE)
+    return text[text.index("## "):] if "## " in text else text
+
+
+def minutes_section(minutes, name):
+    """The body of one "## Section" of the minutes, or None."""
+    if not minutes:
+        return None
+    match = re.search(rf"^## {re.escape(name)}\s*$(.*?)(?=^## |\Z)", minutes, re.MULTILINE | re.DOTALL)
+    body = match.group(1).strip() if match else ""
+    return body or None
+
+
+def fallback_minutes(messages, people):
+    """When no model answers: Tim's summary plus who spoke."""
+    summary = next((m["content"] for m in reversed(messages) if m["role"] == "ceo"), "The agents met.")
+    speakers = sorted({people[m["role"]].first for m in messages if m["role"] in people and m["role"] != "ceo"})
+    return (f"## Summary\n{summary}\n\n## Decisions\n- See the conversation\n\n## Action items\n"
+            + "\n".join(f"- **{name}**: follow up on their update" for name in speakers)
+            + "\n\n## Metrics\n- None recorded\n\n## Open questions\n- None recorded")
+
+
 def split_ceo(output, fallback_plan):
     """Splits Tim's reply into the plan and the founder summary; models format the labels loosely
     ("SUMMARY:", "**Summary**", "### Summary")."""
@@ -312,6 +364,8 @@ class StartupStore:
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_team_messages (
                 startup_id TEXT, round INTEGER, role TEXT, content TEXT, ts REAL)""")
             self.db.execute("CREATE INDEX IF NOT EXISTS startup_team_messages_id ON startup_team_messages (startup_id, ts)")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS startup_meeting_minutes (
+                startup_id TEXT, round INTEGER, minutes TEXT, created REAL, PRIMARY KEY (startup_id, round))""")
             # Databases from before editable teams: add the new columns in place.
             existing = {row[1] for row in self.db.execute("PRAGMA table_info(startups)")}
             for column in ("team", "alumni"):
@@ -350,6 +404,7 @@ class StartupStore:
         with self.lock, self.db:
             self.db.execute("DELETE FROM startups WHERE id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_team_messages WHERE startup_id = ?", (startup_id,))
+            self.db.execute("DELETE FROM startup_meeting_minutes WHERE startup_id = ?", (startup_id,))
 
     def add_message(self, startup_id, round_no, role, content):
         with self.lock, self.db:
@@ -376,8 +431,25 @@ class StartupStore:
                                    (startup_id,)).fetchall()
             summaries = dict(self.db.execute("""SELECT round, content FROM startup_team_messages
                 WHERE startup_id = ? AND role = 'ceo'""", (startup_id,)).fetchall())
-        return [{"round": r, "started": start, "ended": end, "messages": count,
+        minutes = self.all_minutes(startup_id)
+        return [{"round": r, "started": start, "ended": end, "messages": count, "minutes": minutes.get(r),
                  "attendees": (roles or "").split(","), "summary": summaries.get(r)} for r, start, end, count, roles in rows]
+
+    def save_minutes(self, startup_id, round_no, minutes):
+        with self.lock, self.db:
+            self.db.execute("INSERT OR REPLACE INTO startup_meeting_minutes VALUES (?, ?, ?, ?)",
+                            (startup_id, round_no, minutes, time.time()))
+
+    def minutes(self, startup_id, round_no):
+        with self.lock:
+            row = self.db.execute("SELECT minutes FROM startup_meeting_minutes WHERE startup_id = ? AND round = ?",
+                                  (startup_id, round_no)).fetchone()
+        return row[0] if row else None
+
+    def all_minutes(self, startup_id):
+        with self.lock:
+            return dict(self.db.execute("SELECT round, minutes FROM startup_meeting_minutes WHERE startup_id = ?",
+                                        (startup_id,)).fetchall())
 
     def last_spoke(self, startup_id):
         with self.lock:
@@ -552,7 +624,23 @@ under 180 words, start with "{person.first} here:"."""
         people = {k: {"name": p.name, "title": p.title, "emoji": p.emoji} for k, p in people_of(startup).items()}
         summary = next((m["content"] for m in reversed(messages) if m["role"] == CEO.key), None)
         return {"round": round_no, "started": messages[0]["ts"], "ended": messages[-1]["ts"],
-                "summary": summary, "messages": messages, "people": people}
+                "summary": summary, "minutes": self.store.minutes(startup_id, round_no),
+                "messages": messages, "people": people}
+
+    def write_minutes(self, startup_id, round_no):
+        """Meeting minutes from the transcript: summary, decisions, action items, metrics, open questions."""
+        startup = self.store.get(startup_id)
+        messages = self.store.round_messages(startup_id, round_no) if startup else []
+        if not messages:
+            raise KeyError(f"{startup_id}/{round_no}")
+        people = people_of(startup)
+        transcript = "\n\n".join(f"{people[m['role']].name if m['role'] in people else m['role']}"
+                                  f" ({people[m['role']].title if m['role'] in people else ''}): {m['content']}"
+                                  for m in messages)
+        reply = self._ask(minutes_prompt(startup, round_no, transcript)) or ""
+        minutes = clean_minutes(reply) or fallback_minutes(messages, people)
+        self.store.save_minutes(startup_id, round_no, minutes)
+        return minutes
 
     # ---- the team: edit, hire, fire
 
@@ -659,7 +747,13 @@ under 180 words, start with "{person.first} here:"."""
             startup = self.store.get(startup_id) or startup
             startup["plan"], startup["rounds"] = plan, round_no
             self.schedule_next(startup)
-            text = self.digest(startup, posted, summary, people)
+            self.live.pop(startup_id, None)  # the meeting is over; the minutes are written after it
+            minutes = None
+            try:
+                minutes = self.write_minutes(startup_id, round_no)
+            except Exception:
+                log.exception("startup: couldn't write the meeting minutes")
+            text = self.digest(startup, posted, summary, people, minutes)
             if self.notify and startup.get("notify_channel") and startup.get("notify_chat"):
                 try:
                     self.notify(startup["notify_channel"], startup["notify_chat"], text)
@@ -693,10 +787,14 @@ under 180 words, start with "{person.first} here:"."""
         return None
 
     @staticmethod
-    def digest(startup, posted, summary, people=None):
+    def digest(startup, posted, summary, people=None, minutes=None):
+        """The message the founder gets when a meeting is over: summary, then the action items."""
         people = people or PEOPLE
         who = ", ".join(people[m["role"]].first for m in posted)
-        return f"🚀 *{startup['name']}*, meeting {startup['rounds']} ({who})\n\n{summary}\n\n_/startup to see your startups and plans._"
+        actions = minutes_section(minutes, "Action items")
+        todo = f"\n\n✅ *Action items*\n{actions}" if actions and "None" not in actions[:12] else ""
+        return (f"🚀 *{startup['name']}*, meeting {startup['rounds']} is over ({who})\n\n{summary}{todo}"
+                "\n\n_/startup to see your startups and plans._")
 
     def loop(self, tick=30, sleep=time.sleep):
         while True:

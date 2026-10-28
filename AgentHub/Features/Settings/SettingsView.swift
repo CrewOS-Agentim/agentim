@@ -82,7 +82,8 @@ struct SettingsView: View {
                     LabeledContent("Network", value: store.isOnline ? "Online" : "Offline")
                     HStack {
                         Button("Report an issue", systemImage: "ladybug") { IssueReporter.open(kind: .bug) }
-                        Button("Request a feature", systemImage: "lightbulb") { IssueReporter.open(kind: .feature) }
+                        Button("Suggest a feature", systemImage: "lightbulb") { IssueReporter.open(kind: .feature) }
+                        Button("Discussions", systemImage: "bubble.left.and.bubble.right") { IssueReporter.openIdeas() }
                     }
                     Text("Opens GitHub with your app and Mac details filled in. Nothing is sent until you submit it there.")
                         .font(.caption).foregroundStyle(.secondary)

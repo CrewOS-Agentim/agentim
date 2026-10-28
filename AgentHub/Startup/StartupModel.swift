@@ -151,6 +151,12 @@ struct StartupClient {
         return try JSONDecoder().decode(MeetingList.self, from: data).meetings
     }
 
+    /// Writes (or rewrites) a meeting's minutes on the gateway and returns the meeting.
+    func writeMinutes(_ id: String, round: Int) async throws -> MeetingNotes {
+        let data = try await raw("v1/startups/\(id)/meetings/\(round)/minutes", method: "POST", body: [:])
+        return try JSONDecoder().decode(MeetingNotes.self, from: data)
+    }
+
     func meeting(_ id: String, round: Int) async throws -> MeetingNotes {
         let data = try await raw("v1/startups/\(id)/meetings/\(round)", method: "GET", body: nil)
         return try JSONDecoder().decode(MeetingNotes.self, from: data)
@@ -531,6 +537,20 @@ final class StartupModel {
         }
     }
 
+    var writingMinutes = false
+
+    func writeMinutes(for round: Int, stackRoot: URL?) async {
+        guard let detail, !isDemo, let client = Self.client(stackRoot: stackRoot) else { return }
+        writingMinutes = true
+        defer { writingMinutes = false }
+        do {
+            openMeeting = try await client.writeMinutes(detail.id, round: round)
+            await loadMeetings(stackRoot: stackRoot)
+        } catch {
+            self.error = "Couldn't write the summary: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - @mentions
 
     /// The partial "@na" at the end of the draft, if the founder is typing a mention.
@@ -800,7 +820,12 @@ struct MeetingSummary: Decodable, Equatable, Identifiable {
     let messages: Int
     let attendees: [String]
     let summary: String?
+    /// Meeting minutes (markdown: Summary, Decisions, Action items, Metrics, Open questions).
+    var minutes: String? = nil
     var id: Int { round }
+
+    /// The "Summary" section of the minutes, else Tim's wrap-up.
+    var headline: String? { MeetingNotes.section("Summary", in: minutes) ?? summary }
 
     var startDate: Date { Date(timeIntervalSince1970: started) }
     var endDate: Date { Date(timeIntervalSince1970: ended) }
@@ -818,7 +843,8 @@ struct MeetingSummary: Decodable, Equatable, Identifiable {
         Dictionary(grouping: messages, by: \.round).map { round, items in
             MeetingSummary(round: round, started: items.map(\.ts).min() ?? 0, ended: items.map(\.ts).max() ?? 0,
                            messages: items.count, attendees: Array(Set(items.map(\.role))).sorted(),
-                           summary: items.last { $0.role == "ceo" }?.content)
+                           summary: items.last { $0.role == "ceo" }?.content,
+                           minutes: MeetingNotes.demoMinutes(items))
         }
         .sorted { $0.round > $1.round }
     }
@@ -830,9 +856,41 @@ struct MeetingNotes: Decodable, Identifiable {
     let started: Double
     let ended: Double
     let summary: String?
+    var minutes: String? = nil
     let messages: [StartupDetail.Message]
     let people: [String: StartupDetail.PersonInfo]
     var id: Int { round }
+
+    /// The body of one "## Section" of the minutes.
+    static func section(_ name: String, in minutes: String?) -> String? {
+        guard let minutes, let start = minutes.range(of: "## \(name)") else { return nil }
+        let rest = minutes[start.upperBound...]
+        let body = rest.range(of: "\n## ").map { rest[..<$0.lowerBound] } ?? rest
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    /// Demo mode: minutes for the demo meeting.
+    static func demoMinutes(_ messages: [StartupDetail.Message]) -> String? {
+        guard messages.contains(where: { $0.role == "ceo" }) else { return nil }
+        return """
+        ## Summary
+        The team picked coworking landlords as the first market, with per-floor pricing and three paid pilots in Austin.
+        ## Decisions
+        - Sell to coworking landlords first: one contract, many desks (Zoe)
+        - Per-floor pricing at $290/month; cap pilots at 3 (Grace)
+        ## Action items
+        - **Zoe**: book 3 paid pilots (by Friday)
+        - **Leo**: one-page ROI calculator for operators (by Thursday)
+        - **Sam**: link the email sequence to the ROI page
+        - **Grace**: push annual prepay at signing
+        ## Metrics
+        - Pilot margin: 31% with 50% off month one; target margin 62%
+        - 2 of 4 operators called want a pilot
+        ## Open questions
+        - Own the plants or lease them?
+        """
+    }
 
     func person(_ key: String) -> StartupDetail.PersonInfo {
         if key == "founder" { return .init(name: "You", title: "Founder", emoji: "🧑‍🚀") }
@@ -842,6 +900,7 @@ struct MeetingNotes: Decodable, Identifiable {
     static func fromMessages(_ messages: [StartupDetail.Message], round: Int,
                              people: [String: StartupDetail.PersonInfo]) -> MeetingNotes {
         MeetingNotes(round: round, started: messages.first?.ts ?? 0, ended: messages.last?.ts ?? 0,
-                     summary: messages.last { $0.role == "ceo" }?.content, messages: messages, people: people)
+                     summary: messages.last { $0.role == "ceo" }?.content, minutes: demoMinutes(messages),
+                     messages: messages, people: people)
     }
 }

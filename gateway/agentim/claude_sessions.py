@@ -40,10 +40,10 @@ class ClaudeSessions:
         raise RuntimeError(problem)
 
     def list(self):
-        return self.call("/v1/claude/sessions")["sessions"]
+        return self.call("/v1/claude/sessions", timeout=90)["sessions"]
 
     def read(self, session_id):
-        return self.call(f"/v1/claude/sessions/{session_id}")
+        return self.call(f"/v1/claude/sessions/{session_id}", timeout=90)
 
     def continue_session(self, session_id, prompt):
         return self.call(f"/v1/claude/sessions/{session_id}/continue", {"prompt": prompt}, timeout=1200)

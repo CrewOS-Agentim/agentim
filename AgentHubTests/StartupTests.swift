@@ -301,6 +301,19 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(model.openMeeting?.person("founder").name, "You")
     }
 
+    func testMinutesSections() {
+        let minutes = "## Summary\nWe picked landlords.\n## Decisions\n- Per-floor pricing\n## Action items\n- **Zoe**: 3 pilots\n- **Leo**: ROI page"
+        XCTAssertEqual(MeetingNotes.section("Summary", in: minutes), "We picked landlords.")
+        XCTAssertEqual(MeetingNotes.section("Action items", in: minutes), "- **Zoe**: 3 pilots\n- **Leo**: ROI page")
+        XCTAssertNil(MeetingNotes.section("Metrics", in: minutes))
+        XCTAssertNil(MeetingNotes.section("Summary", in: nil))
+        let meeting = MeetingSummary(round: 1, started: 0, ended: 0, messages: 3, attendees: [], summary: "Tim's wrap-up",
+                                     minutes: minutes)
+        XCTAssertEqual(meeting.headline, "We picked landlords.", "the minutes' summary wins")
+        XCTAssertEqual(MeetingSummary(round: 1, started: 0, ended: 0, messages: 3, attendees: [], summary: "Tim's wrap-up").headline,
+                       "Tim's wrap-up", "falls back to Tim's wrap-up")
+    }
+
     func testDecodesMeetingNotes() throws {
         let list = #"{"meetings":[{"round":2,"started":1000,"ended":1300,"messages":4,"attendees":["sales","ceo"],"summary":"Ship it."}]}"#
         let meetings = try JSONDecoder().decode(MeetingList.self, from: Data(list.utf8)).meetings

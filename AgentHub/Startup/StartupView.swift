@@ -415,6 +415,11 @@ private struct TeamRoom: View {
                                 AgentMessageRow(detail: detail, message: message).id(message.id)
                             }
                         }
+                        if detail.meeting == nil, let latest = model.meetingList.first,
+                           latest.round == detail.messages.last(where: { $0.role == "ceo" })?.round {
+                            MeetingOverCard(meeting: latest) { Task { await model.open(latest, stackRoot: stackRoot) } }
+                                .id("summary-\(latest.round)")
+                        }
                         if let speaking = detail.meeting?.speaking {
                             TypingRow(detail: detail, key: speaking).id("typing")
                         }
@@ -425,6 +430,11 @@ private struct TeamRoom: View {
                 .onChange(of: detail.meeting?.speaking) { _, speaking in
                     if speaking != nil { withAnimation { proxy.scrollTo("typing", anchor: .bottom) } }
                 }
+                .onChange(of: model.meetingList.first?.round) { _, round in
+                    if let round { withAnimation { proxy.scrollTo("summary-\(round)", anchor: .bottom) } }
+                }
+                // A new meeting just ended (or its minutes arrived): refresh the summaries.
+                .task(id: "\(detail.rounds)-\(detail.meeting == nil)") { await model.loadMeetings(stackRoot: stackRoot) }
             }
             Divider()
             founderComposer
@@ -665,7 +675,9 @@ private struct RoomOrNotes: View {
             }
         }
         .sheet(item: $model.openMeeting) { notes in
-            MeetingNotesView(notes: notes, startup: detail) { model.openMeeting = nil }
+            MeetingNotesView(notes: notes, startup: detail, writing: model.writingMinutes,
+                             write: { Task { await model.writeMinutes(for: notes.round, stackRoot: stackRoot) } },
+                             close: { model.openMeeting = nil })
         }
     }
 }
@@ -699,9 +711,14 @@ private struct MeetingNotesList: View {
                                 }
                                 Text("  \(meeting.messages) messages").font(.caption).foregroundStyle(.secondary)
                             }
-                            if let summary = meeting.summary {
-                                Text(summary).font(.callout).foregroundStyle(.primary).lineLimit(3)
+                            if let headline = meeting.headline {
+                                Text(LocalizedStringKey(headline)).font(.callout).foregroundStyle(.primary).lineLimit(3)
                                     .multilineTextAlignment(.leading)
+                            }
+                            if let actions = MeetingNotes.section("Action items", in: meeting.minutes) {
+                                let count = actions.split(separator: "\n").filter { $0.hasPrefix("- ") }.count
+                                Label("\(count) action item\(count == 1 ? "" : "s")", systemImage: "checklist")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -721,6 +738,8 @@ private struct MeetingNotesList: View {
 private struct MeetingNotesView: View {
     let notes: MeetingNotes
     let startup: StartupDetail
+    let writing: Bool
+    let write: () -> Void
     let close: () -> Void
 
     var body: some View {
@@ -741,15 +760,30 @@ private struct MeetingNotesView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if let summary = notes.summary {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Label("Summary", systemImage: "text.badge.checkmark").font(.headline).foregroundStyle(.tint)
-                            Text(LocalizedStringKey(summary)).font(.callout).textSelection(.enabled)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Label("Meeting summary", systemImage: "text.badge.checkmark").font(.headline).foregroundStyle(.tint)
+                            Spacer()
+                            if writing {
+                                ProgressView().controlSize(.small)
+                                Text("Writing…").font(.caption).foregroundStyle(.secondary)
+                            } else if !startup.id.isEmpty {
+                                Button(notes.minutes == nil ? "Write the summary" : "Rewrite",
+                                       systemImage: "wand.and.stars", action: write)
+                                    .controlSize(.small)
+                            }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
+                        if let minutes = notes.minutes {
+                            PlanText(markdown: minutes)
+                        } else if let summary = notes.summary {
+                            Text(LocalizedStringKey(summary)).font(.callout).textSelection(.enabled)
+                            Text("Full minutes (decisions, action items, metrics) weren't written for this meeting yet.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
                     Label("Conversation", systemImage: "bubble.left.and.bubble.right").font(.headline)
                     ForEach(notes.messages) { message in
                         let person = notes.person(message.role)
@@ -772,5 +806,44 @@ private struct MeetingNotesView: View {
             }
         }
         .frame(width: 640, height: 640)
+    }
+}
+
+/// Shown in the agents room when a meeting ends: the summary and action items, and a way into the full notes.
+private struct MeetingOverCard: View {
+    let meeting: MeetingSummary
+    let open: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("Meeting \(meeting.round) is over", systemImage: "checkmark.seal.fill")
+                    .font(.headline).foregroundStyle(.tint)
+                Spacer()
+                Text(meeting.when).font(.caption).foregroundStyle(.secondary)
+            }
+            if let headline = meeting.headline {
+                Text(LocalizedStringKey(headline)).font(.callout).textSelection(.enabled)
+            }
+            if let actions = MeetingNotes.section("Action items", in: meeting.minutes) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Action items").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    ForEach(actions.split(separator: "\n").filter { $0.hasPrefix("- ") }.prefix(5), id: \.self) { line in
+                        Label { Text(LocalizedStringKey(String(line.dropFirst(2)))).font(.callout) } icon: {
+                            Image(systemName: "circle").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } else if meeting.minutes == nil {
+                Text("Writing the summary…").font(.caption).foregroundStyle(.secondary)
+            }
+            Button("Open meeting notes", systemImage: "doc.text.magnifyingglass", action: open)
+                .controlSize(.small)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.accentColor.opacity(0.25)))
+        .padding(.top, 4)
     }
 }

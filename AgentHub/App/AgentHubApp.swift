@@ -25,7 +25,8 @@ struct AgentimApp: App {
         .commands {
             CommandGroup(after: .help) {
                 Button("Report an Issue on GitHub…") { IssueReporter.open(kind: .bug) }
-                Button("Request a Feature…") { IssueReporter.open(kind: .feature) }
+                Button("Suggest a Feature…") { IssueReporter.open(kind: .feature) }
+                Button("Share an Idea or Ask a Question…") { IssueReporter.openIdeas() }
             }
         }
         .onChange(of: scenePhase) { _, phase in
