@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 from .launch import PROVIDERS, Launch, pipeline_view, status_line
 from .graph import Memory
+from .recruit import CandidateStore, Recruiter
 from .work import Work, WorkStore
 from .llm import LLMError, labelled
 
@@ -65,6 +66,7 @@ MAX_TEAM = 12
 
 # Suggestions for hiring beyond the default team (the Mac app's "Hire" menu).
 ROLE_PRESETS = [
+    {"title": "Recruiter", "emoji": "🧲", "owns": "hiring engineers: sourcing on GitHub from their real work, personal outreach drafts, and the pipeline"},
     {"title": "CTO", "emoji": "🧠", "owns": "technical vision, architecture decisions, hiring engineers and technical risk"},
     {"title": "Customer Success", "emoji": "🫶", "owns": "onboarding customers, retention, support and turning users into advocates"},
     {"title": "Growth Lead", "emoji": "📈", "owns": "acquisition experiments, referral loops, activation and the weekly growth metric"},
@@ -815,8 +817,12 @@ class StartupMode:
         # Event-driven work: tasks start as soon as they're ready, and agents hand off to each other.
         self.work = Work(self, WorkStore(store.db, store.lock))
         self.memory = Memory(store.db, store.lock)  # the harness: what the team knows, outside any one chat
+        self.recruit = Recruiter(self, CandidateStore(store.db, store.lock))  # GitHub sourcing + drafted messages
         self.default_rhythm = os.environ.get("AGENTIM_STARTUP_RHYTHM", "graph")
         self.checking = set()  # projects whose worth-building check is running
+        # Background work (agents working, checks, ETA questions, meetings) shares a few model slots across every
+        # project, so it never crowds out what the founder is waiting for (interviews, replies, plans, 1:1s).
+        self.background = threading.BoundedSemaphore(int(os.environ.get("AGENTIM_BACKGROUND_PARALLEL", "2")))
         self.auto_check = True  # every new project starts with the worth-building check
         self.autopilot_waiting = set()  # autopilot projects waiting for the goal window to free up
         from .supervisor import Supervisor
@@ -987,6 +993,7 @@ Reply with one line per question, starting with its number exactly as above, lik
         self.store.delete(startup_id)
         self.work.store.delete_startup(startup_id)
         self.memory.delete(startup_id)
+        self.recruit.store.delete_startup(startup_id)
 
     def post_founder(self, startup_id, text):
         """The founder talks to the agents: during a meeting, the agents who speak next see it;
@@ -1823,7 +1830,16 @@ project is fully developed and nothing important is left, reply "DONE: <why>".""
         media = {"video", "image", "speech", "transcription"}
         return [{"alias": m.alias, "id": m.id, "agent": "agent" in m.caps} for m in models if not (set(m.caps) & media)]
 
+    BACKGROUND = (" works", "Check ·", "ETA from", "next goal", "Startup meeting", "Launch mode", "Recruiting",
+                  "daily summary")
+
     def _ask(self, prompt, label="Startup Mode", model=None, avoid=None):
+        if any(marker in label for marker in self.BACKGROUND):
+            with self.background:
+                return self._ask_now(prompt, label, model, avoid)
+        return self._ask_now(prompt, label, model, avoid)
+
+    def _ask_now(self, prompt, label, model=None, avoid=None):
         try:
             router = self.gateway.router()
             pinned = router.find(model) if model else None

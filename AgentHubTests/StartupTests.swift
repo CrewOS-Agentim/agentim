@@ -414,6 +414,11 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(project.memory?.first?.kind, "rule")
         XCTAssertEqual(LaunchConfig().json["autopilot"] as? Bool, false)
 
+        let hiringJSON = #"{"candidates":[{"id":"c1","role":"iOS","login":"ada","profile":{"login":"ada","name":"Ada L","repos":[{"name":"swift-sync","stars":2100}],"commits":[{"repo":"ada/swift-sync","message":"Fix reentrancy"}]},"score":8,"why":"swift-sync","note":"Hi Ada","message":"Hello","status":"new","linkedin":"https://www.linkedin.com/search/results/people/?keywords=Ada%20L"}],"searching":null}"#
+        let hiring = try JSONDecoder().decode(HiringBoard.self, from: Data(hiringJSON.utf8))
+        XCTAssertEqual(hiring.candidates.first?.profile.repos?.first?.stars, 2100)
+        XCTAssertEqual(hiring.candidates.first?.status, "new")
+
         let boardJSON = #"{"tasks":[{"id":"a1","owner":"design","task":"ROI page","status":"done","from_role":"meeting","output":"Done."},{"id":"b2","owner":"automation","task":"Email","status":"todo","from_role":"design","depends_on":"a1","ready":true}],"working":[],"started_today":2,"budget":40}"#
         let board = try JSONDecoder().decode(WorkBoard.self, from: Data(boardJSON.utf8))
         XCTAssertEqual(board.tasks.map(\.status), ["done", "todo"])

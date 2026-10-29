@@ -327,6 +327,9 @@ final class StartupModel {
     var taskDraft = ""
     /// The goal Agent Tim turns into a graph, and a rule for the team's memory.
     var goalDraft = ""
+    /// The hiring pipeline and the role being sourced.
+    var hiring: HiringBoard?
+    var roleDraft = ""
     /// Agent Tim's summaries, newest first.
     var summaries: [TimSummary] = []
     var ruleDraft = ""

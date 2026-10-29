@@ -283,5 +283,17 @@
     "model": "auto",
     "prefer_local": true,
     "avatar": "avatars/aws-devops.png"
+  },
+  {
+    "name": "Recruiter",
+    "emoji": "🧲",
+    "summary": "Finds engineers from their GitHub work and drafts personal messages you send on LinkedIn.",
+    "system_prompt": "You are a technical recruiter who sources engineers from their real work on GitHub. Assess fit only from evidence (repos, commits), never personal traits. Draft short, specific, honest outreach that the founder sends themselves; never collect emails from GitHub or automate LinkedIn.",
+    "skills": [
+      "recruiter"
+    ],
+    "model": "auto",
+    "prefer_local": true,
+    "avatar": "avatars/recruiter.png"
   }
 ]

@@ -1,5 +1,6 @@
 """Picks a model per message. Same rules as the iOS app's ModelRouter."""
 
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -106,6 +107,15 @@ def model_from_runner(info, runner_url):
     """Router metadata for a runner model, guessed from its name and size."""
     mid = info["id"]
     short = mid.split("/")[-1]
+    if info.get("kind") == "claude":
+        # Claude through the founder's Claude login (claude -p on the Mac): a real chat model, no API key.
+        # AGENTIM_CLAUDE_LOGIN=explicit: only when picked (an agent's model, @sonnet), so background work stays local.
+        tier = {"opus": (5, 4), "sonnet": (4, 3), "haiku": (3, 1)}.get(short, (4, 3))
+        explicit = os.environ.get("AGENTIM_CLAUDE_LOGIN", "auto") == "explicit"
+        return Model(id=mid, alias=short, backend="runner", name=mid,
+                     caps=({"agent"} if explicit else set()) | {"coding", "reasoning", "creative", "longContext", "general"}
+                     | ({"fast"} if short == "haiku" else set()),
+                     context=200_000, cost=tier[1], quality=tier[0], local=False, runner_url=runner_url)
     if info.get("kind") == "agent":
         # A local coding agent (Claude Code, Codex…): @claude-code / @codex.
         return Model(id=mid, alias=short, backend="runner", name=mid, caps={"agent"}, context=10_000_000,

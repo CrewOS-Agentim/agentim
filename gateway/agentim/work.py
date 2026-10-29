@@ -302,6 +302,8 @@ Write "HANDOFF: none" if your result needs nothing more.""" if can_hand_off else
     # ---- the loop: check against "done when", feedback, retries, gates, lessons
 
     def finish(self, startup_id, task, person, result, passed, round_no):
+        if not self.mode.store.get(startup_id):
+            return  # the project was deleted while the agent worked: nothing to save
         gate = task.get("gate") or "auto"
         say = lambda role, text: self.mode.store.add_message(startup_id, round_no, role, text)  # noqa: E731
         handed = ("\n\n➡️ Handed off to " + "; ".join(passed)) if passed else ""

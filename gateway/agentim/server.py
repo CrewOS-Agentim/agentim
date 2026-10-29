@@ -137,6 +137,10 @@ def make_handler(gateway, channels, catalog):
             parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) == 4 and parts[3] == "candidates":  # the hiring pipeline
+                if not gateway.startup.store.get(parts[2]):
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, gateway.startup.recruit.board(parts[2]))
             if len(parts) == 4 and parts[3] == "summaries":  # Agent Tim's summaries, newest first
                 if not gateway.startup.store.get(parts[2]):
                     return self.send_json(404, {"error": "no such startup"})
@@ -217,6 +221,13 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "recruit":
+                    # The Recruiter sources engineers on GitHub and drafts messages (the founder sends them).
+                    startup.recruit.start(startup_id, body.get("role", ""), body.get("limit") or 8)
+                    return self.send_json(202, startup.recruit.board(startup_id))
+                elif action == "candidates":
+                    return self.send_json(200, startup.recruit.set_status(
+                        startup_id, body.get("id", ""), body.get("status"), body.get("note"), body.get("message")))
                 elif action == "check":
                     startup.start_check(startup_id)  # (again) is it worth building?
                 elif action == "decision":

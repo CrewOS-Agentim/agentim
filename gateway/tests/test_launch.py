@@ -617,7 +617,8 @@ class GraphTests(unittest.TestCase):
         self.mode.post_founder(self.sid, "let's focus on getting 10 pilot customers")
         import time as t
         end = t.time() + 5
-        while not self.mode.work.store.all(self.sid) and t.time() < end:
+        while "**Plan**: Get 10 pilot customers" not in "\n".join(m["content"] for m in self.mode.store.messages(self.sid)) \
+                and t.time() < end:
             t.sleep(0.01)
         self.wait()
         room = "\n".join(m["content"] for m in self.mode.store.messages(self.sid))
@@ -863,6 +864,93 @@ class SupervisorTests(unittest.TestCase):
         from agentim.graph import parse_plan
         node = parse_plan("T1 | Ava | Write copy | done when: 3 headlines | after: - | gate: auto | eta: 25")[0]
         self.assertEqual(node["eta"], 25)
+
+
+class BackgroundLimitTests(unittest.TestCase):
+    def test_background_work_shares_two_slots_and_the_founder_skips_the_line(self):
+        import threading
+        import time as t
+        _, mode = make_startup_mode(llm=TeamLLM())
+        active, peak, lock = [0], [0], threading.Lock()
+        release = threading.Event()
+
+        def slow(prompt, label, model=None, avoid=None):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            release.wait(2)
+            with lock:
+                active[0] -= 1
+            return "ok"
+
+        mode._ask_now = slow
+        threads = [threading.Thread(target=mode._ask, args=("p", f"Startup · X · Zoe works")) for _ in range(5)]
+        for th in threads:
+            th.start()
+        t.sleep(0.2)
+        self.assertEqual(peak[0], 2, "two background calls at a time")
+        start = t.time()
+        founder = threading.Thread(target=mode._ask, args=("p", "Startup interview questions"))
+        founder.start()
+        t.sleep(0.2)
+        self.assertEqual(peak[0], 3, "the founder's call runs right away")
+        release.set()
+        for th in threads + [founder]:
+            th.join(5)
+        self.assertLess(t.time() - start, 5)
+
+
+class RecruiterTests(unittest.TestCase):
+    def test_sources_on_github_and_drafts_messages_the_founder_sends(self):
+        gateway, mode = make_startup_mode(llm=TeamLLM())
+        startup = mode.create(PITCH)
+        sid = startup["id"]
+        calls = []
+
+        def call(path, body=None, timeout=30):
+            calls.append((path, body))
+            return {"candidates": [{"login": "ada", "name": "Ada L", "location": "Berlin", "company": "Acme",
+                                    "repos": [{"name": "swift-sync", "language": "Swift", "stars": 2100, "description": "CRDT sync"}],
+                                    "commits": [{"repo": "ada/swift-sync", "message": "Fix actor reentrancy"}]}]}
+
+        gateway.claude.call = call
+        mode._ask = lambda p, label="", **kw: (
+            "language:swift location:berlin followers:>30" if "ONE GitHub user search query" in p else
+            "SCORE: 8\nWHY: Maintains swift-sync (2.1k stars) and fixed actor reentrancy last week.\n"
+            "NOTE: Hi Ada, loved your actor reentrancy fix in swift-sync. We're building offline sync for dog walkers: 15 min?\n"
+            "MESSAGE: Hi Ada, your swift-sync work is exactly the problem we're solving. Open to a 15-minute call?")
+        with self.assertRaisesRegex(ValueError, "Describe the role"):
+            mode.recruit.start(sid, "ios")
+        mode.recruit.start(sid, "Senior iOS engineer, Swift, Europe")
+        import time as t
+        end = t.time() + 5
+        while sid in mode.recruit.running and t.time() < end:
+            t.sleep(0.01)
+        self.assertEqual(calls[0], ("/v1/recruit/search", {"q": "language:swift location:berlin followers:>30", "limit": 8}))
+        [ada] = mode.recruit.board(sid)["candidates"]
+        self.assertEqual((ada["login"], ada["score"], ada["status"]), ("ada", 8.0, "new"))
+        self.assertIn("actor reentrancy", ada["note"])
+        self.assertLessEqual(len(ada["note"]), 300)
+        self.assertTrue(ada["linkedin"].startswith("https://www.linkedin.com/search/results/people/?keywords=Ada%20L"))
+        room = "\n".join(m["content"] for m in mode.store.messages(sid))
+        self.assertIn("1 candidates", room)
+        self.assertIn("send them yourself on LinkedIn", room)
+        mode.recruit.set_status(sid, ada["id"], "contacted", message="Edited message")
+        ada = mode.recruit.board(sid)["candidates"][0]
+        self.assertEqual((ada["status"], ada["message"]), ("contacted", "Edited message"))
+        with self.assertRaisesRegex(ValueError, "Status"):
+            mode.recruit.set_status(sid, ada["id"], "hired!")
+        mode.recruit.start(sid, "Senior iOS engineer, Swift, Europe")
+        end = t.time() + 5
+        while sid in mode.recruit.running and t.time() < end:
+            t.sleep(0.01)
+        self.assertEqual(len(mode.recruit.board(sid)["candidates"]), 1, "the same person isn't added twice")
+
+    def test_parse_assessment(self):
+        from agentim.recruit import clean_query, parse_assessment
+        a = parse_assessment("SCORE: 7.5\nWHY: good\nNOTE: hi\nthere\nMESSAGE: long one")
+        self.assertEqual((a["score"], a["why"], a["note"], a["message"]), (7.5, "good", "hi\nthere", "long one"))
+        self.assertEqual(clean_query("`query: language:go location:paris`"), "language:go location:paris")
 
 
 if __name__ == "__main__":

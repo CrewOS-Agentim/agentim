@@ -245,6 +245,11 @@ def list_models():
     for name in LOCAL_AGENTS.available():
         models.append({"id": f"local/{name}", "object": "model", "owned_by": name, "backend": "local", "kind": "agent",
                        "name": LocalAgents.COMMANDS[name]["name"]})
+    if "claude-code" in LOCAL_AGENTS.available():
+        # Claude through the founder's Claude login (`claude -p`, in tmux): no API key needed.
+        for alias, label in CLAUDE_LOGIN_MODELS.items():
+            models.append({"id": f"claude/{alias}", "object": "model", "owned_by": "claude-login", "backend": "claude",
+                           "kind": "claude", "name": f"{label} (your Claude login)"})
     if LTX.available() or LTX.installed():
         models += [
             {"id": "ltx/video", "object": "model", "owned_by": "ltx", "backend": "ltx", "kind": "video"},
@@ -560,7 +565,7 @@ class LocalAgents:
             cwd = self.workspace_for(prompt)
         timeout = timeout or int(self.env.get("AGENTIM_LOCAL_AGENTS_TIMEOUT", "900"))
         cmd = self.command(name, prompt, mode)
-        if self.env.get("AGENTIM_LOCAL_AGENTS_TMUX") in ("1", "true", "yes") and self.which("tmux"):
+        if self.use_tmux():
             return self.run_in_tmux(name, cmd, cwd, timeout)
         result = self.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
         output = (result.stdout or "").strip() or (result.stderr or "").strip()
@@ -568,13 +573,44 @@ class LocalAgents:
             raise RuntimeError(f"{self.COMMANDS[name]['name']} exited with {result.returncode}: {output[-800:]}")
         return output, cwd
 
+    def tmux(self):
+        """tmux's full path (the runner's own PATH may not include Homebrew)."""
+        for folder in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]:
+            path = os.path.join(folder, "tmux")
+            if os.path.exists(path):
+                return path
+        return self.which("tmux")
+
+    def use_tmux(self):
+        """On by default whenever tmux is installed (AGENTIM_LOCAL_AGENTS_TMUX=0 turns it off)."""
+        setting = (self.env.get("AGENTIM_LOCAL_AGENTS_TMUX") or "auto").lower()
+        return setting not in ("0", "false", "no", "off") and bool(self.tmux())
+
+    def chat(self, model, prompt, timeout=600):
+        """Claude through the founder's Claude login: `claude -p --model <model>`, read-only, in an empty folder,
+        in a tmux session when tmux is installed. Returns the answer."""
+        if "claude-code" not in self.available():
+            raise RuntimeError("Claude Code isn't installed or enabled on this Mac (AGENTIM_LOCAL_AGENTS).")
+        if model not in CLAUDE_LOGIN_MODELS:
+            raise RuntimeError(f"Unknown Claude model {model!r}.")
+        os.makedirs(CLAUDE_CHAT_DIR, exist_ok=True)
+        cmd = [self.binary("claude-code"), "-p", prompt, "--model", model, "--permission-mode", "plan",
+               "--output-format", "text"]
+        if self.use_tmux():
+            return self.run_in_tmux("claude-code", cmd, CLAUDE_CHAT_DIR, timeout)[0]
+        result = self.run(cmd, cwd=CLAUDE_CHAT_DIR, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+        output = (result.stdout or "").strip() or (result.stderr or "").strip()
+        if result.returncode != 0:
+            raise RuntimeError(f"Claude exited with {result.returncode}: {output[-800:]}")
+        return output
+
     def run_in_tmux(self, name, cmd, cwd, timeout):
         session = f"agentim-{name}-{uuid.uuid4().hex[:6]}"
         log_file = os.path.join(FILES_DIR, f"{session}.log")
         os.makedirs(FILES_DIR, exist_ok=True)
         quoted = " ".join(shlex.quote(c) for c in cmd)
         script = f"{quoted} > {shlex.quote(log_file)} 2>&1; echo $? > {shlex.quote(log_file)}.exit"
-        self.run(["tmux", "new-session", "-d", "-s", session, "-c", cwd, script], check=True)
+        self.run([self.tmux() or "tmux", "new-session", "-d", "-s", session, "-c", cwd, script], check=True)
         deadline = self.clock() + timeout
         while self.clock() < deadline:
             if os.path.exists(log_file + ".exit"):
@@ -584,11 +620,24 @@ class LocalAgents:
                     raise RuntimeError(f"{self.COMMANDS[name]['name']} exited with {code}: {output[-800:]}")
                 return output, cwd
             time.sleep(2)
-        self.run(["tmux", "kill-session", "-t", session])
+        self.run([self.tmux() or "tmux", "kill-session", "-t", session])
         raise RuntimeError(f"{self.COMMANDS[name]['name']} didn't finish in {timeout} s (tmux session {session}).")
 
 
 LOCAL_AGENTS = LocalAgents()
+
+CLAUDE_LOGIN_MODELS = {"opus": "Claude Opus", "sonnet": "Claude Sonnet", "haiku": "Claude Haiku"}
+CLAUDE_CHAT_DIR = os.path.join(STATE_DIR, "claude-chat")  # an empty folder: plain chats never read your code
+
+
+def claude_chat_prompt(messages):
+    """An OpenAI-style conversation → one prompt for `claude -p`."""
+    system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system" and isinstance(m.get("content"), str))
+    turns = [m for m in messages if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
+    history = "\n\n".join(f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content']}" for m in turns[:-1])
+    last = turns[-1]["content"] if turns else ""
+    return ((f"{system}\n\n" if system else "") + (f"The conversation so far:\n{history}\n\n" if history else "")
+            + (f"Reply to the user's last message:\n{last}" if history else last))
 
 
 # ---------------------------------------------------------------- projects (Startups & Ideas)
@@ -826,6 +875,55 @@ class Projects:
 
 
 PROJECTS = Projects()
+
+
+class GitHubResearch:
+    """Finds engineers on GitHub and reads their public work, with the founder's `gh` login.
+
+    Public profile fields, recent repos and recent commit messages only. Emails are never read or returned:
+    GitHub's terms don't allow using them for unsolicited outreach (recruiting included)."""
+
+    PROFILE = ("login", "name", "bio", "company", "location", "blog", "twitter_username", "hireable", "public_repos",
+               "followers", "avatar_url", "html_url", "created_at")
+
+    def __init__(self, run=subprocess.run, which=shutil.which):
+        self.run, self.which = run, which
+
+    def api(self, path, **params):
+        if not self.which("gh"):
+            raise RuntimeError("Install the GitHub CLI (brew install gh) and run gh auth login.")
+        args = ["gh", "api", "-X", "GET", path] + [x for k, v in params.items() for x in ("-f", f"{k}={v}")]
+        result = self.run(args, capture_output=True, text=True, timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(f"GitHub: {(result.stderr or result.stdout).strip()[-300:]}")
+        return json.loads(result.stdout or "null")
+
+    def search(self, query, limit=10):
+        limit = max(1, min(int(limit or 10), 15))
+        found = self.api("search/users", q=query, per_page=limit)
+        return [self.profile(item["login"]) for item in (found or {}).get("items", [])[:limit]]
+
+    def profile(self, login):
+        user = self.api(f"users/{login}") or {}
+        profile = {k: user.get(k) for k in self.PROFILE}  # no "email", on purpose
+        repos = self.api(f"users/{login}/repos", sort="pushed", per_page=12) or []
+        profile["repos"] = [{"name": r["name"], "description": (r.get("description") or "")[:200],
+                             "language": r.get("language"), "stars": r.get("stargazers_count", 0),
+                             "pushed_at": r.get("pushed_at"), "url": r.get("html_url"), "topics": r.get("topics", [])[:6]}
+                            for r in repos if not r.get("fork")][:8]
+        events = self.api(f"users/{login}/events/public", per_page=40) or []
+        commits = []
+        for event in events:
+            if event.get("type") != "PushEvent":
+                continue
+            for commit in (event.get("payload") or {}).get("commits", [])[:3]:
+                commits.append({"repo": event["repo"]["name"], "message": (commit.get("message") or "").splitlines()[0][:140],
+                                "at": event.get("created_at")})
+        profile["commits"] = commits[:12]
+        return profile
+
+
+GITHUB = GitHubResearch()
 
 
 class ClaudeSessions:
@@ -1089,6 +1187,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(504, "The coding agent took too long and was stopped.")
             except Exception as e:
                 return self.error(400, str(e))
+        if path == "/v1/recruit/search":
+            # Recruiting: engineers on GitHub and their public work (never emails).
+            if IN_CONTAINER:
+                return self.error(404, "Recruiting research runs on the Mac (it uses your gh login).")
+            try:
+                query = str(body.get("q") or "").strip()
+                if not query:
+                    return self.error(400, "What should I search for?")
+                return self.send_json(200, {"candidates": GITHUB.search(query, body.get("limit") or 10)})
+            except Exception as e:
+                return self.error(400, str(e))
         if path in ("/v1/projects/commit", "/v1/projects/history", "/v1/projects/github", "/v1/projects/push"):
             # Versions: commit + tag + changelog, the log, and (confirmed by the founder) GitHub.
             if IN_CONTAINER:
@@ -1177,6 +1286,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.ltx_chat(name, body)
         if backend == "local":
             return self.local_agent_chat(name, body)
+        if backend == "claude":
+            return self.claude_login_chat(name, body)
         if backend not in BACKENDS or not name:
             return self.error(400, f"Unknown model '{model}'. Use an id from GET /v1/models.")
         body["model"] = name
@@ -1223,6 +1334,23 @@ class Handler(BaseHTTPRequestHandler):
             text = f"Couldn't run {name}: {e}"
         if not body.get("stream"):
             return self.send_json(200, {"object": "chat.completion", "model": f"local/{name}", "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
+        self.start_sse()
+        self.sse({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})
+        self.wfile.write(b"data: [DONE]\n\n")
+
+    def claude_login_chat(self, model, body):
+        """A chat answered by Claude through the founder's Claude login (no API key)."""
+        if IN_CONTAINER:
+            return self.error(404, "Claude through your login runs on the Mac.")
+        try:
+            text = LOCAL_AGENTS.chat(model, claude_chat_prompt(body.get("messages", [])))
+        except subprocess.TimeoutExpired:
+            return self.error(504, "Claude took too long and was stopped.")
+        except Exception as e:
+            return self.error(502, str(e))
+        if not body.get("stream"):
+            return self.send_json(200, {"object": "chat.completion", "model": f"claude/{model}", "choices": [
                 {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
         self.start_sse()
         self.sse({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})

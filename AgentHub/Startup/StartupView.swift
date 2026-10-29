@@ -846,7 +846,9 @@ private struct RoomOrNotes: View {
     let stackRoot: URL?
     @State private var tab = Tab.messages
 
-    enum Tab: String, CaseIterable { case messages = "Messages", work = "Graph", launch = "Launch", notes = "Summaries" }
+    enum Tab: String, CaseIterable {
+        case messages = "Messages", work = "Graph", hiring = "Hiring", launch = "Launch", notes = "Summaries"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -859,6 +861,7 @@ private struct RoomOrNotes: View {
             switch tab {
             case .messages: MessagesPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .work: WorkPanel(model: model, detail: detail, stackRoot: stackRoot)
+            case .hiring: HiringPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .launch: LaunchPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .notes: SummariesList(model: model, detail: detail, stackRoot: stackRoot)
             }
