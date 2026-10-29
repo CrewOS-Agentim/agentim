@@ -83,6 +83,45 @@ class LaunchTests(unittest.TestCase):
         self.assertIn("deploy done", status_line(self.mode.store.get(self.id)),
                       "the team brief knows where the launch stands")
 
+    def test_launch_mode_runs_everyone_in_parallel_then_builds(self):
+        import threading
+        import time as t
+        active, peak = [0], [0]
+        lock = threading.Lock()
+        original = self.mode._ask
+
+        def slow_ask(prompt, label=""):
+            if "LAUNCH MODE" in prompt:
+                with lock:
+                    active[0] += 1
+                    peak[0] = max(peak[0], active[0])
+                t.sleep(0.05)
+                with lock:
+                    active[0] -= 1
+                return f"**Deliverable** for {label}"
+            return original(prompt, label)
+
+        self.mode._ask = slow_ask
+        with self.assertRaisesRegex(ValueError, "confirm"):
+            self.launch.start_sprint(self.id)
+        self.launch.start_sprint(self.id, confirmed=True)
+        wait_for(self.launch, self.id, timeout=10)
+        detail = self.mode.detail(self.id)
+        team = detail["team"]
+        self.assertGreater(peak[0], 1, "the employees work at the same time")
+        self.assertEqual(detail["sprint"]["status"], "done")
+        stages = {s["stage"]: s["status"] for s in detail["pipeline"]}
+        self.assertEqual((stages["design"], stages["build"], stages["deploy"]), ("done", "done", "waiting"),
+                         "designed and built; deploying waits for the founder")
+        build = [b for p, b in self.calls if p == "/v1/projects/task" and b["mode"] == "edit"][0]
+        self.assertIn("launch kit", build["prompt"])
+        self.assertIn("launch/", build["prompt"], "the marketing assets are saved in the project")
+        room = "\n".join(m["content"] for m in detail["messages"])
+        self.assertEqual(room.count("**Deliverable**"), len(team), "every employee delivered")
+        self.assertIn("Launch mode done", room)
+        self.assertFalse(any(p == "/v1/projects/run" and "vercel" in b["command"] for p, b in self.calls),
+                         "never deploys on its own")
+
     def test_failing_tests_get_one_fix(self):
         self.exit_codes = [1, 0]
         stages = self.run_stage("build", confirmed=True)

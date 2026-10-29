@@ -104,6 +104,7 @@ struct StartupDetail: Decodable, Equatable {
     var pipeline: [LaunchStage]? = nil
     var providers: [DeployProvider]? = nil
     var launch_running: Bool? = nil
+    var sprint: SprintState? = nil
     let next_run: Double?
     var rounds: Int
     let now: Double
@@ -285,6 +286,8 @@ final class StartupModel {
     var draftKind = "startup"
     var draftSources: [ProjectSource] = []
     var draftRepo = ""
+    /// The launch-mode confirmation dialog is open.
+    var confirmingSprint = false
     /// The open 1:1 chat: who, the conversation, and the unsent message.
     var dmKey: String?
     var dmChat: DirectChat?

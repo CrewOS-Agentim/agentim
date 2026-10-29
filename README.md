@@ -301,6 +301,20 @@ Run **as many startups as you like**, each with its own team of agents who act l
 
 Every step reports in the agents room, and the agents see where the launch stands in every meeting. agentim never pushes your code, never stores deploy secrets (your CLIs keep their own logins), and only works in folders you picked.
 
+**⚡ Launch mode: everyone at once.** Press **Launch mode** on a startup (you confirm, since it writes code) and the meeting rhythm is skipped: Claude Code designs v1 while *every* employee delivers their part of the launch at the same time, finished and ready to use:
+
+| Who | Delivers |
+|---|---|
+| CPO | v1 scope, activation event, success metric |
+| Designer | landing page and key screens, colors, fonts, onboarding |
+| CTO | stack, data model, routes, analytics events |
+| CMO | landing copy, LinkedIn and X launch posts, Show HN / Product Hunt blurb |
+| Marketing Automation | welcome email sequence and the activation funnel |
+| CRO | pricing, outreach messages, 20 target customers, objection answers |
+| BizDev, CFO, Data, CISO, COO | launch partners, unit economics, tracking plan, security checklist, launch-day run sheet |
+
+Then Claude Code builds the product **with** that launch kit (the CMO's copy on the landing page, the tracking plan instrumented) and saves the marketing assets under `launch/` in the project, the tests run, and the team holds a wrap-up meeting with action items. Deploying stays a separate confirmation, and nothing is posted to social networks: the posts and emails are ready for you to send. Ollama runs up to 4 requests at once (`OLLAMA_NUM_PARALLEL`, default 4) so the agents really work in parallel. API: `POST /v1/startups/{id}/sprint {"confirmed": true}`.
+
 **Action items with owners and ETAs, in time.** The team meets every 10–30 minutes, so plans run on minutes and hours, never days. Every meeting ends with action items, each with one owner and an ETA like *in 45 min*, *in 2 h*, *by 15:30*, or a dependency: *right after Leo's ROI page*. ETAs nobody set are marked *proposed*, and a meeting that forgot action items gives one to each person who spoke. The next meeting opens with the open items, their due times and what's **overdue**, and each owner reports done or a new ETA. They show as a table (with the due time) in the meeting notes, in Tim's summary, and as `action_items` (`eta`, `due`, `after`) in `GET /v1/startups/{id}/meetings/{n}`.
 
 **1:1 with one employee.** The **1:1** tab lets you chat privately with any employee (or Agent Tim): pick their avatar and ask for a draft, a number or a decision. They answer in character with the plan and recent meetings in mind; the agents room doesn't see it, but they bring what you agreed into the next meeting. API: `GET`/`POST /v1/startups/{id}/dm/{person}`.

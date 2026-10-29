@@ -385,6 +385,9 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(detail.config?.test_command, "", "missing settings decode as empty")
         XCTAssertEqual(detail.pipeline?.map(\.statusText), ["Done", "Ready"])
         XCTAssertEqual(LaunchConfig().json["deploy"] as? String, "none")
+        json["sprint"] = ["status": "running", "started": 1_800_000_000]
+        let sprinting = try JSONDecoder().decode(StartupDetail.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(sprinting.sprint?.status, "running")
 
         let notes = #"{"round":1,"started":0,"ended":1,"summary":null,"messages":[],"people":{},"action_items":[{"owner":"Zoe","task":"Book pilots","eta":"Fri, Oct 30","proposed":true}]}"#
         let decoded = try JSONDecoder().decode(MeetingNotes.self, from: Data(notes.utf8))

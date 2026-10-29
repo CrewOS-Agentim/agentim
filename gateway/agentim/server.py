@@ -198,6 +198,10 @@ def make_handler(gateway, channels, catalog):
                     return self.send_json(200, {"suggestions": {str(k): v for k, v in found.items()}})
                 elif action == "autocomplete":
                     startup.autocomplete(startup_id, body.get("answers"))
+                elif action == "sprint":
+                    # Launch mode: everyone in parallel (design + launch kit), then build, then a wrap-up meeting.
+                    startup.launch.start_sprint(startup_id, confirmed=body.get("confirmed") is True)
+                    return self.send_json(202, {"started": "sprint"})
                 elif action == "launch":
                     # One pipeline step: design, build, test, deploy or live (build/test/deploy confirmed in the app).
                     startup.launch.start(startup_id, body.get("stage", ""), confirmed=body.get("confirmed") is True)

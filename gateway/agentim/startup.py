@@ -181,6 +181,21 @@ def time_rule(startup):
             "\"in 40 min\", \"in 2 h\", \"by 15:30\", or as a dependency: \"right after Leo's ROI page\".")
 
 
+# Launch mode: the one finished deliverable each role produces, in parallel, right now.
+SPRINT_TASKS = {
+    "product": "the v1 scope: the one core user, the 3–5 must-have features (and what's cut), the activation event and the success metric with a target",
+    "design": "the design brief for v1: the landing page and the 2–3 key screens section by section, the look (colors with hex codes, fonts, tone), and the onboarding flow",
+    "engineering": "the technical plan: the stack, the data model, the pages and API routes, analytics events to instrument, and what to skip for v1",
+    "marketing": "the launch kit: the landing page copy (headline, subheadline, 3 benefit blocks, call to action, FAQ), a launch post for LinkedIn, a post for X, and a Show HN / Product Hunt blurb",
+    "automation": "the welcome email sequence (3 emails with subject lines and body) and the sign-up → activation funnel with the trigger for each email",
+    "sales": "the pricing (plans and prices), the cold outreach message (email + LinkedIn DM), the first 20 target customer profiles to contact, and answers to the top 3 objections",
+    "bizdev": "the 5 best partners or channels to launch with, why each, and the exact intro message to send each",
+    "finance": "the unit economics for the chosen pricing (price, cost to serve, margin, payback) and the launch budget",
+    "data": "the tracking plan: the north star metric, the funnel steps, the events with names and properties, and the launch-day dashboard",
+    "security": "the launch security checklist: auth, secrets, data protection, privacy policy and terms points, and the top 3 risks to fix before going live",
+    "operations": "the launch-day run sheet: who does what in the first 2 hours after going live, by the minute or hour, and how the team reports back",
+}
+
 OPERATING_PRINCIPLES = """How this company works:
 - Launch fast: ship the smallest useful version this week, not the perfect one next month.
 - Measure everything: every launch has a metric and a target; look at the numbers before deciding.
@@ -857,6 +872,26 @@ under 180 words, start with "{person.first} here:"."""
             if owns_live and self.live.get(startup_id, {}).get("direct"):
                 self.live.pop(startup_id, None)
 
+    # ---- launch mode: everyone works in parallel
+
+    def sprint_task(self, startup_id, person):
+        """One employee's launch-mode deliverable: finished and ready to use, posted in the agents room."""
+        startup = self.store.get(startup_id)
+        team, people = team_of(startup), people_of(startup)
+        current = {p.key for p in team} | {CEO.key, FOUNDER.key}
+        discussion = "\n".join(f"{people[m['role']].name}: {m['content']}"
+                               for m in self.store.messages(startup_id, limit=8) if m["role"] in current)
+        task = SPRINT_TASKS.get(person.key, f"the one deliverable in {person.owns} the launch needs most")
+        prompt = (person_context(person, startup, discussion, team, self.playbook(person)) + f"""
+
+LAUNCH MODE: the whole team is working in parallel right now to design, build and launch v1 today. Claude Code is \
+building the product while you work. Deliver, finished and ready to use (not a plan or a promise): {task}.
+Under 350 words, concrete names and numbers, markdown. Start with a one-line bold title. Don't start with your name.""")
+        reply = self._ask(prompt, f"Launch mode · {startup['name']} · {person.first}")
+        if reply:
+            self.store.add_message(startup_id, startup["rounds"] + 1, person.key, reply)
+        return person, reply
+
     # ---- open action items and 1:1 chats with one employee
 
     def open_items(self, startup_id, last_round):
@@ -1232,6 +1267,7 @@ start with your name.""")
                 "presets": ROLE_PRESETS, "messages": self.store.messages(startup_id),
                 "meeting": self.live.get(startup_id),
                 "pipeline": pipeline_view(startup), "launch_running": startup_id in self.launch.running,
+                "sprint": (startup.get("pipeline") or {}).get("sprint"),
                 "providers": [{"id": k, **v} for k, v in PROVIDERS.items()]}
 
     def listing(self):

@@ -79,6 +79,14 @@ struct LaunchStage: Decodable, Equatable, Identifiable {
     }
 }
 
+/// Launch mode's progress: everyone in parallel, then the build, then a wrap-up meeting.
+struct SprintState: Decodable, Equatable {
+    let status: String   // running | done | failed
+    var output: String? = nil
+    var started: Double? = nil
+    var seconds: Double? = nil
+}
+
 struct DeployProvider: Decodable, Equatable, Identifiable {
     let id: String
     let name: String
@@ -88,6 +96,10 @@ struct DeployProvider: Decodable, Equatable, Identifiable {
 extension StartupClient {
     func configureLaunch(_ id: String, _ config: LaunchConfig) async throws -> StartupDetail {
         try await sendDetail("v1/startups/\(id)/config", body: config.json)
+    }
+
+    func sprint(_ id: String) async throws {
+        try await post("v1/startups/\(id)/sprint", body: ["confirmed": true])
     }
 
     func launch(_ id: String, stage: String, confirmed: Bool) async throws {
@@ -122,6 +134,14 @@ extension StartupModel {
         launchDraft?.folder = url.path
     }
 
+    /// Launch mode (confirmed in its dialog): design + every employee's launch deliverable in parallel, then the build.
+    func runSprint(stackRoot: URL?) async {
+        guard let id = detail?.id else { return }
+        confirmingSprint = false
+        meetingRequested = true
+        await act("Starting launch mode…", stackRoot) { client in try await client.sprint(id) }
+    }
+
     func runStage(_ stage: String, stackRoot: URL?) async {
         guard let id = detail?.id else { return }
         confirmingStage = nil
@@ -147,6 +167,7 @@ struct LaunchPanel: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.s4) {
+                sprintCard
                 rail
                 if model.launchDraft != nil { settingsForm } else { settingsSummary }
                 ForEach(stages) { stage in stageCard(stage) }
@@ -162,6 +183,42 @@ struct LaunchPanel: View {
         } message: { stage in
             Text(dialogMessage(stage))
         }
+    }
+
+    // MARK: Launch mode
+
+    private var sprintCard: some View {
+        let sprint = detail.sprint
+        return HStack(alignment: .top, spacing: Theme.s3) {
+            Image(systemName: "bolt.fill").font(.title2).foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Launch mode").font(.headline)
+                Group {
+                    switch sprint?.status {
+                    case "running":
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let elapsed = Int(context.date.timeIntervalSince1970 - (sprint?.started ?? context.date.timeIntervalSince1970))
+                            Text("Everyone is working in parallel… \(elapsed / 60) min \(elapsed % 60) s")
+                        }
+                    case "done": Text("Done: \(sprint?.output ?? ""). Review the build, then Deploy.")
+                    case "failed": Text("Stopped: \(sprint?.output ?? "")").foregroundStyle(.red)
+                    default: Text("Every agent at once: Claude Code designs and builds v1 while the team writes the launch kit (landing copy, posts, emails, pricing, tracking). Then a wrap-up meeting. Deploying stays your call.")
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if sprint?.status == "running" {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("Launch mode…") { model.confirmingSprint = true }
+                    .buttonStyle(.borderedProminent).tint(.orange)
+                    .disabled(running || model.busy != nil)
+            }
+        }
+        .padding(Theme.s3)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Color.orange.opacity(0.35)))
     }
 
     // MARK: Progress

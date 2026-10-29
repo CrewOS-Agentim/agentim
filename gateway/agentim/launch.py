@@ -10,6 +10,7 @@ going live.
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 STAGES = ("design", "build", "test", "deploy", "live")
 # Stages that change code or the outside world: the founder confirms them in the app.
@@ -144,6 +145,69 @@ class Launch:
             with self.guard:
                 self.running.discard(startup_id)
 
+    # ---- launch mode: everyone at once
+
+    def start_sprint(self, startup_id, confirmed=False):
+        """Launch mode: Claude Code designs while every employee produces their launch deliverable, in parallel;
+        then Claude Code builds with the launch kit, the tests run, and the team holds a wrap-up meeting.
+        It writes code, so the founder confirms it; deploying stays a separate confirmation."""
+        self._get(startup_id)
+        if not confirmed:
+            raise ValueError("Launch mode writes code in the project folder: confirm it first.")
+        with self.guard:
+            if startup_id in self.running:
+                raise ValueError("A launch step is already running.")
+            self.running.add(startup_id)
+        self._set(startup_id, "sprint", "running", output="", started=self.mode.clock())
+        threading.Thread(target=self._sprint, args=(startup_id,), daemon=True).start()
+        return {"started": "sprint"}
+
+    def _sprint(self, startup_id):
+        started = self.mode.clock()
+        try:
+            from .startup import team_of
+            team = team_of(self._get(startup_id))
+            self.mode.live[startup_id] = {"round": self._get(startup_id)["rounds"] + 1, "speaking": None,
+                                          "started": started, "speakers": [p.key for p in team] + ["claude-code"],
+                                          "sprint": True}
+            names = ", ".join(p.first for p in team)
+            self._say(startup_id, f"🚀 **Launch mode**: everyone works in parallel now. Claude Code designs v1 while "
+                                  f"{names} each deliver their part of the launch.")
+            self._set(startup_id, "design", "running", output="")
+            with ThreadPoolExecutor(max_workers=len(team) + 1) as pool:
+                design = pool.submit(self._design, startup_id, False)
+                work = [pool.submit(self.mode.sprint_task, startup_id, person) for person in team]
+                results = [w.result() for w in work]
+                try:
+                    design.result()
+                except Exception as e:  # noqa: BLE001 - reported; the team's work still counts
+                    self._set(startup_id, "design", "failed", output=str(e))
+                    self._say(startup_id, f"📐 **Design** failed: {e}")
+            kit = "\n\n".join(f"## {p.first} ({p.title})\n{text}" for p, text in results if text)
+            self._set(startup_id, "sprint", "running", kit=kit[-12000:])
+            self.mode.live[startup_id]["speaking"] = "claude-code"
+            self._set(startup_id, "build", "running", output="")
+            try:
+                self._build(startup_id, kit=kit)
+            except Exception as e:  # noqa: BLE001
+                self._set(startup_id, "build", "failed", output=str(e))
+                self._say(startup_id, f"🛠️ **Build** failed: {e}")
+            seconds = int(self.mode.clock() - started)
+            delivered = sum(1 for _, text in results if text)
+            self._set(startup_id, "sprint", "done", output=f"{delivered} of {len(team)} deliverables, built in {seconds // 60} min "
+                                                               f"{seconds % 60} s", seconds=seconds)
+            self._say(startup_id, f"🏁 **Launch mode done** in {seconds // 60} min {seconds % 60} s: {delivered} launch "
+                                  "deliverables, the design and the build. Review it, then press **Deploy** to go live.")
+        except Exception as e:  # noqa: BLE001
+            self._set(startup_id, "sprint", "failed", output=str(e))
+            self._say(startup_id, f"🚀 **Launch mode** stopped: {e}")
+        finally:
+            self.mode.live.pop(startup_id, None)
+            with self.guard:
+                self.running.discard(startup_id)
+        # The wrap-up: the team reviews the launch and sets action items (owners and ETAs in minutes).
+        self.mode.run_round(startup_id)
+
     # ---- the project folder
 
     def workspace(self, startup_id):
@@ -162,12 +226,14 @@ class Launch:
         return {"type": "dir", "path": created["folder"]}
 
     def _coding(self, startup_id, stage):
+        if self.mode.live.get(startup_id, {}).get("sprint"):
+            return  # launch mode: everyone is already shown as working
         self.mode.live[startup_id] = {"round": self._get(startup_id)["rounds"] + 1, "speaking": "claude-code",
                                       "started": self.mode.clock(), "speakers": ["claude-code"], "direct": True}
 
     # ---- stages
 
-    def _design(self, startup_id):
+    def _design(self, startup_id, review=True):
         startup = self._get(startup_id)
         config = {**CONFIG_DEFAULTS, **(startup.get("config") or {})}
         source = self.workspace(startup_id)
@@ -186,10 +252,10 @@ class Launch:
         self._set(startup_id, "design", "done", output=design)
         self._set(startup_id, "build", "waiting")
         self._say(startup_id, f"📐 **Design** for v1:\n\n{design[:2500]}\n\n_Next: build it (you confirm)._")
-        if config["team_reviews"]:
+        if review and config["team_reviews"]:
             self.mode.run_round(startup_id)
 
-    def _build(self, startup_id):
+    def _build(self, startup_id, kit=""):
         startup = self._get(startup_id)
         config = {**CONFIG_DEFAULTS, **(startup.get("config") or {})}
         design = (startup.get("pipeline") or {}).get("design", {}).get("output", "")
@@ -200,6 +266,9 @@ class Launch:
         prompt = (f"Build version 1 of \"{startup['name']}\": {startup['pitch']}\n\n"
                   + (f"The design to follow:\n{design}\n\n" if design else "")
                   + (f"The founder's notes:\n{notes}\n\n" if notes else "")
+                  + (f"The team's launch kit (use the landing copy, design and tracking plan in the product; also save "
+                     f"each piece as a markdown file under launch/, e.g. launch/landing-copy.md, launch/posts.md, "
+                     f"launch/emails.md, launch/pricing.md):\n{kit[:9000]}\n\n" if kit else "")
                   + f"Stack: {config['stack'] or 'the simplest one that ships fast'}.\n"
                   "If the folder is empty, scaffold the project. Make it run end to end, add at least one automated "
                   "test or build check, and a README with how to run, test and deploy it. Don't deploy, don't push, "

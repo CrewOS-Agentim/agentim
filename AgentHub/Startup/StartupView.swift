@@ -488,6 +488,15 @@ private struct RunningStartup: View {
                         Text("Claude Code will edit files in: \((detail.sources ?? []).map(\.label).joined(separator: ", ")). It doesn't commit or push; review the changes with git before you do.")
                     }
             }
+            Button("Launch mode", systemImage: "bolt.fill") { model.confirmingSprint = true }
+                .buttonStyle(.borderedProminent).tint(.orange)
+                .disabled(model.busy != nil || detail.sprint?.status == "running" || detail.launch_running == true)
+                .help("Every agent at once: design, build and the launch kit, then a wrap-up meeting")
+                .confirmationDialog("Start launch mode for \(detail.name)?", isPresented: $model.confirmingSprint) {
+                    Button("Launch now") { Task { await model.runSprint(stackRoot: stackRoot) } }
+                } message: {
+                    Text("Every agent works at once: Claude Code designs v1 and then writes the code in \((detail.config?.folder).flatMap { $0.isEmpty ? nil : $0 } ?? "a new project folder"), while the team writes the launch kit (landing copy, posts, emails, pricing, tracking), saved under launch/. Nothing is deployed or posted until you say so.")
+                }
             Button("Agents", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
             Button("Meet now", systemImage: "person.3.fill") { Task { await model.meetNow(stackRoot: stackRoot) } }
                 .disabled(model.busy != nil || !detail.isRunning)

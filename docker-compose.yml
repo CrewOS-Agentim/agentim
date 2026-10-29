@@ -18,6 +18,8 @@ services:
     environment:
       # How long a model stays in memory after its last use (This Mac → Free memory unloads right away).
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-5m}
+      # Answer several agents at once (launch mode, meetings): each extra slot costs some memory.
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-4}
     restart: unless-stopped
     # Linux + NVIDIA: uncomment to use the GPU.
     # deploy:
