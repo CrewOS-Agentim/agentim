@@ -338,5 +338,53 @@ class OneOnOneTests(unittest.TestCase):
         self.assertEqual(mode.dm(startup["id"], "ceo")["person"]["name"], "Agent Tim", "you can DM the CEO too")
 
 
+class GroupChatTests(unittest.TestCase):
+    def wait(self, mode, key, sid):
+        import time as t
+        end = t.time() + 5
+        while (sid, key) in mode.dm_typing and t.time() < end:
+            t.sleep(0.01)
+
+    def test_groups_and_the_conversation_list(self):
+        llm = TeamLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = mode.create(PITCH)
+        sid = startup["id"]
+        mode.skip_questions(sid)
+        team = mode.detail(sid)["team"]
+        a, b, c = team[0], team[1], team[2]
+        with self.assertRaisesRegex(ValueError, "at least two"):
+            mode.create_group(sid, [a["key"]])
+        group = mode.create_group(sid, [a["key"], b["key"], "nobody"])
+        self.assertEqual(group["members"], [a["key"], b["key"]])
+        self.assertEqual(group["name"], f"{a['name'].split()[0]}, {b['name'].split()[0]}")
+        key = f"group-{group['id']}"
+
+        mode.send_dm(sid, key, "What should we launch first?")
+        self.wait(mode, key, sid)
+        roles = [m["role"] for m in mode.dm(sid, key)["messages"]]
+        self.assertEqual(roles, ["founder", a["key"], b["key"]], "everyone in the group answers in turn")
+        self.assertTrue(any(f'group chat called "{group["name"]}"' in p for p in llm.prompts))
+
+        first = a["name"].split()[0]
+        mode.send_dm(sid, key, f"@{first} just you: the pricing?")
+        self.wait(mode, key, sid)
+        roles = [m["role"] for m in mode.dm(sid, key)["messages"]]
+        self.assertEqual(roles[-2:], ["founder", a["key"]], "a tag asks only that person")
+
+        threads = mode.threads(sid)["threads"]
+        self.assertEqual(threads[0]["key"], "room")
+        listed = {t["key"]: t for t in threads}
+        self.assertEqual(listed[key]["last"]["role"], a["key"])
+        self.assertIn(c["key"], listed)
+        self.assertIn("ceo", listed, "Agent Tim has a thread too")
+        self.assertIsNone(listed[c["key"]]["last"])
+        self.assertIn(group["name"], mode.private_notes(sid, mode.chat_person(mode.store.get(sid), a["key"])),
+                      "members bring the group chat into meetings")
+
+        mode.delete_group(sid, group["id"])
+        self.assertNotIn(key, {t["key"] for t in mode.threads(sid)["threads"]})
+
+
 if __name__ == "__main__":
     unittest.main()

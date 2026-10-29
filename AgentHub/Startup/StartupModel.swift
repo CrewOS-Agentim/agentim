@@ -234,6 +234,10 @@ struct StartupClient {
         try await send("v1/startups/\(id)/autocomplete", body: ["answers": answers])
     }
 
+    func sendGroup(_ path: String, body: [String: Any]) async throws -> DirectChat.Group {
+        try await send(path, body: body)
+    }
+
     func getJSON<T: Decodable>(_ path: String) async throws -> T {
         try await send(path)
     }
@@ -296,6 +300,12 @@ final class StartupModel {
     var confirmingGitHub = false
     /// The launch-mode confirmation dialog is open.
     var confirmingSprint = false
+    /// Messages: the conversation list, the open one ("room", a person's key or "group-<id>"), and a new group.
+    var threads: [StartupThread] = []
+    var selectedThread = "room"
+    var composingGroup = false
+    var groupDraft: Set<String> = []
+    var groupDraftName = ""
     /// The open 1:1 chat: who, the conversation, and the unsent message.
     var dmKey: String?
     var dmChat: DirectChat?

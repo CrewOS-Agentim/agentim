@@ -137,6 +137,11 @@ def make_handler(gateway, channels, catalog):
             parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) == 4 and parts[3] == "threads":  # every conversation, iMessage-style
+                try:
+                    return self.send_json(200, gateway.startup.threads(parts[2]))
+                except KeyError:
+                    return self.send_json(404, {"error": "no such startup"})
             if len(parts) == 4 and parts[3] == "versions":  # commits and version tags of the project
                 if not gateway.startup.store.get(parts[2]):
                     return self.send_json(404, {"error": "no such startup"})
@@ -192,6 +197,11 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "groups":
+                    if body.get("delete"):
+                        startup.delete_group(startup_id, body["delete"])
+                        return self.send_json(200, startup.threads(startup_id))
+                    return self.send_json(201, startup.create_group(startup_id, body.get("members"), body.get("name", "")))
                 elif action == "dm" and len(parts) == 5:
                     return self.send_json(202, startup.send_dm(startup_id, parts[4], body.get("text", "")))
                 elif action == "suggest":
