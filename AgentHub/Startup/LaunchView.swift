@@ -18,6 +18,11 @@ struct LaunchConfig: Codable, Equatable {
     /// Set by agentim: the latest version and the project's GitHub repo.
     var version: String? = nil
     var github_repo: String? = nil
+    /// Keep going until it's developed (Claude Code may change the project's code).
+    var autopilot = false
+    /// Is it worth building? And the founder's call after it.
+    var check: WorthCheck? = nil
+    var decision: String? = nil
 
     init() {}
 
@@ -34,12 +39,15 @@ struct LaunchConfig: Codable, Equatable {
         auto_push = try c.decodeIfPresent(Bool.self, forKey: .auto_push) ?? false
         version = try c.decodeIfPresent(String.self, forKey: .version)
         github_repo = try c.decodeIfPresent(String.self, forKey: .github_repo)
+        autopilot = try c.decodeIfPresent(Bool.self, forKey: .autopilot) ?? false
+        check = try c.decodeIfPresent(WorthCheck.self, forKey: .check)
+        decision = try c.decodeIfPresent(String.self, forKey: .decision)
     }
 
     var json: [String: Any] {
         ["folder": folder, "stack": stack, "deploy": deploy, "deploy_command": deploy_command,
          "test_command": test_command, "live_url": live_url, "team_reviews": team_reviews,
-         "versioning": versioning, "auto_push": auto_push]
+         "versioning": versioning, "auto_push": auto_push, "autopilot": autopilot]
     }
 }
 

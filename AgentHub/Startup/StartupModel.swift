@@ -12,6 +12,8 @@ struct StartupPerson: Codable, Equatable, Identifiable {
     var owns: String?
     /// Personality, background and how they talk (the agent stays in character).
     var persona: String?
+    /// The model this agent thinks with (nil or "" = picked for the role).
+    var model: String? = nil
     var id: String { key }
 }
 
@@ -107,6 +109,8 @@ struct StartupDetail: Decodable, Equatable {
     var sprint: SprintState? = nil
     /// "events" (hand off as they finish) or "timer" (meet every min–max minutes), and who's working now.
     var rhythm: String? = nil
+    var memory: [MemoryItem]? = nil
+    var model_choices: [AgentModelChoice]? = nil
     var working: [String]? = nil
     let next_run: Double?
     var rounds: Int
@@ -321,6 +325,9 @@ final class StartupModel {
     var workBoard: WorkBoard?
     var taskOwner = ""
     var taskDraft = ""
+    /// The goal Agent Tim turns into a graph, and a rule for the team's memory.
+    var goalDraft = ""
+    var ruleDraft = ""
     /// The launch-mode confirmation dialog is open.
     var confirmingSprint = false
     /// Messages: the conversation list, the open one ("room", a person's key or "group-<id>"), and a new group.

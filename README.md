@@ -267,7 +267,7 @@ triggers: release notes, changelog
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
 
-## 🚀 Startups & Ideas
+## 🚀 Projects
 
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 
@@ -322,6 +322,19 @@ Every step reports in the agents room, and the agents see where the launch stand
 | BizDev, CFO, Data, CISO, COO | launch partners, unit economics, tracking plan, security checklist, launch-day run sheet |
 
 Then Claude Code builds the product **with** that launch kit (the CMO's copy on the landing page, the tracking plan instrumented) and saves the marketing assets under `launch/` in the project, the tests run, and the team holds a wrap-up meeting with action items. Deploying stays a separate confirmation, and nothing is posted to social networks: the posts and emails are ready for you to send. Ollama runs up to 4 requests at once (`OLLAMA_NUM_PARALLEL`, default 4) so the agents really work in parallel. API: `POST /v1/startups/{id}/sprint {"confirmed": true}`.
+
+**Start with the goal, and check it's worth building.** **New project** asks one thing: *what's the goal?* It can be a **new idea**, a **new project** to build, or a **feature for your existing code**. Before anyone builds, the team checks it's worth it: who already solves this (companies, products, open source, with prices), **build vs buy**, and the gap no one fills. With Claude Code on your Mac this is real research with web search; otherwise it's the model's knowledge, and the card says which. A "build" verdict starts the work. "Buy", "build on top" or "stop" waits for your call: **Build anyway** or **Stop**.
+
+**Harness, loops and graphs** (after *Harness, Loops, Graphs: what each layer fixes*). By default a project runs as **one continuous meeting** with no scheduled rounds; you get a **summary on demand** (the **Summarize** button):
+- **Harness**: the team's **memory** (your rules, the decisions, lessons) lives outside any one chat and goes into every agent's brief; permissions stay tight.
+- **Graph**: set a goal and Agent Tim turns it into a **graph of tasks** with dependencies. Tasks that don't need each other run **in parallel**; each starts from the results it depends on, and passed work is frozen. **Gates follow the cost of undoing**: *auto* (cheap), *checked* (Tim reviews), *code* (Claude Code changes the project and the tests check it), *you approve* (anything public, sent to customers, money or a deploy).
+- **Loop**: every task has a **"done when"** (evidence that can fail). Agent Tim checks each result, **on a different model than the one that did the work**. A fail goes back with the specific reason, and the agent tries again (max 2 retries). Then it's **blocked** and comes to you: give a hint and retry, send it back, or cancel.
+- **Learning**: a task that fails its check twice leaves a **lesson** in that role's memory, so the same mistake doesn't come back.
+- **Different models**: each agent can think with its own model (set it in **Agents**: any local model, Claude, ChatGPT, or Claude Code/Codex on your Mac); by default coders get the best coding model.
+- **Autopilot** (a switch per project): the team keeps going, goal after goal, until Agent Tim judges the project developed. Coding tasks are done by **Claude Code in the project folder**, your tests are the proof, and each passing change becomes a version. Deploys, public posts, customer emails and spending still wait for you. Limits: `AGENTIM_AUTOPILOT_GOALS_PER_DAY` (8) and 40 tasks a day.
+- Talk to the room any time: Agent Tim answers, and a new goal ("goal: get 10 pilot customers") becomes a new graph. Prefer meetings? Switch a project to *Meetings → handoffs* or *Meet every 10–30 min*.
+
+API: `POST /v1/startups/{id}/goal`, `/summary`, `/decision {"decision": "build"|"stop"}`, `/check`, `/memory`, `/tasks {"approve"|"reject"|"retry"|"cancel": id}`.
 
 **Work flows by handoffs, not by the clock.** A meeting's action items become tasks on the startup's **Work** board (owner, ETA, and what each waits for: *after Leo's ROI page*). An agent starts as soon as a task is ready (up to 3 at a time), delivers the actual result (the copy, numbers, plan or checklist), and **hands off** to whoever continues from it ("@Sam: put this ROI page in the welcome email"), which starts Sam right away with Leo's result as input. When the board is empty, the team meets (after the startup's minimum break) to plan the next tasks. You can assign anyone a task from the Work tab, and cancel ones that aren't needed. Guard rails: 40 tasks a day per startup, a handoff chain stops after 4 steps, and pausing a startup pauses its work. Prefer the old rhythm? Switch the Work tab to **Meet every 10–30 min**. API: `GET /v1/startups/{id}/tasks`, `POST /v1/startups/{id}/tasks {"owner": "Ava", "task": "…"}`, `PATCH`-style `POST /v1/startups/{id} {"rhythm": "events" | "timer"}`.
 

@@ -20,6 +20,7 @@ import uuid
 from dataclasses import dataclass
 
 from .launch import PROVIDERS, Launch, pipeline_view, status_line
+from .graph import Memory
 from .work import Work, WorkStore
 from .llm import LLMError, labelled
 
@@ -34,6 +35,7 @@ class Person:
     emoji: str
     owns: str
     persona: str = ""  # personality, background and how they talk (set by the founder)
+    model: str = ""    # the model this agent thinks with ("" = picked for the role)
 
     @property
     def first(self):
@@ -95,7 +97,7 @@ def slug(text):
 
 def person_dict(person):
     return {"key": person.key, "name": person.name, "title": person.title, "emoji": person.emoji, "owns": person.owns,
-            "persona": person.persona}
+            "persona": person.persona, "model": person.model}
 
 
 MAX_PERSONA = 600
@@ -132,7 +134,9 @@ def normalize_member(raw, taken):
     while key in taken or key == CEO.key:
         key, n = f"{base}-{n}", n + 1
     taken.add(key)
-    return {"key": key, "name": name, "title": title, "emoji": emoji, "owns": owns, "persona": persona}
+    model = str(raw.get("model") or "").strip()[:80]
+    return {"key": key, "name": name, "title": title, "emoji": emoji, "owns": owns, "persona": persona,
+            "model": "" if model == "auto" else model}
 
 
 def normalize_team(members):
@@ -196,6 +200,30 @@ SPRINT_TASKS = {
     "security": "the launch security checklist: auth, secrets, data protection, privacy policy and terms points, and the top 3 risks to fix before going live",
     "operations": "the launch-day run sheet: who does what in the first 2 hours after going live, by the minute or hour, and how the team reports back",
 }
+
+MAX_GOALS_PER_DAY = int(os.environ.get("AGENTIM_AUTOPILOT_GOALS_PER_DAY", "8"))
+VERDICTS = {"build": "✅ Worth building", "buy": "🛒 Better to buy or use what exists",
+            "build-on-top": "🧩 Build on top of something that exists", "stop": "🛑 Not worth building"}
+
+
+def parse_worth(text):
+    """The worth-building check's reply → {"verdict", "why", "existing": [{"name", "what"}], "gap", "recommendation"}."""
+    def field(name):
+        m = re.search(rf"^\W*{name}\W*:\s*(.+)$", text, re.I | re.M)
+        return m.group(1).strip() if m else ""
+    verdict = field("VERDICT").lower().replace(" ", "-").strip("*.`")
+    verdict = next((v for v in ("build-on-top", "build", "buy", "stop") if verdict.startswith(v)), "build")
+    block = re.search(r"^\W*EXISTING\W*:\s*$(.*?)(?=^\W*GAP\W*:|\Z)", text, re.I | re.M | re.S)
+    existing = []
+    for line in (block.group(1).splitlines() if block else []):
+        item = line.strip().lstrip("-*• ").strip()
+        if not item:
+            continue
+        name, _, what = item.partition(":")
+        existing.append({"name": name.strip().strip("*"), "what": what.strip()})
+    return {"verdict": verdict, "why": field("WHY"), "existing": existing[:10], "gap": field("GAP") or "none",
+            "recommendation": field("RECOMMENDATION")}
+
 
 DAILY_SUMMARY_HOUR = int(os.environ.get("AGENTIM_DAILY_SUMMARY_HOUR", "18"))
 
@@ -298,11 +326,15 @@ def pick_speakers(last_spoke, count=3, rng=random, team=None):
 def brief(startup):
     answers = "\n".join(f"Q: {q}\nA: {a}" for q, a in zip(startup["questions"], startup["answers"]) if a)
     if startup.get("kind") == "idea":
-        head = f"Idea: {startup['name']}\nThe feature to add (across the services below): {startup['pitch']}"
+        head = f"Feature: {startup['name']}\nThe feature to add (across the services below): {startup['pitch']}"
+    elif startup.get("kind") == "project":
+        head = f"Project: {startup['name']}\nThe goal: {startup['pitch']}"
     else:
         head = f"Startup: {startup['name']}\nPitch: {startup['pitch']}"
     code = startup.get("codebase")
     launch = status_line(startup)
+    if startup.get("memory"):
+        launch = startup["memory"] + ("\n\n" + launch if launch else "")
     if startup.get("open_items"):
         launch = (launch + "\n\n" if launch else "") + ("Open action items (if one is yours, say if it's done, or "
                                                           "your new ETA):\n" + startup["open_items"])
@@ -769,6 +801,10 @@ class StartupMode:
         self.launch = Launch(self)  # design → build → test → deploy → live
         # Event-driven work: tasks start as soon as they're ready, and agents hand off to each other.
         self.work = Work(self, WorkStore(store.db, store.lock))
+        self.memory = Memory(store.db, store.lock)  # the harness: what the team knows, outside any one chat
+        self.default_rhythm = os.environ.get("AGENTIM_STARTUP_RHYTHM", "graph")
+        self.checking = set()  # projects whose worth-building check is running
+        self.auto_check = True  # every new project starts with the worth-building check
         self.dm_typing = set()  # (startup id, thread key) while someone writes a 1:1 or group reply
         # Telegram/WhatsApp/Slack: one summary a day ("daily", default) or one after every meeting ("meeting").
         self.notify_mode = os.environ.get("AGENTIM_STARTUP_NOTIFY", "daily")
@@ -779,9 +815,10 @@ class StartupMode:
 
     def create(self, pitch, name=None, channel=None, chat_id=None, min_minutes=10, max_minutes=30, team=None,
                kind="startup", sources=None):
-        """A startup (pitch → interview → team) or an idea (a feature for the linked code → straight to the team)."""
+        """A project: a new idea (pitch → interview → team), a new project to build (its goal → interview → team), or a
+        feature for existing code (straight to the team). Every one gets a worth-building check first."""
         pitch = pitch.strip()
-        kind = "idea" if kind == "idea" else "startup"
+        kind = kind if kind in ("idea", "project") else "startup"
         sources = normalize_sources(sources)
         if len(pitch) < 10:
             raise ValueError("Describe the feature in a sentence or two." if kind == "idea"
@@ -802,7 +839,10 @@ class StartupMode:
             "notify_channel": channel,
             "notify_chat": str(chat_id) if chat_id is not None else None, "created": self.clock(), "updated": self.clock(),
         }
-        return self.store.save(startup)
+        saved = self.store.save(startup)
+        if self.auto_check:
+            self.start_check(saved["id"])
+        return self.store.get(saved["id"])
 
     def follow_up_questions(self, pitch):
         """Tim's interview: questions through the lens of each configured skill (YC partner + co-founder)."""
@@ -930,6 +970,7 @@ Reply with one line per question, starting with its number exactly as above, lik
     def delete(self, startup_id):
         self.store.delete(startup_id)
         self.work.store.delete_startup(startup_id)
+        self.memory.delete(startup_id)
 
     def post_founder(self, startup_id, text):
         """The founder talks to the agents: during a meeting, the agents who speak next see it;
@@ -948,7 +989,49 @@ Reply with one line per question, starting with its number exactly as above, lik
         tagged = mentioned(text, team_of(startup))
         for person in tagged:
             threading.Thread(target=self.reply_directly, args=(startup_id, person, text, round_no), daemon=True).start()
+        if not tagged and self.rhythm(startup) == "graph":
+            # One continuous meeting: Agent Tim answers, and a new goal becomes a new graph.
+            threading.Thread(target=self.ceo_reply, args=(startup_id, text, round_no), daemon=True).start()
         return {"posted": True, "live": bool(live), "round": round_no, "mentioned": [p.key for p in tagged]}
+
+    def ceo_reply(self, startup_id, text, round_no):
+        startup = self.store.get(startup_id)
+        if not startup:
+            return None
+        explicit = re.match(r"^\s*(?:new\s+)?goal\s*:\s*(.+)$", text, re.I | re.S)
+        if explicit:
+            try:
+                self.set_goal(startup_id, explicit.group(1))
+            except ValueError as e:
+                self.store.add_message(startup_id, round_no, CEO.key, f"I couldn't plan that: {e}")
+            return None
+        board = self.work.board(startup_id)["tasks"]
+        people = people_of(startup)
+        state = "\n".join(f"- [{t['status']}] {people[t['owner']].first if t['owner'] in people else t['owner']}: {t['task']}"
+                          for t in board[-15:]) or "(no tasks yet)"
+        reply = self._ask(f"""You are Agent Tim, CEO of "{startup['name']}". The founder just wrote in the team room:
+"{text}"
+
+Where the work stands:
+{state}
+
+{self.memory.brief(startup_id)}
+
+Answer the founder in under 100 words: what you'll do about it, naming who on the team. If they're giving the team a new \
+goal, put it on the first line as "GOAL: <the goal>" and nothing else on that line.""",
+                          f"Startup · {startup['name']} · Tim replies")
+        if not reply:
+            return None
+        goal = re.match(r"^\s*\**GOAL\**\s*:\s*(.+)$", reply.splitlines()[0], re.I)
+        body = "\n".join(reply.splitlines()[1:]).strip() if goal else reply.strip()
+        if body:
+            self.store.add_message(startup_id, round_no, CEO.key, body)
+        if goal:
+            try:
+                self.set_goal(startup_id, goal.group(1))
+            except ValueError as e:
+                self.store.add_message(startup_id, round_no, CEO.key, f"I couldn't plan that: {e}")
+        return reply
 
     def reply_directly(self, startup_id, person, text, round_no):
         """A tagged agent answers the founder right away (outside the meeting order)."""
@@ -1254,9 +1337,9 @@ hours. Don't start with your name.""")
     # ---- event-driven work: the meeting's action items become tasks; agents hand off as they finish
 
     def rhythm(self, startup):
-        """"events" (default): work flows by handoffs, the team meets when the board is empty;
-        "timer": the team meets every min–max minutes."""
-        return (startup.get("config") or {}).get("rhythm") or "events"
+        """"graph" (default): goals become task graphs with checks and gates; one continuous meeting, summarized on
+        demand. "events": meetings make tasks and agents hand off. "timer": the team meets every min–max minutes."""
+        return (startup.get("config") or {}).get("rhythm") or self.default_rhythm
 
     def begin_work(self, startup_id, round_no, minutes):
         startup = self.store.get(startup_id)
@@ -1274,8 +1357,8 @@ hours. Don't start with your name.""")
         return created
 
     def set_rhythm(self, startup_id, rhythm):
-        if rhythm not in ("events", "timer"):
-            raise ValueError("The rhythm is events or timer.")
+        if rhythm not in ("graph", "events", "timer"):
+            raise ValueError("The rhythm is graph, events or timer.")
         startup = self.store.get(startup_id)
         if not startup:
             raise KeyError(startup_id)
@@ -1284,7 +1367,11 @@ hours. Don't start with your name.""")
         if rhythm == "timer" and startup["status"] == "running" and not startup.get("next_run"):
             self.schedule_next(startup)
             self.store.save(startup)
-        elif rhythm == "events":
+        elif rhythm in ("events", "graph"):
+            if rhythm == "graph":
+                startup = self.store.get(startup_id)
+                startup["next_run"] = None  # no scheduled meetings
+                self.store.save(startup)
             self.work.kick(startup_id)
 
     # ---- the rolling daily meeting: every round of a day folds into one meeting with one summary
@@ -1450,7 +1537,160 @@ hours. Don't start with your name.""")
             return self.locks.setdefault(startup_id, threading.Lock())
 
     def run_round(self, startup_id):
-        """One team meeting. Returns the founder's summary, or None if nothing happened."""
+        """One team meeting. Returns the founder's summary, or None if nothing happened.
+        In graph mode there are no rounds: the first goal is planned (or the work resumes) instead."""
+        startup = self.store.get(startup_id)
+        if startup and startup["status"] != "interview" and self.rhythm(startup) == "graph":
+            return self.graph_tick(startup_id)
+        return self._run_round(startup_id)
+
+    def graph_tick(self, startup_id):
+        startup = self.store.get(startup_id)
+        startup["next_run"] = None  # one continuous meeting: nothing is scheduled
+        self.store.save(startup)
+        if not self.cleared_to_build(startup):
+            return None  # the worth-building check is running, or waits for the founder's decision
+        if any(t["status"] in ("todo", "doing") for t in self.work.store.all(startup_id)):
+            self.work.kick(startup_id)
+            return None
+        if self.work.store.all(startup_id):
+            return None  # the last goal is done or waits for the founder: they set the next one
+        goal = (f"Get {startup['name']} to its first 10 customers: the v1 scope, the landing page copy, pricing, "
+                "the tracking plan and the launch plan")
+        try:
+            self.work.plan(startup_id, goal)
+        except ValueError as e:
+            log.warning("startup: couldn't plan the first goal: %s", e)
+        return None
+
+    def set_goal(self, startup_id, goal):
+        return self.work.plan(startup_id, goal)
+
+    # ---- worth building? (build vs buy, and who already solves it)
+
+    def cleared_to_build(self, startup):
+        config = startup.get("config") or {}
+        check = config.get("check")
+        if not check:
+            return True  # projects from before the check
+        if check.get("status") == "running":
+            return False
+        return config.get("decision") == "build"
+
+    def start_check(self, startup_id):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        if startup_id in self.checking:
+            return False
+        self.checking.add(startup_id)
+        config = {**(startup.get("config") or {}), "check": {"status": "running", "at": self.clock()}}
+        self.store.save_launch(startup_id, config=config)
+        threading.Thread(target=self.check_worth, args=(startup_id,), daemon=True).start()
+        return True
+
+    def check_worth(self, startup_id):
+        """Is it worth building? Who already solves this, build vs buy, and the gap. Uses Claude Code on the Mac
+        (it can search the web) when it's there, else the best model's own knowledge."""
+        try:
+            startup = self.store.get(startup_id)
+            kind = {"idea": "A feature for existing code", "project": "A project to build"}.get(startup.get("kind"), "A startup idea")
+            researcher = next((m["alias"] for m in self.model_choices() if m["agent"] and "claude" in m["alias"]), None)
+            reply = self._ask(f"""You are a sharp CTO and business-development analyst. Before anyone builds this, check if it's worth building.
+
+{kind}: "{startup['name']}": {startup['pitch']}
+
+1. Existing solutions: companies, products, open-source projects or built-in features that already solve this. Name \
+them, with what they do and the price if you know it.{" Search the web to check." if researcher else ""}
+2. Build vs buy: the time and cost to build a v1 vs using or buying the best existing option.
+3. The gap: what no one does well yet, if anything.
+
+Reply exactly in this format:
+VERDICT: build | buy | build-on-top | stop
+WHY: <2–3 sentences>
+EXISTING:
+- <name>: <what it does, price if known>
+GAP: <the gap, or "none">
+RECOMMENDATION: <one line>""", f"Startup · {startup['name']} · worth building?", model=researcher)
+            check = parse_worth(reply or "")
+            check.update(status="done", at=self.clock(), source="Claude Code (web search)" if researcher else "model knowledge")
+            config = {**(self.store.get(startup_id).get("config") or {}), "check": check}
+            if check["verdict"] == "build" and not config.get("decision"):
+                config["decision"] = "build"
+            self.store.save_launch(startup_id, config=config)
+            existing = "\n".join(f"- **{e['name']}**: {e['what']}" for e in check["existing"][:6]) or "- None found"
+            ask = "" if config.get("decision") == "build" else \
+                "\n\n**Your call**: build anyway, or stop? (The work starts when you choose Build.)"
+            self.store.add_message(startup_id, max(startup["rounds"], 1), CEO.key,
+                                   f"🔎 **Worth building?** {VERDICTS.get(check['verdict'], check['verdict'])}\n\n{check['why']}\n\n"
+                                   f"**Already out there**\n{existing}\n\n**The gap**: {check['gap']}\n\n"
+                                   f"**Recommendation**: {check['recommendation']}{ask}")
+            if config.get("decision") == "build":
+                self.run_round(startup_id) if self.rhythm(self.store.get(startup_id)) == "graph" and \
+                    self.store.get(startup_id)["status"] == "running" else None
+        except Exception:
+            log.exception("startup: the worth-building check failed")
+            startup = self.store.get(startup_id)
+            if startup:
+                config = {**(startup.get("config") or {}), "check": {"status": "failed", "at": self.clock()},
+                          "decision": (startup.get("config") or {}).get("decision") or "build"}
+                self.store.save_launch(startup_id, config=config)
+        finally:
+            self.checking.discard(startup_id)
+
+    def decide(self, startup_id, decision):
+        """The founder's call after the check: build (the work starts) or stop (the project pauses)."""
+        if decision not in ("build", "stop"):
+            raise ValueError("Build or stop?")
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        config = {**(startup.get("config") or {}), "decision": decision}
+        self.store.save_launch(startup_id, config=config)
+        self.store.add_message(startup_id, max(startup["rounds"], 1), FOUNDER.key,
+                               "🛠️ Build it." if decision == "build" else "🛑 Let's not build this.")
+        if decision == "stop":
+            return self.set_enabled(startup_id, False)
+        if startup["status"] == "running" and self.rhythm(startup) == "graph":
+            threading.Thread(target=self.run_round, args=(startup_id,), daemon=True).start()
+        return self.store.get(startup_id)
+
+    # ---- autopilot: keep going, goal after goal, until the project is developed
+
+    def next_goal(self, startup_id):
+        """Autopilot: Agent Tim sets the next goal toward the project's goal, or says it's developed."""
+        startup = self.store.get(startup_id)
+        goals_today = [m for m in self.memory.all(startup_id) if m["kind"] == "decision" and m["text"].startswith("Goal:")
+                       and day_of(m["created"]) == day_of(time.time())]
+        if len(goals_today) >= MAX_GOALS_PER_DAY:
+            self.store.add_message(startup_id, max(startup["rounds"], 1), CEO.key,
+                                   f"⏸️ That's {MAX_GOALS_PER_DAY} goals today: autopilot continues tomorrow.")
+            return None
+        done = [t for t in self.work.store.all(startup_id) if t["status"] == "done"][-20:]
+        history = "\n".join(f"- {t['task']}" for t in done) or "(nothing yet)"
+        version = (startup.get("config") or {}).get("version")
+        reply = self._ask(f"""You are Agent Tim, CEO of "{startup['name']}", on autopilot: the team keeps working until the \
+project is developed.
+
+The project's goal: {startup['pitch']}
+Done so far{f" (the code is at {version})" if version else ""}:
+{history}
+
+{self.memory.brief(startup_id)}
+
+What's the next goal that moves the project closest to working, shipped and used? One line: "GOAL: <the goal>". If the \
+project is fully developed and nothing important is left, reply "DONE: <why>".""", f"Startup · {startup['name']} · next goal")
+        if not reply:
+            return None
+        first = reply.strip().splitlines()[0]
+        if re.match(r"^\W*DONE\b", first, re.I):
+            self.store.add_message(startup_id, max(startup["rounds"], 1), CEO.key,
+                                   f"🏁 **The project is developed.** {first.split(':', 1)[-1].strip()}\n\nAsk for a summary, or set a new goal.")
+            return None
+        goal = re.match(r"^\W*GOAL\W*:\s*(.+)$", first, re.I)
+        return self.set_goal(startup_id, goal.group(1) if goal else first.strip())
+
+    def _run_round(self, startup_id):
         lock = self._lock(startup_id)
         if not lock.acquire(blocking=False):
             return None
@@ -1536,13 +1776,55 @@ hours. Don't start with your name.""")
     # Routed by the kind of work, not the prompt text (prompts mention people as @Name).
     ROUTING_HINT = "Analyze the business strategy and plan the next steps step by step."
 
-    def _ask(self, prompt, label="Startup Mode"):
+    CODING_HINT = "Write the Python code to implement this feature and fix the failing test."
+    TECH_TITLES = re.compile(r"\b(cto|engineer|developer|qa|data|analyst|architect|devops|security|ciso)\b", re.I)
+
+    def model_for(self, person):
+        """The model an agent thinks with: the one set for them, else the best for their kind of work."""
+        if person.model:
+            return person.model
+        try:
+            hint = self.CODING_HINT if self.TECH_TITLES.search(person.title) else self.ROUTING_HINT
+            return self.gateway.router().route(hint).model.alias
+        except Exception:
+            return None
+
+    def checker_model(self, avoid=None):
+        """Agent Tim checks on a different model than the one that did the work (a model shouldn't grade itself)."""
         try:
             decision = self.gateway.router().route(self.ROUTING_HINT)
+        except Exception:
+            return None
+        ranking = [decision.model] + decision.fallbacks
+        return next((m.alias for m in ranking if m.alias != avoid and "agent" not in getattr(m, "caps", ())), None) \
+            or decision.model.alias
+
+    def model_choices(self):
+        """The models an agent can be set to (chat models and the local coding agents)."""
+        try:
+            models = self.gateway.router().models
+        except Exception:
+            return []
+        media = {"video", "image", "speech", "transcription"}
+        return [{"alias": m.alias, "id": m.id, "agent": "agent" in m.caps} for m in models if not (set(m.caps) & media)]
+
+    def _ask(self, prompt, label="Startup Mode", model=None, avoid=None):
+        try:
+            router = self.gateway.router()
+            pinned = router.find(model) if model else None
+            decision = router.route(self.ROUTING_HINT)
         except Exception as e:
             log.warning("startup: no model: %s", e)
             return None
-        for model in [decision.model] + decision.fallbacks[:1]:
+        candidates = ([pinned] if pinned else []) + [decision.model] + decision.fallbacks
+        if avoid:
+            candidates = [m for m in candidates if m.alias != avoid] or candidates
+        seen, ordered = set(), []
+        for m in candidates:
+            if m.id not in seen:
+                seen.add(m.id)
+                ordered.append(m)
+        for model in ordered[:2]:
             try:
                 with labelled(label):
                     return self.gateway.llm.complete(model, "", [{"role": "user", "content": prompt}]).strip()
@@ -1602,6 +1884,8 @@ hours. Don't start with your name.""")
                 "sprint": (startup.get("pipeline") or {}).get("sprint"),
                 "today": self.store.day_row(startup_id, day_of(time.time())),
                 "rhythm": self.rhythm(startup),
+                "model_choices": self.model_choices(),
+                "memory": self.memory.all(startup_id),
                 "working": sorted(set((self.work.working.get(startup_id) or {}).values())),
                 "providers": [{"id": k, **v} for k, v in PROVIDERS.items()]}
 

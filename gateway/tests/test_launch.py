@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -101,7 +102,7 @@ class LaunchTests(unittest.TestCase):
         lock = threading.Lock()
         original = self.mode._ask
 
-        def slow_ask(prompt, label=""):
+        def slow_ask(prompt, label="", **kw):
             if "LAUNCH MODE" in prompt:
                 with lock:
                     active[0] += 1
@@ -454,7 +455,7 @@ class EventWorkTests(unittest.TestCase):
         self.prompts = []
         original = self.mode._ask
 
-        def ask(prompt, label=""):
+        def ask(prompt, label="", **kw):
             if "YOUR TASK" not in prompt:
                 return original(prompt, label)
             self.prompts.append(prompt)
@@ -529,6 +530,262 @@ class EventWorkTests(unittest.TestCase):
         text, handoffs = parse_handoffs("Done it.\nHANDOFF: @Sam: wire the emails — ETA: in 20 min\n**HANDOFF:** none")
         self.assertEqual(text, "Done it.")
         self.assertEqual(handoffs, [("Sam", "wire the emails", "in 20 min")])
+
+
+class GraphTests(unittest.TestCase):
+    def setUp(self):
+        self.gateway, self.mode = make_startup_mode(llm=TeamLLM())
+        self.mode.default_rhythm = "graph"
+        startup = self.mode.create(PITCH)
+        self.sid = startup["id"]
+        self.mode.skip_questions(self.sid)
+        self.mode.store.save({**self.mode.store.get(self.sid), "next_run": None})
+        team = self.mode.detail(self.sid)["team"]
+        self.first = [p["name"].split()[0] for p in team]
+        self.keys = [p["key"] for p in team]
+        self.calls, self.checks = [], []
+        self.fail_first = set()
+
+        def ask(prompt, label="", **kw):
+            self.calls.append(label)
+            if "Turn this goal into a work graph" in prompt:
+                a, b, c = self.first[:3]
+                return (f"T1 | {a} | Write the v1 scope | done when: lists 3 features | after: - | gate: review\n"
+                        f"T2 | {b} | Draft the landing page copy | done when: has a headline | after: - | gate: auto\n"
+                        f"T3 | {c} | Post the launch announcement on LinkedIn | done when: under 120 words | after: T1, T2 | gate: auto")
+            if prompt.startswith("You are Agent Tim, CEO, checking"):
+                task = prompt.split("Task: ")[1].split("\n")[0]
+                self.checks.append(task)
+                if task in self.fail_first:
+                    self.fail_first.discard(task)
+                    return "FAIL\nReason: only 2 features listed\nFix: add a third feature"
+                return "PASS"
+            if "YOUR TASK" in prompt:
+                return "Result: feature A, feature B, feature C\nHANDOFF: none"
+            if "asked for a summary" in prompt:
+                return ("## Summary\nScope and copy are done.\n## Decisions\n- Price at $29/month\n"
+                        "## Action items\n- **Ava**: post — ETA: in 30 min\n## Needs you\n- Approve the post\n## Open questions\n- None")
+            return "ok"
+
+        self.mode._ask = ask
+
+    def wait(self):
+        import time as t
+        end = t.time() + 5
+        while self.sid in self.mode.work.running and t.time() < end:
+            t.sleep(0.01)
+
+    def test_a_goal_becomes_a_graph_with_parallel_tasks_checks_and_a_founder_gate(self):
+        self.fail_first.add("Write the v1 scope")
+        created = self.mode.set_goal(self.sid, "Launch v1 this week")
+        self.assertEqual(len(created), 3)
+        self.assertEqual(created[2]["gate"], "founder", "posting publicly can't be undone: the founder approves")
+        self.assertEqual(json.loads(created[2]["deps"]), [created[0]["id"], created[1]["id"]])
+        self.wait()
+        board = {t["task"]: t for t in self.mode.work.board(self.sid)["tasks"]}
+        scope = board["Write the v1 scope"]
+        self.assertEqual((scope["status"], scope["attempts"]), ("done", 1), "failed the check once, fixed, then passed")
+        self.assertEqual(board["Draft the landing page copy"]["status"], "done")
+        post = board["Post the launch announcement on LinkedIn"]
+        self.assertEqual(post["status"], "approval", "waits for the founder")
+        self.assertEqual(post["layer"], 1, "after the two parallel tasks")
+        room = "\n".join(m["content"] for m in self.mode.store.messages(self.sid))
+        for text in ("🗺️ **Plan**", "🔁 Not yet", "only 2 features listed", "checked ✓", "🙋 **Needs your approval**"):
+            self.assertIn(text, room)
+        self.mode.work.approve(self.sid, post["id"])
+        self.wait()
+        self.assertEqual(self.mode.work.store.get(post["id"])["status"], "done")
+        self.assertIn("🏁 **Goal done**", "\n".join(m["content"] for m in self.mode.store.messages(self.sid)))
+
+    def test_two_failed_checks_block_the_task_and_leave_a_lesson(self):
+        orig = self.mode._ask
+        self.mode._ask = lambda p, label="", **kw: ("FAIL\nReason: no numbers\nFix: add numbers"
+                                              if p.startswith("You are Agent Tim, CEO, checking") else orig(p, label))
+        created = self.mode.set_goal(self.sid, "Launch v1 this week")
+        self.wait()
+        scope = self.mode.work.store.get(created[0]["id"])
+        self.assertEqual((scope["status"], scope["attempts"]), ("blocked", 3))
+        lessons = [m for m in self.mode.memory.all(self.sid) if m["kind"] == "lesson"]
+        self.assertTrue(any("no numbers" in l["text"] and l["role"] == self.keys[0] for l in lessons))
+        self.assertIn("no numbers", self.mode.memory.brief(self.sid, self.keys[0]), "the owner sees the lesson next time")
+        self.mode._ask = orig
+        self.mode.work.retry(self.sid, scope["id"], "use our pricing: $29")
+        self.wait()
+        self.assertEqual(self.mode.work.store.get(scope["id"])["status"], "done")
+
+    def test_memory_and_summary_on_demand(self):
+        self.mode.memory.add(self.sid, "rule", "Never promise features we haven't built")
+        self.assertIn("Never promise features", self.mode.memory.brief(self.sid))
+        result = self.mode.work.summarize(self.sid)
+        self.assertIn("## Summary", result["summary"])
+        self.assertIn("Price at $29/month", [m["text"] for m in self.mode.memory.all(self.sid)], "decisions go into memory")
+        self.assertEqual(self.mode.days(self.sid)[0]["day"], result["day"], "the summary is the day's meeting notes")
+        self.assertIn("📋 **Summary**", self.mode.store.messages(self.sid)[-1]["content"])
+
+    def test_graph_mode_has_no_scheduled_meetings(self):
+        self.assertEqual(self.mode.detail(self.sid)["rhythm"], "graph")
+        self.mode.run_round(self.sid)  # what the scheduler or "Meet now" would do: plans the first goal instead
+        self.wait()
+        self.assertIsNone(self.mode.store.get(self.sid)["next_run"])
+        self.assertEqual(self.mode.store.get(self.sid)["rounds"], 0, "no meeting rounds")
+        self.assertTrue(self.mode.work.store.all(self.sid), "the first goal was planned")
+
+    def test_tim_answers_and_new_goals_become_graphs(self):
+        orig = self.mode._ask
+        self.mode._ask = lambda p, label="", **kw: ("GOAL: Get 10 pilot customers\nOn it: Zoe leads, Ava supports."
+                                              if "just wrote in the team room" in p else orig(p, label))
+        self.mode.post_founder(self.sid, "let's focus on getting 10 pilot customers")
+        import time as t
+        end = t.time() + 5
+        while not self.mode.work.store.all(self.sid) and t.time() < end:
+            t.sleep(0.01)
+        self.wait()
+        room = "\n".join(m["content"] for m in self.mode.store.messages(self.sid))
+        self.assertIn("On it: Zoe leads", room)
+        self.assertIn("🗺️ **Plan**: Get 10 pilot customers", room)
+        self.mode.post_founder(self.sid, "goal: Ship the pricing page")
+        end = t.time() + 5
+        while "**Plan**: Ship the pricing page" not in "\n".join(m["content"] for m in self.mode.store.messages(self.sid)) and t.time() < end:
+            t.sleep(0.01)
+        self.assertIn("🗺️ **Plan**: Ship the pricing page", "\n".join(m["content"] for m in self.mode.store.messages(self.sid)))
+
+    def test_parse_plan_and_gates(self):
+        from agentim.graph import gate_for, parse_plan
+        nodes = parse_plan("T1 | Ava | Write copy | done when: 3 headlines | after: - | gate: auto\n"
+                           "T2 | @Zoe | Email the customers the offer | done when: sent | after: T1 | gate: review\nnoise")
+        self.assertEqual([(n["ref"], n["owner"], n["after"], n["gate"]) for n in nodes],
+                         [("T1", "Ava", [], "auto"), ("T2", "Zoe", ["T1"], "founder")])
+        self.assertEqual(gate_for("Deploy to production", "auto"), "founder")
+        self.assertEqual(gate_for("Draft the FAQ", "auto"), "auto")
+        self.assertEqual(gate_for("Draft a LinkedIn post", "auto"), "auto", "a draft can be redone")
+        self.assertEqual(gate_for("Post the announcement on LinkedIn", "auto"), "founder")
+
+
+class ProjectTests(unittest.TestCase):
+    WORTH = ("VERDICT: buy\nWHY: Rover and Wag already do this well.\nEXISTING:\n- Rover: dog walkers, 20% fee\n"
+             "- Wag: on-demand walks\nGAP: none\nRECOMMENDATION: Partner with Rover instead.")
+
+    def setUp(self):
+        self.gateway, self.mode = make_startup_mode(llm=TeamLLM())
+        self.mode.default_rhythm = "graph"
+        self.mode.auto_check = True
+        self.labels, self.models = [], []
+        self.verdict = self.WORTH
+        orig = self.mode._ask
+
+        def ask(prompt, label="", model=None, avoid=None):
+            self.labels.append(label)
+            self.models.append((label, model))
+            if "check if it's worth building" in prompt:
+                return self.verdict
+            if "Turn this goal into a work graph" in prompt:
+                return "T1 | Noah | Build the booking API | done when: tests pass | after: - | gate: code"
+            if prompt.startswith("You are Agent Tim, CEO, checking"):
+                return "PASS"
+            if "on autopilot" in prompt:
+                return "DONE: the booking flow works end to end"
+            return orig(prompt, label)
+
+        self.mode._ask = ask
+        self.calls = []
+
+        def call(path, body=None, timeout=30):
+            self.calls.append((path, body))
+            if path == "/v1/projects/create":
+                return {"folder": "/repos/startups/walkies"}
+            if path == "/v1/projects/task":
+                return {"folder": "/f", "mode": body["mode"], "output": "Added POST /bookings and a test.",
+                        "changed": " api.py | 30 +"}
+            if path == "/v1/projects/run":
+                return {"folder": "/f", "exit_code": 0, "output": "4 passed", "seconds": 1}
+            if path == "/v1/projects/commit":
+                return {"committed": True, "version": "v0.1.0", "sha": "abc1234", "files": 2}
+            return {}
+
+        self.gateway.claude.call = call
+
+    def wait_check(self, sid):
+        import time as t
+        end = t.time() + 5
+        while (sid in self.mode.checking or sid in self.mode.work.running) and t.time() < end:
+            t.sleep(0.01)
+        t.sleep(0.05)
+        while sid in self.mode.work.running and t.time() < end:
+            t.sleep(0.01)
+
+    def test_worth_building_check_waits_for_the_founder_when_it_says_buy(self):
+        project = self.mode.create("A booking app for dog walkers in my city", kind="project")
+        sid = project["id"]
+        self.mode.skip_questions(sid)
+        self.wait_check(sid)
+        config = self.mode.store.get(sid)["config"]
+        self.assertEqual(config["check"]["verdict"], "buy")
+        self.assertEqual([e["name"] for e in config["check"]["existing"]], ["Rover", "Wag"])
+        self.assertNotIn("decision", config, "a 'buy' verdict waits for the founder")
+        self.mode.run_round(sid)
+        self.assertEqual(self.mode.work.store.all(sid), [], "no work before the founder decides")
+        room = "\n".join(m["content"] for m in self.mode.store.messages(sid))
+        self.assertIn("🔎 **Worth building?** 🛒", room)
+        self.assertIn("**Rover**", room)
+        self.mode.decide(sid, "build")
+        self.wait_check(sid)
+        self.assertTrue(self.mode.work.store.all(sid), "Build: the first goal is planned and worked")
+
+    def test_a_build_verdict_starts_right_away_and_stop_pauses(self):
+        self.verdict = "VERDICT: build\nWHY: Nothing local exists.\nEXISTING:\nGAP: local trust\nRECOMMENDATION: Build v1"
+        project = self.mode.create("A booking app for dog walkers in my city", kind="project")
+        self.wait_check(project["id"])
+        self.assertEqual(self.mode.store.get(project["id"])["config"]["decision"], "build")
+        other = self.mode.create("Another booking app for cat sitters in my city", kind="idea",
+                                 sources=[{"type": "dir", "path": "/Users/me/code/app"}])
+        self.wait_check(other["id"])
+        self.mode.decide(other["id"], "stop")
+        self.assertEqual(self.mode.store.get(other["id"])["status"], "paused")
+        with self.assertRaisesRegex(ValueError, "Build or stop"):
+            self.mode.decide(other["id"], "maybe")
+
+    def test_code_tasks_plan_without_autopilot_and_build_with_it(self):
+        self.verdict = "VERDICT: build\nWHY: ok\nEXISTING:\nGAP: x\nRECOMMENDATION: go"
+        project = self.mode.create("A booking app for dog walkers in my city", kind="project")
+        sid = project["id"]
+        self.mode.skip_questions(sid)
+        self.wait_check(sid)
+        self.mode.set_goal(sid, "Build the booking API")
+        self.wait_check(sid)
+        task = self.mode.work.store.all(sid)[-1]
+        self.assertEqual((task["gate"], task["status"]), ("code", "approval"), "without autopilot: a plan to approve")
+        read = [b for p, b in self.calls if p == "/v1/projects/task"][-1]
+        self.assertEqual((read["mode"], read["confirmed"]), ("read", False), "never edits code unless autopilot is on")
+
+        self.mode.work.store.update(task["id"], status="cancelled")  # the founder set the plan aside
+        self.mode.launch.configure(sid, {"autopilot": True, "test_command": "pytest"})
+        self.mode.set_goal(sid, "Build the booking API")
+        self.wait_check(sid)
+        task = self.mode.work.store.all(sid)[-1]
+        self.assertEqual(task["status"], "done")
+        edit = [b for p, b in self.calls if p == "/v1/projects/task"][-1]
+        self.assertEqual((edit["mode"], edit["confirmed"]), ("edit", True))
+        self.assertIn("Tests (`pytest`): passed", task["output"], "the tests are the evidence")
+        self.assertTrue(any(p == "/v1/projects/commit" for p, _ in self.calls), "a passed code task is a version")
+        room = "\n".join(m["content"] for m in self.mode.store.messages(sid))
+        self.assertIn("🏁 **The project is developed.**", room, "autopilot keeps going until Tim says it's developed")
+
+    def test_each_agent_has_a_model_and_the_checker_uses_another(self):
+        from agentim.startup import Person, normalize_member
+        member = normalize_member({"name": "Jo Lee", "title": "CTO", "model": "claude-code"}, set())
+        self.assertEqual(member["model"], "claude-code")
+        self.assertEqual(normalize_member({"name": "Jo Lee", "title": "CTO", "model": "auto"}, set())["model"], "")
+        self.assertEqual(self.mode.model_for(Person(**member)), "claude-code", "the agent's own model")
+        self.assertTrue(self.mode.model_for(Person("x", "Al Bo", "Designer", "🎨", "design")), "auto: picked for the role")
+        self.assertIsInstance(self.mode.model_choices(), list)
+
+    def test_parse_worth(self):
+        from agentim.startup import parse_worth
+        check = parse_worth(self.WORTH)
+        self.assertEqual((check["verdict"], check["gap"]), ("buy", "none"))
+        self.assertEqual(check["existing"][0], {"name": "Rover", "what": "dog walkers, 20% fee"})
+        self.assertEqual(parse_worth("VERDICT: Build-on-top\nWHY: y")["verdict"], "build-on-top")
+        self.assertEqual(parse_worth("garbage")["verdict"], "build", "unreadable: don't block the founder")
 
 
 if __name__ == "__main__":

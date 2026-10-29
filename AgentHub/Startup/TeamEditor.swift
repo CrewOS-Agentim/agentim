@@ -176,6 +176,15 @@ private struct AgentDetailEditor: View {
                               text: Binding(get: { person.owns ?? "" }, set: { person.owns = $0 }), axis: .vertical)
                         .lineLimit(2...4)
                 }
+                field("Model") {
+                    Picker("", selection: Binding(get: { person.model ?? "" }, set: { person.model = $0.isEmpty ? nil : $0 })) {
+                        Text("Auto (best for the role)").tag("")
+                        ForEach(model.detail?.model_choices ?? []) { choice in
+                            Text(choice.agent ? "\(choice.alias) (on this Mac)" : choice.alias).tag(choice.alias)
+                        }
+                    }
+                    .labelsHidden()
+                }
                 field("Persona") {
                     TextField("Personality, background and how they talk, e.g. ex-Stripe, blunt, loves data, short bullets",
                               text: Binding(get: { person.persona ?? "" }, set: { person.persona = String($0.prefix(600)) }),

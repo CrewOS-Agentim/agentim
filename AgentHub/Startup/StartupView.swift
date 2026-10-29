@@ -30,7 +30,7 @@ struct StartupView: View {
             }
             .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .navigationTitle("Startups & Ideas")
+        .navigationTitle("Projects")
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button { withAnimation { listHidden.toggle() } } label: {
@@ -90,7 +90,7 @@ private struct StartupList: View {
             .onDeleteCommand { model.askToDelete(model.selectedSummary) }
             Divider()
             Button { model.newStartup() } label: {
-                Label("New startup or idea", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 28)
+                Label("New project", systemImage: "plus").frame(maxWidth: .infinity, minHeight: 28)
             }
             .buttonStyle(.borderedProminent)
             .bottomActionStyle()
@@ -124,16 +124,17 @@ private struct NewStartup: View {
             VStack(spacing: 20) {
                 TimAvatar(size: 84)
                 Picker("", selection: $model.draftKind) {
-                    Label("Startup", systemImage: "lightbulb.max.fill").tag("startup")
-                    Label("Idea for my code", systemImage: "hammer.fill").tag("idea")
+                    Label("New idea", systemImage: "lightbulb.max.fill").tag("startup")
+                    Label("New project", systemImage: "shippingbox.fill").tag("project")
+                    Label("Feature for my code", systemImage: "hammer.fill").tag("idea")
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(maxWidth: 360)
-                Text(isIdea ? "What should we build?" : "Pitch me your startup").headlineStyle(34)
+                .frame(maxWidth: 480)
+                Text("What's the goal?").headlineStyle(34)
                 Text(isIdea
-                     ? "Describe a feature and pick the services it touches. Claude Code plans it in each one, the team meets on it, and you decide when to build."
-                     : "I'll ask a few follow-up questions, then put a team of agents on it. They work every 10–30 minutes, like a real company.")
+                     ? "Describe the feature and pick the services it touches. First the team checks it's worth building and that nothing out there already does it."
+                     : "First the team checks it's worth building (vs buying) and that no company already solves it. Then Agent Tim turns the goal into a plan the agents work on, non-stop if you turn on autopilot.")
                     .font(.title3).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 600)
 
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
@@ -151,12 +152,13 @@ private struct NewStartup: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Name (optional)", text: $model.draftName).textFieldStyle(.roundedBorder)
-                    Text(isIdea ? "The feature" : "The pitch").font(.headline)
+                    Text(isIdea ? "The feature" : model.draftKind == "project" ? "The goal" : "The idea").font(.headline)
                     TextEditor(text: $model.draftPitch)
                         .frame(height: 120).padding(6)
                         .background(.background, in: RoundedRectangle(cornerRadius: 10))
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(.quaternary))
                     Text(isIdea ? "What it should do and for whom, e.g. \"Add refunds: a refund button in the web app, a refunds API in orders, and a refund email\"."
+                                : model.draftKind == "project" ? "What it should do, for whom, and what \"done\" looks like, e.g. \"A booking app for local dog walkers: book and pay in two taps\"."
                                 : "What it is, who it's for, and why now. Two or three sentences is plenty.")
                         .font(.caption).foregroundStyle(.secondary)
                     CodeSources(model: model, sources: model.draftSources, stackRoot: stackRoot, forDraft: true,
@@ -425,6 +427,9 @@ private struct RunningStartup: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let check = detail.config?.check {
+                WorthCard(model: model, detail: detail, check: check, stackRoot: stackRoot)
+            }
             Divider()
             HSplitView {
                 if !planHidden {
@@ -510,6 +515,9 @@ private struct RunningStartup: View {
                         Text("Claude Code will edit files in: \((detail.sources ?? []).map(\.label).joined(separator: ", ")). It doesn't commit or push; review the changes with git before you do.")
                     }
             }
+            Button("Summarize", systemImage: "text.badge.checkmark") { Task { await model.summarize(stackRoot: stackRoot) } }
+                .disabled(model.busy != nil)
+                .help("Agent Tim summarizes where everything stands: done, in progress, decisions, and what needs you")
             Toggle(isOn: Binding(get: { !planHidden }, set: { on in withAnimation { planHidden = !on } })) {
                 Label("Plan", systemImage: "doc.text")
             }
@@ -838,7 +846,7 @@ private struct RoomOrNotes: View {
     let stackRoot: URL?
     @State private var tab = Tab.messages
 
-    enum Tab: String, CaseIterable { case messages = "Messages", work = "Work", launch = "Launch", notes = "Meetings" }
+    enum Tab: String, CaseIterable { case messages = "Messages", work = "Graph", launch = "Launch", notes = "Summaries" }
 
     var body: some View {
         VStack(spacing: 0) {

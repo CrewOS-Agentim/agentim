@@ -29,7 +29,9 @@ PROVIDERS = {
 CONFIG_DEFAULTS = {"folder": "", "stack": "", "deploy": "none", "deploy_command": "", "test_command": "",
                    "live_url": "", "team_reviews": True,
                    # Commit + tag every build: "auto" = only in folders agentim created (never your own WIP).
-                   "versioning": "auto", "auto_push": False}
+                   "versioning": "auto", "auto_push": False,
+                   # Keep going until it's developed: Claude Code may change the project's code, goal after goal.
+                   "autopilot": False}
 VERSIONING = ("auto", "on", "off")
 
 EMOJI = {"design": "📐", "build": "🛠️", "test": "🧪", "deploy": "🚀", "live": "🌍"}
