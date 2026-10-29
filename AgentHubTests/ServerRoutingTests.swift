@@ -21,6 +21,20 @@ final class ServerRoutingTests: XCTestCase {
         try ModelRouter(available: models, settings: .init()).route(RoutingRequest(text: text, isOnline: online))
     }
 
+    private func agent(_ name: String) -> AIModel {
+        .server(ServerModelInfo(id: "local/\(name)", kind: "agent", size_bytes: nil, parameter_size: nil, loaded: nil), on: server)
+    }
+
+    func testLocalClaudeCodeThenCodexAnswerWhenNoModelIsUp() throws {
+        let decision = try route("Write a tagline for my bakery", [ltxImage, agent("codex"), agent("claude-code")])
+        XCTAssertEqual(decision.model.modelName, "local/claude-code", "Claude Code first")
+        XCTAssertEqual(decision.fallbacks.map(\.modelName), ["local/codex"], "then Codex (ChatGPT)")
+        XCTAssertTrue(decision.reason.contains("No local model is running"))
+        // With a chat model up, the agents stay explicit-only (@claude).
+        XCTAssertEqual(try route("Write a tagline for my bakery", [llama8b, agent("claude-code")]).model.id, llama8b.id)
+        XCTAssertThrowsError(try route("Write a tagline", [ltxImage]))
+    }
+
     func testVideoRequestGoesToLTX() throws {
         let decision = try route("Make a video of a fox running through snow at dawn", [opus, haiku, llama8b, ltxVideo, ltxImage])
         XCTAssertEqual(decision.model.id, ltxVideo.id)

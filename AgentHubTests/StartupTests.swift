@@ -403,6 +403,11 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(items?.first?.due, 1_800_000_000)
         XCTAssertEqual(items?.last?.after, "Leo's ROI page")
 
+        let boardJSON = #"{"tasks":[{"id":"a1","owner":"design","task":"ROI page","status":"done","from_role":"meeting","output":"Done."},{"id":"b2","owner":"automation","task":"Email","status":"todo","from_role":"design","depends_on":"a1","ready":true}],"working":[],"started_today":2,"budget":40}"#
+        let board = try JSONDecoder().decode(WorkBoard.self, from: Data(boardJSON.utf8))
+        XCTAssertEqual(board.tasks.map(\.status), ["done", "todo"])
+        XCTAssertEqual(board.tasks.last?.from_role, "design", "a handoff from Leo")
+
         let chat = #"{"person":{"key":"sales","name":"Zoe Kim","title":"CRO","emoji":"💼"},"messages":[{"role":"founder","content":"Price?","ts":1},{"role":"sales","content":"$290/floor","ts":2}],"typing":false}"#
         let dm = try JSONDecoder().decode(DirectChat.self, from: Data(chat.utf8))
         XCTAssertEqual(dm.messages.map(\.fromFounder), [true, false])

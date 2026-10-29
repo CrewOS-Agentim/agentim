@@ -72,6 +72,34 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertTrue(store.transcript(withReply).contains("Web QA: Found 2 bugs."))
     }
 
+    func testCloudKeysGoToTheGatewayEnv() {
+        let env = "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=\n"
+        XCTAssertEqual(HostController.withEnv("ANTHROPIC_API_KEY", "sk-ant-1", in: env), "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=sk-ant-1\n")
+        XCTAssertEqual(HostController.withEnv("OPENAI_API_KEY", "sk-2", in: env), "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=\nOPENAI_API_KEY=sk-2\n")
+        let same = "ANTHROPIC_API_KEY=sk-ant-1\n"
+        XCTAssertEqual(HostController.withEnv("ANTHROPIC_API_KEY", "sk-ant-1", in: same), same)
+    }
+
+    func testDailyMeetingTitles() {
+        let today = DateFormatter()
+        today.dateFormat = "yyyy-MM-dd"
+        let day = MeetingSummary(round: 7, started: 0, ended: 0, messages: 40, attendees: [], summary: nil,
+                                 day: today.string(from: Date()), rounds: [5, 6, 7])
+        XCTAssertEqual(day.title, "Today's meeting")
+        XCTAssertTrue(day.when.hasSuffix("· 3 rounds"))
+        XCTAssertEqual(MeetingSummary(round: 2, started: 0, ended: 0, messages: 4, attendees: [], summary: nil).title, "Meeting 2")
+    }
+
+    func testLocalAgentsAreAddedToTheStack() {
+        let env = "RUNNER_TOKEN=x\nAGENTIM_LOCAL_AGENTS=claude-code\n"
+        XCTAssertEqual(HostController.withLocalAgents(["claude-code", "codex"], in: env),
+                       "RUNNER_TOKEN=x\nAGENTIM_LOCAL_AGENTS=claude-code,codex\n")
+        XCTAssertEqual(HostController.withLocalAgents(["claude-code"], in: env), env, "nothing missing: unchanged")
+        XCTAssertEqual(HostController.withLocalAgents(["codex"], in: "RUNNER_TOKEN=x\n"),
+                       "RUNNER_TOKEN=x\nAGENTIM_LOCAL_AGENTS=codex\n")
+        XCTAssertEqual(HostController.withLocalAgents([], in: env), env)
+    }
+
     func testOldConversationsStillDecode() throws {
         let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","title":"Old","agentID":"6F9619FF-8B86-D011-B42D-00C04FC964FE","messages":[],"updatedAt":0}"#
         let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))

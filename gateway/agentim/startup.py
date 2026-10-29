@@ -20,6 +20,7 @@ import uuid
 from dataclasses import dataclass
 
 from .launch import PROVIDERS, Launch, pipeline_view, status_line
+from .work import Work, WorkStore
 from .llm import LLMError, labelled
 
 log = logging.getLogger("agentim.startup")
@@ -195,6 +196,8 @@ SPRINT_TASKS = {
     "security": "the launch security checklist: auth, secrets, data protection, privacy policy and terms points, and the top 3 risks to fix before going live",
     "operations": "the launch-day run sheet: who does what in the first 2 hours after going live, by the minute or hour, and how the team reports back",
 }
+
+DAILY_SUMMARY_HOUR = int(os.environ.get("AGENTIM_DAILY_SUMMARY_HOUR", "18"))
 
 OPERATING_PRINCIPLES = """How this company works:
 - Launch fast: ship the smallest useful version this week, not the perfect one next month.
@@ -501,6 +504,49 @@ def with_owners_and_etas(minutes, speakers, now, default_eta="in 1 h"):
                   count=1, flags=re.MULTILINE | re.DOTALL).rstrip() + "\n"
 
 
+def day_of(ts):
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+
+def merge_minutes(all_minutes):
+    """The day's minutes without a model: the latest summary, and every round's other sections, de-duplicated."""
+    merged = {}
+    for minutes in all_minutes:
+        for section in MINUTES_SECTIONS:
+            body = minutes_section(minutes, section)
+            if not body:
+                continue
+            if section == "Summary":
+                merged[section] = [body]
+                continue
+            lines = merged.setdefault(section, [])
+            for line in body.splitlines():
+                if line.strip() and not line.strip().lower().startswith(("- none", "- see the conversation")) \
+                        and line not in lines:
+                    lines.append(line)
+    return "\n\n".join(f"## {s}\n" + "\n".join(merged.get(s) or ["- None"]) for s in MINUTES_SECTIONS) + "\n"
+
+
+def daily_prompt(startup, day, rounds_text):
+    return f"""You are the note-taker for "{startup['name']}". The team meets every few minutes; write ONE rolling \
+summary of the whole day ({day}) from the minutes of each meeting below. Merge duplicates, keep the latest decision \
+when one changed, keep open action items (with owner and ETA in minutes/hours, or "after X"), drop finished ones.
+
+{rounds_text}
+
+Reply in markdown with exactly these sections, short bullets:
+## Summary
+<3–4 sentences: what the team did today and where things stand now>
+## Decisions
+- <decision> (who)
+## Action items
+- **<Owner first name>**: <task> — ETA: <in N min | in N h | by HH:MM | after <Name>'s <task>>
+## Metrics
+- <metric: value or target> (or "- None mentioned")
+## Open questions
+- <question> (or "- None")"""
+
+
 def fallback_minutes(messages, people):
     """When no model answers: Tim's summary plus who spoke."""
     summary = next((m["content"] for m in reversed(messages) if m["role"] == "ceo"), "The agents met.")
@@ -544,6 +590,11 @@ class StartupStore:
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_dms (
                 startup_id TEXT, person TEXT, role TEXT, content TEXT, ts REAL)""")
             self.db.execute("CREATE INDEX IF NOT EXISTS startup_dms_id ON startup_dms (startup_id, person, ts)")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS startup_days (
+                startup_id TEXT, day TEXT, minutes TEXT, rounds TEXT, updated REAL, sent INTEGER DEFAULT 0,
+                PRIMARY KEY (startup_id, day))""")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS startup_groups (
+                startup_id TEXT, id TEXT, name TEXT, members TEXT, created REAL, PRIMARY KEY (startup_id, id))""")
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_meeting_minutes (
                 startup_id TEXT, round INTEGER, minutes TEXT, created REAL, PRIMARY KEY (startup_id, round))""")
             # Databases from before editable teams: add the new columns in place.
@@ -594,6 +645,8 @@ class StartupStore:
         with self.lock, self.db:
             self.db.execute("DELETE FROM startups WHERE id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_dms WHERE startup_id = ?", (startup_id,))
+            self.db.execute("DELETE FROM startup_groups WHERE startup_id = ?", (startup_id,))
+            self.db.execute("DELETE FROM startup_days WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_team_messages WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_meeting_minutes WHERE startup_id = ?", (startup_id,))
 
@@ -601,6 +654,24 @@ class StartupStore:
         with self.lock, self.db:
             self.db.execute("INSERT INTO startup_team_messages VALUES (?, ?, ?, ?, ?)",
                             (startup_id, round_no, role, content, time.time()))
+
+    def add_group(self, startup_id, name, members):
+        group = {"id": uuid.uuid4().hex[:8], "name": name, "members": members, "created": time.time()}
+        with self.lock, self.db:
+            self.db.execute("INSERT INTO startup_groups VALUES (?, ?, ?, ?, ?)",
+                            (startup_id, group["id"], name, json.dumps(members), group["created"]))
+        return group
+
+    def groups(self, startup_id):
+        with self.lock:
+            rows = self.db.execute("SELECT id, name, members, created FROM startup_groups WHERE startup_id = ? ORDER BY created",
+                                   (startup_id,)).fetchall()
+        return [{"id": i, "name": n, "members": json.loads(m), "created": c} for i, n, m, c in rows]
+
+    def delete_group(self, startup_id, group_id):
+        with self.lock, self.db:
+            self.db.execute("DELETE FROM startup_groups WHERE startup_id = ? AND id = ?", (startup_id, group_id))
+            self.db.execute("DELETE FROM startup_dms WHERE startup_id = ? AND person = ?", (startup_id, f"group-{group_id}"))
 
     def add_dm(self, startup_id, person, role, content):
         with self.lock, self.db:
@@ -635,6 +706,28 @@ class StartupStore:
         minutes = self.all_minutes(startup_id)
         return [{"round": r, "started": start, "ended": end, "messages": count, "minutes": minutes.get(r),
                  "attendees": (roles or "").split(","), "summary": summaries.get(r)} for r, start, end, count, roles in rows]
+
+    def save_day(self, startup_id, day, minutes, rounds):
+        with self.lock, self.db:
+            self.db.execute("""INSERT INTO startup_days (startup_id, day, minutes, rounds, updated) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(startup_id, day) DO UPDATE SET minutes = excluded.minutes, rounds = excluded.rounds,
+                updated = excluded.updated""", (startup_id, day, minutes, json.dumps(rounds), time.time()))
+
+    def day_row(self, startup_id, day):
+        with self.lock:
+            row = self.db.execute("SELECT day, minutes, rounds, updated, sent FROM startup_days WHERE startup_id = ? AND day = ?",
+                                  (startup_id, day)).fetchone()
+        return {"day": row[0], "minutes": row[1], "rounds": json.loads(row[2] or "[]"), "updated": row[3],
+                "sent": bool(row[4])} if row else None
+
+    def day_rows(self, startup_id):
+        with self.lock:
+            rows = self.db.execute("SELECT day FROM startup_days WHERE startup_id = ? ORDER BY day DESC", (startup_id,)).fetchall()
+        return [self.day_row(startup_id, d) for (d,) in rows]
+
+    def mark_day_sent(self, startup_id, day):
+        with self.lock, self.db:
+            self.db.execute("UPDATE startup_days SET sent = 1 WHERE startup_id = ? AND day = ?", (startup_id, day))
 
     def save_minutes(self, startup_id, round_no, minutes):
         with self.lock, self.db:
@@ -674,7 +767,13 @@ class StartupMode:
         self.locks_guard = threading.Lock()
         self.live = {}  # startup id → {"round", "speaking", "started"} while a meeting runs
         self.launch = Launch(self)  # design → build → test → deploy → live
-        self.dm_typing = set()  # (startup id, person key) while that person writes a 1:1 reply
+        # Event-driven work: tasks start as soon as they're ready, and agents hand off to each other.
+        self.work = Work(self, WorkStore(store.db, store.lock))
+        self.dm_typing = set()  # (startup id, thread key) while someone writes a 1:1 or group reply
+        # Telegram/WhatsApp/Slack: one summary a day ("daily", default) or one after every meeting ("meeting").
+        self.notify_mode = os.environ.get("AGENTIM_STARTUP_NOTIFY", "daily")
+        self.daily_hour = DAILY_SUMMARY_HOUR  # today's summary goes out after this hour
+        self.dm_speaking = {}  # (startup id, group thread key) → who's typing in the group
 
     # ---- creating a startup: pitch → follow-up questions → team
 
@@ -817,6 +916,11 @@ Reply with one line per question, starting with its number exactly as above, lik
                 startup[key] = fields[key]
         if fields.get("sources") is not None:
             startup["sources"] = normalize_sources(fields["sources"])
+        if fields.get("rhythm") is not None:
+            self.set_rhythm(startup_id, fields["rhythm"])
+            startup = {**self.store.get(startup_id), **{k: startup[k] for k in ("name", "sources", "min_minutes",
+                                                                                   "max_minutes", "notify_channel",
+                                                                                   "notify_chat")}}
         startup["min_minutes"], startup["max_minutes"] = sorted((int(startup["min_minutes"]), int(startup["max_minutes"])))
         if fields.get("enabled") is not None:
             self.store.save(startup)
@@ -825,6 +929,7 @@ Reply with one line per question, starting with its number exactly as above, lik
 
     def delete(self, startup_id):
         self.store.delete(startup_id)
+        self.work.store.delete_startup(startup_id)
 
     def post_founder(self, startup_id, text):
         """The founder talks to the agents: during a meeting, the agents who speak next see it;
@@ -903,9 +1008,62 @@ Under 350 words, concrete names and numbers, markdown. Start with a one-line bol
         return open_items_text(items, self.clock()) if items else ""
 
     def private_notes(self, startup_id, person, limit=6):
+        """What the founder and this person agreed in their 1:1 and in the groups they're in."""
+        startup = self.store.get(startup_id)
+        people = people_of(startup) if startup else {}
         lines = [f"{'Founder' if m['role'] == FOUNDER.key else person.first}: {m['content']}"
                  for m in self.store.dms(startup_id, person.key, limit)]
-        return "\n".join(lines)[-1200:]
+        for group in self.store.groups(startup_id):
+            if person.key in group["members"]:
+                lines += [f"[{group['name']}] {'Founder' if m['role'] == FOUNDER.key else people[m['role']].first if m['role'] in people else m['role']}: {m['content']}"
+                          for m in self.store.dms(startup_id, f"group-{group['id']}", 4)]
+        return "\n".join(lines)[-1600:]
+
+    # ---- groups and the conversation list (iMessage-style)
+
+    def group(self, startup_id, group_id):
+        group = next((g for g in self.store.groups(startup_id) if g["id"] == group_id), None)
+        if not group:
+            raise ValueError("No such group.")
+        return group
+
+    def create_group(self, startup_id, members, name=""):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        valid = [p.key for p in team_of(startup)] + [CEO.key]
+        members = [m for m in dict.fromkeys(members or []) if m in valid]
+        if len(members) < 2:
+            raise ValueError("Pick at least two people for a group.")
+        people = {**people_of(startup), CEO.key: CEO}
+        name = (name or "").strip()[:60] or ", ".join(people[m].first for m in members[:3]) + (
+            f" +{len(members) - 3}" if len(members) > 3 else "")
+        return self.store.add_group(startup_id, name, members)
+
+    def delete_group(self, startup_id, group_id):
+        self.group(startup_id, group_id)
+        self.store.delete_group(startup_id, group_id)
+
+    def threads(self, startup_id):
+        """Every conversation: the team room, the founder's groups, and each person, with the last message."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        team = team_of(startup)
+        last = self.store.messages(startup_id, limit=1)
+        threads = [{"key": "room", "kind": "room", "name": "Team room", "members": [p.key for p in team] + [CEO.key],
+                    "last": last[-1] if last else None, "typing": startup_id in self.live}]
+        for group in self.store.groups(startup_id):
+            key = f"group-{group['id']}"
+            msgs = self.store.dms(startup_id, key, 1)
+            threads.append({"key": key, "kind": "group", "name": group["name"], "members": group["members"],
+                            "last": msgs[-1] if msgs else None, "typing": (startup_id, key) in self.dm_typing})
+        for person in team + [CEO]:
+            msgs = self.store.dms(startup_id, person.key, 1)
+            threads.append({"key": person.key, "kind": "person", "name": person.name, "title": person.title,
+                            "emoji": person.emoji, "members": [person.key], "last": msgs[-1] if msgs else None,
+                            "typing": (startup_id, person.key) in self.dm_typing})
+        return {"threads": threads}
 
     def chat_person(self, startup, key):
         people = {**{p.key: p for p in team_of(startup)}, CEO.key: CEO}
@@ -914,10 +1072,15 @@ Under 350 words, concrete names and numbers, markdown. Start with a one-line bol
         return people[key]
 
     def dm(self, startup_id, key):
-        """A private 1:1 chat between the founder and one employee."""
+        """A private 1:1 chat between the founder and one employee (or a group chat: key "group-<id>")."""
         startup = self.store.get(startup_id)
         if not startup:
             raise KeyError(startup_id)
+        if key.startswith("group-"):
+            group = self.group(startup_id, key[6:])
+            return {"person": {"key": key, "name": group["name"], "title": f"{len(group['members'])} people", "emoji": "👥"},
+                    "group": group, "messages": self.store.dms(startup_id, key),
+                    "typing": (startup_id, key) in self.dm_typing, "speaking": self.dm_speaking.get((startup_id, key))}
         person = self.chat_person(startup, key)
         return {"person": person_dict(person) if person.key != CEO.key else
                 {"key": CEO.key, "name": CEO.name, "title": CEO.title, "emoji": CEO.emoji},
@@ -927,12 +1090,18 @@ Under 350 words, concrete names and numbers, markdown. Start with a one-line bol
         startup = self.store.get(startup_id)
         if not startup:
             raise KeyError(startup_id)
-        person = self.chat_person(startup, key)
         text = (text or "").strip()
         if not text:
             raise ValueError("Write something.")
         if len(text) > MAX_FOUNDER_MESSAGE:
             raise ValueError(f"Keep it under {MAX_FOUNDER_MESSAGE} characters.")
+        if key.startswith("group-"):
+            group = self.group(startup_id, key[6:])
+            self.store.add_dm(startup_id, key, FOUNDER.key, text)
+            self.dm_typing.add((startup_id, key))
+            threading.Thread(target=self.reply_group, args=(startup_id, group, text), daemon=True).start()
+            return self.dm(startup_id, key)
+        person = self.chat_person(startup, key)
         self.store.add_dm(startup_id, key, FOUNDER.key, text)
         self.dm_typing.add((startup_id, key))
         threading.Thread(target=self.reply_dm, args=(startup_id, person), daemon=True).start()
@@ -960,6 +1129,39 @@ start with your name.""")
                               reply or f"(No model answered: {person.first} couldn't reply. Check that a model is running.)")
         finally:
             self.dm_typing.discard((startup_id, person.key))
+
+    def reply_group(self, startup_id, group, text):
+        """Everyone in the group answers in turn (or only the people the founder @tagged), each seeing the others."""
+        key = f"group-{group['id']}"
+        try:
+            startup = self.store.get(startup_id)
+            team, people = team_of(startup), {**people_of(startup), CEO.key: CEO}
+            members = [people[m] for m in group["members"] if m in people]
+            speakers = mentioned(text, members, limit=len(members)) or members
+            current = {p.key for p in team} | {CEO.key, FOUNDER.key}
+            discussion = "\n".join(f"{people[m['role']].name}: {m['content']}"
+                                   for m in self.store.messages(startup_id, limit=6) if m["role"] in current)
+            for person in speakers:
+                self.dm_speaking[(startup_id, key)] = person.key
+                history = "\n".join(f"{'Founder' if m['role'] == FOUNDER.key else people[m['role']].first if m['role'] in people else m['role']}: {m['content']}"
+                                    for m in self.store.dms(startup_id, key, 14))
+                others = ", ".join(f"{p.first} ({p.title})" for p in members if p.key != person.key)
+                prompt = (person_context(person, startup, discussion, team, self.playbook(person)) + f"""
+
+You're in a group chat called "{group['name']}" with the founder and {others} (the rest of the team doesn't see it). \
+The chat so far:
+{history}
+
+Reply as {person.first}, in the first person ("I'll…"), about what YOU will do in your own area ({person.owns}), \
+under 120 words. You are {person.first}: never address yourself, and don't give tasks to people outside this group. \
+React to what {others} just said, by name, without repeating it. Give each thing you'll do an ETA in minutes or \
+hours. Don't start with your name.""")
+                reply = self._ask(prompt, f"Startup · {startup['name']} · {group['name']} · {person.first}")
+                if reply:
+                    self.store.add_dm(startup_id, key, person.key, reply)
+        finally:
+            self.dm_typing.discard((startup_id, key))
+            self.dm_speaking.pop((startup_id, key), None)
 
     # ---- code: context for meetings, and planning/building ideas with Claude Code on the Mac
 
@@ -1048,6 +1250,125 @@ start with your name.""")
                 "summary": summary, "minutes": self.store.minutes(startup_id, round_no),
                 "action_items": parse_action_items(self.store.minutes(startup_id, round_no), messages[-1]["ts"]),
                 "messages": messages, "people": people}
+
+    # ---- event-driven work: the meeting's action items become tasks; agents hand off as they finish
+
+    def rhythm(self, startup):
+        """"events" (default): work flows by handoffs, the team meets when the board is empty;
+        "timer": the team meets every min–max minutes."""
+        return (startup.get("config") or {}).get("rhythm") or "events"
+
+    def begin_work(self, startup_id, round_no, minutes):
+        startup = self.store.get(startup_id)
+        if not startup or self.rhythm(startup) != "events":
+            return []
+        messages = self.store.round_messages(startup_id, round_no)
+        items = parse_action_items(minutes, messages[-1]["ts"] if messages else None) if minutes else []
+        created = self.work.seed(startup_id, round_no, items)
+        board = self.work.board(startup_id)["tasks"]
+        if created or any(t["ready"] for t in board):
+            startup = self.store.get(startup_id)
+            startup["next_run"] = None  # the next meeting comes when the work is done
+            self.store.save(startup)
+            self.work.kick(startup_id)
+        return created
+
+    def set_rhythm(self, startup_id, rhythm):
+        if rhythm not in ("events", "timer"):
+            raise ValueError("The rhythm is events or timer.")
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        config = {**(startup.get("config") or {}), "rhythm": rhythm}
+        self.store.save_launch(startup_id, config=config)
+        if rhythm == "timer" and startup["status"] == "running" and not startup.get("next_run"):
+            self.schedule_next(startup)
+            self.store.save(startup)
+        elif rhythm == "events":
+            self.work.kick(startup_id)
+
+    # ---- the rolling daily meeting: every round of a day folds into one meeting with one summary
+
+    def update_day(self, startup_id, round_no):
+        """Folds this round into its day's rolling meeting and rewrites the day's summary."""
+        startup = self.store.get(startup_id)
+        messages = self.store.round_messages(startup_id, round_no)
+        if not startup or not messages:
+            return None
+        day = day_of(messages[-1]["ts"])
+        rounds = sorted(m["round"] for m in self.store.meetings(startup_id) if day_of(m["ended"]) == day)
+        parts = [(r, self.store.minutes(startup_id, r)) for r in rounds]
+        parts = [(r, m) for r, m in parts if m]
+        if not parts:
+            return None
+        if len(parts) == 1:
+            minutes = parts[0][1]
+        else:
+            text = "\n\n".join(f"### Meeting {r} ({time.strftime('%H:%M', time.localtime(self.store.round_messages(startup_id, r)[0]['ts']))})\n{m}"
+                                for r, m in parts)[-12000:]
+            reply = self._ask(daily_prompt(startup, day, text), f"Startup · {startup['name']} · daily summary")
+            minutes = clean_minutes(reply or "") or merge_minutes([m for _, m in parts])
+            people = people_of(startup)
+            speakers = [people[m["role"]].first for r in rounds for m in self.store.round_messages(startup_id, r)
+                        if m["role"] in people and m["role"] not in ("founder", "ceo", "claude-code")]
+            minutes = with_owners_and_etas(minutes, list(dict.fromkeys(speakers)), messages[-1]["ts"])
+        self.store.save_day(startup_id, day, minutes, rounds)
+        return self.store.day_row(startup_id, day)
+
+    def days(self, startup_id):
+        """One rolling meeting per day, newest first."""
+        if not self.store.get(startup_id):
+            raise KeyError(startup_id)
+        out = []
+        for row in self.store.day_rows(startup_id):
+            meetings = [m for m in self.store.meetings(startup_id) if m["round"] in row["rounds"]]
+            out.append({**row, "started": min((m["started"] for m in meetings), default=0),
+                        "ended": max((m["ended"] for m in meetings), default=0),
+                        "round": max(row["rounds"], default=0), "messages": sum(m["messages"] for m in meetings),
+                        "summary": None,
+                        "action_items": parse_action_items(row["minutes"], row["updated"]),
+                        "attendees": sorted({a for m in meetings for a in m["attendees"]})})
+        return out
+
+    def day(self, startup_id, day):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        row = self.store.day_row(startup_id, day)
+        if not row:
+            return None
+        messages = [m for r in row["rounds"] for m in self.store.round_messages(startup_id, r)]
+        people = {k: {"name": p.name, "title": p.title, "emoji": p.emoji} for k, p in people_of(startup).items()}
+        return {**row, "started": messages[0]["ts"] if messages else 0, "ended": messages[-1]["ts"] if messages else 0,
+                "round": max(row["rounds"], default=0), "summary": None,
+                "action_items": parse_action_items(row["minutes"], row["updated"]), "messages": messages, "people": people}
+
+    def daily_digest(self, startup, day_row):
+        actions = minutes_section(day_row["minutes"], "Action items")
+        summary = minutes_section(day_row["minutes"], "Summary") or ""
+        label = "Today" if day_row["day"] == day_of(time.time()) else time.strftime("%A", time.strptime(day_row["day"], "%Y-%m-%d"))
+        return (f"🗓️ *{startup['name']}*: {label}'s meeting ({len(day_row['rounds'])} rounds)\n\n{summary}"
+                + (f"\n\n✅ *Action items*\n{actions}" if actions and "None" not in actions[:12] else "")
+                + "\n\n_/startup to see your startups and plans._")
+
+    def send_daily(self, startup, hour=None):
+        """Sends each finished day's summary once: yesterday's on the first meeting of a new day, and today's after
+        AGENTIM_DAILY_SUMMARY_HOUR (default 18:00)."""
+        if not (self.notify and startup.get("notify_channel") and startup.get("notify_chat")):
+            return []
+        hour = self.daily_hour if hour is None else hour
+        # Message timestamps are wall-clock time, so the day is too.
+        today, sent = day_of(time.time()), []
+        for row in self.store.day_rows(startup["id"]):
+            if row["sent"] or (row["day"] == today and time.localtime().tm_hour < hour):
+                continue
+            try:
+                self.notify(startup["notify_channel"], startup["notify_chat"], self.daily_digest(startup, row))
+                self.store.mark_day_sent(startup["id"], row["day"])
+                sent.append(row["day"])
+            except Exception:
+                log.exception("startup: couldn't send the daily summary")
+        return sent
 
     def write_minutes(self, startup_id, round_no):
         """Meeting minutes from the transcript: summary, decisions, action items, metrics, open questions."""
@@ -1185,11 +1506,22 @@ start with your name.""")
             except Exception:
                 log.exception("startup: couldn't write the meeting minutes")
             text = self.digest(startup, posted, summary, people, minutes)
-            if self.notify and startup.get("notify_channel") and startup.get("notify_chat"):
-                try:
-                    self.notify(startup["notify_channel"], startup["notify_chat"], text)
-                except Exception:
-                    log.exception("startup: couldn't send the meeting summary")
+            try:
+                self.update_day(startup_id, round_no)  # the day's rolling meeting and summary
+            except Exception:
+                log.exception("startup: couldn't update the daily meeting")
+            try:
+                self.begin_work(startup_id, round_no, minutes)
+            except Exception:
+                log.exception("startup: couldn't start the work")
+            if self.notify_mode == "meeting":
+                if self.notify and startup.get("notify_channel") and startup.get("notify_chat"):
+                    try:
+                        self.notify(startup["notify_channel"], startup["notify_chat"], text)
+                    except Exception:
+                        log.exception("startup: couldn't send the meeting summary")
+            else:
+                self.send_daily(startup)
             return text
         finally:
             self.live.pop(startup_id, None)
@@ -1268,6 +1600,9 @@ start with your name.""")
                 "meeting": self.live.get(startup_id),
                 "pipeline": pipeline_view(startup), "launch_running": startup_id in self.launch.running,
                 "sprint": (startup.get("pipeline") or {}).get("sprint"),
+                "today": self.store.day_row(startup_id, day_of(time.time())),
+                "rhythm": self.rhythm(startup),
+                "working": sorted(set((self.work.working.get(startup_id) or {}).values())),
                 "providers": [{"id": k, **v} for k, v in PROVIDERS.items()]}
 
     def listing(self):

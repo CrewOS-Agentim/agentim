@@ -25,10 +25,10 @@ class LocalAgentRoutingTests(unittest.TestCase):
         self.assertEqual(decision.model.id, "local/claude-code")
         self.assertEqual(decision.text, "review the auth module")
 
-    def test_alone_it_still_isnt_picked_automatically(self):
-        from agentim.router import NoModel
-        with self.assertRaises(NoModel):
-            Router([CLAUDE_CODE], "balanced", True).route("hello")
+    def test_alone_it_answers_instead_of_an_error(self):
+        decision = Router([CLAUDE_CODE], "balanced", True).route("hello")
+        self.assertEqual(decision.model.id, "local/claude-code", "no chat model up: Claude Code answers")
+        self.assertIn("no local model is running", decision.reason)
 
 
 class TaskLabelTests(unittest.TestCase):

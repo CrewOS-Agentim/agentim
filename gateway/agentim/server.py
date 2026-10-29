@@ -137,6 +137,23 @@ def make_handler(gateway, channels, catalog):
             parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) == 4 and parts[3] == "tasks":  # the work board
+                if not gateway.startup.store.get(parts[2]):
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, gateway.startup.work.board(parts[2]))
+            if len(parts) in (4, 5) and parts[3] == "days":  # one rolling meeting per day
+                try:
+                    if len(parts) == 4:
+                        return self.send_json(200, {"days": gateway.startup.days(parts[2])})
+                    day = gateway.startup.day(parts[2], parts[4])
+                except KeyError:
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, day) if day else self.send_json(404, {"error": "no meeting that day"})
+            if len(parts) == 4 and parts[3] == "threads":  # every conversation, iMessage-style
+                try:
+                    return self.send_json(200, gateway.startup.threads(parts[2]))
+                except KeyError:
+                    return self.send_json(404, {"error": "no such startup"})
             if len(parts) == 4 and parts[3] == "versions":  # commits and version tags of the project
                 if not gateway.startup.store.get(parts[2]):
                     return self.send_json(404, {"error": "no such startup"})
@@ -192,6 +209,18 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "tasks":
+                    # The founder assigns a task to someone (it starts right away), or cancels one.
+                    if body.get("cancel"):
+                        startup.work.cancel(startup_id, body["cancel"])
+                    else:
+                        startup.work.assign(startup_id, body.get("owner", ""), body.get("task", ""))
+                    return self.send_json(200, startup.work.board(startup_id))
+                elif action == "groups":
+                    if body.get("delete"):
+                        startup.delete_group(startup_id, body["delete"])
+                        return self.send_json(200, startup.threads(startup_id))
+                    return self.send_json(201, startup.create_group(startup_id, body.get("members"), body.get("name", "")))
                 elif action == "dm" and len(parts) == 5:
                     return self.send_json(202, startup.send_dm(startup_id, parts[4], body.get("text", "")))
                 elif action == "suggest":

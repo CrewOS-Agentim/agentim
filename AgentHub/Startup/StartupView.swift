@@ -4,11 +4,15 @@ import SwiftUI
 struct StartupView: View {
     @Environment(HostController.self) private var host
     @Bindable var model: StartupModel
+    /// Hide the startups list for more room (toolbar button).
+    @AppStorage("startupListHidden") private var listHidden = false
 
     var body: some View {
         HSplitView {
-            StartupList(model: model, stackRoot: host.stackRoot)
-                .frame(minWidth: 230, idealWidth: 260, maxWidth: 320)
+            if !listHidden {
+                StartupList(model: model, stackRoot: host.stackRoot)
+                    .frame(minWidth: 230, idealWidth: 260, maxWidth: 320)
+            }
             Group {
                 if model.editingTeam {
                     // Full page, not a modal: the agents' cards and an editor.
@@ -27,6 +31,14 @@ struct StartupView: View {
             .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
         }
         .navigationTitle("Startups & Ideas")
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { withAnimation { listHidden.toggle() } } label: {
+                    Image(systemName: listHidden ? "sidebar.squares.left" : "rectangle.leadinghalf.inset.filled")
+                }
+                .help(listHidden ? "Show the startups list" : "Hide the startups list")
+            }
+        }
         .sheet(item: $model.pendingDelete) { startup in
             DeleteStartupConfirmation(startup: startup,
                                       onCancel: { model.askToDelete(nil) },
@@ -407,22 +419,26 @@ private struct RunningStartup: View {
     @Bindable var model: StartupModel
     let detail: StartupDetail
     let stackRoot: URL?
+    /// The plan pane can be hidden so conversations get the room (the Plan button in the header).
+    @AppStorage("startupPlanHidden") private var planHidden = true
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             HSplitView {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("The plan", systemImage: "doc.text.fill").font(.headline).foregroundStyle(.tint)
-                        PlanText(markdown: detail.plan)
+                if !planHidden {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("The plan", systemImage: "doc.text.fill").font(.headline).foregroundStyle(.tint)
+                            PlanText(markdown: detail.plan)
+                        }
+                        .padding(20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding(20)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minWidth: 280, idealWidth: 340)
                 }
-                .frame(minWidth: 300, idealWidth: 400)
-                RoomOrNotes(model: model, detail: detail, stackRoot: stackRoot).frame(minWidth: 360)
+                RoomOrNotes(model: model, detail: detail, stackRoot: stackRoot).frame(minWidth: 520)
             }
         }
     }
@@ -460,6 +476,12 @@ private struct RunningStartup: View {
                 }
                 Text(detail.pitch).font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 HStack(spacing: 14) {
+                    if let working = detail.working, !working.isEmpty {
+                        Label(working.map { detail.person($0).name.split(separator: " ").first.map(String.init) ?? $0 }
+                                  .joined(separator: ", ") + (working.count == 1 ? " is working" : " are working"),
+                              systemImage: "hammer.fill")
+                            .foregroundStyle(.tint)
+                    }
                     Label("\(detail.rounds) meetings", systemImage: "arrow.triangle.2.circlepath")
                     if let minutes = detail.minutesToNext {
                         Label(minutes == 0 ? "Meeting now…" : "Next meeting in \(minutes) min", systemImage: "clock")
@@ -488,6 +510,11 @@ private struct RunningStartup: View {
                         Text("Claude Code will edit files in: \((detail.sources ?? []).map(\.label).joined(separator: ", ")). It doesn't commit or push; review the changes with git before you do.")
                     }
             }
+            Toggle(isOn: Binding(get: { !planHidden }, set: { on in withAnimation { planHidden = !on } })) {
+                Label("Plan", systemImage: "doc.text")
+            }
+            .toggleStyle(.button)
+            .help(planHidden ? "Show the plan beside the messages" : "Hide the plan for more room")
             Button("Launch mode", systemImage: "bolt.fill") { model.confirmingSprint = true }
                 .buttonStyle(.borderedProminent).tint(.orange)
                 .disabled(model.busy != nil || detail.sprint?.status == "running" || detail.launch_running == true)
@@ -809,9 +836,9 @@ private struct RoomOrNotes: View {
     @Bindable var model: StartupModel
     let detail: StartupDetail
     let stackRoot: URL?
-    @State private var tab = Tab.room
+    @State private var tab = Tab.messages
 
-    enum Tab: String, CaseIterable { case room = "Agents room", oneOnOne = "1:1", launch = "Launch", notes = "Meetings" }
+    enum Tab: String, CaseIterable { case messages = "Messages", work = "Work", launch = "Launch", notes = "Meetings" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -822,8 +849,8 @@ private struct RoomOrNotes: View {
             .labelsHidden()
             .padding(.horizontal, 20).padding(.top, 14)
             switch tab {
-            case .room: TeamRoom(model: model, detail: detail, stackRoot: stackRoot)
-            case .oneOnOne: OneOnOnePanel(model: model, detail: detail, stackRoot: stackRoot)
+            case .messages: MessagesPanel(model: model, detail: detail, stackRoot: stackRoot)
+            case .work: WorkPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .launch: LaunchPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .notes: MeetingNotesList(model: model, detail: detail, stackRoot: stackRoot)
             }
@@ -847,14 +874,14 @@ private struct MeetingNotesList: View {
             LazyVStack(alignment: .leading, spacing: 10) {
                 if model.meetingList.isEmpty {
                     ContentUnavailableView("No meetings yet", systemImage: "calendar",
-                                           description: Text("Notes from every meeting show up here, with the date and time."))
+                                           description: Text("The team holds one rolling meeting a day; its summary and action items update after every round."))
                         .padding(.top, 40)
                 }
                 ForEach(model.meetingList) { meeting in
                     Button { Task { await model.open(meeting, stackRoot: stackRoot) } } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text("Meeting \(meeting.round)").font(.headline)
+                                Text(meeting.title).font(.headline)
                                 Spacer()
                                 Label(meeting.when, systemImage: "calendar").font(.caption).foregroundStyle(.secondary)
                             }
@@ -900,7 +927,8 @@ private struct MeetingNotesView: View {
         VStack(spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(startup.name) · Meeting \(notes.round)").headlineStyle(22)
+                    Text("\(startup.name) · " + (notes.day.map { "\(MeetingSummary.dayName($0))'s meeting" } ?? "Meeting \(notes.round)")
+                         + ((notes.rounds?.count ?? 0) > 1 ? " (\(notes.rounds!.count) rounds)" : "")).headlineStyle(22)
                     let start = Date(timeIntervalSince1970: notes.started)
                     let end = Date(timeIntervalSince1970: notes.ended)
                     Label("\(start.formatted(date: .complete, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))",
@@ -921,7 +949,7 @@ private struct MeetingNotesView: View {
                             if writing {
                                 ProgressView().controlSize(.small)
                                 Text("Writing…").font(.caption).foregroundStyle(.secondary)
-                            } else if !startup.id.isEmpty {
+                            } else if !startup.id.isEmpty && notes.day == nil {
                                 Button(notes.minutes == nil ? "Write the summary" : "Rewrite",
                                        systemImage: "wand.and.stars", action: write)
                                     .controlSize(.small)
@@ -974,7 +1002,8 @@ private struct MeetingOverCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("Meeting \(meeting.round) is over", systemImage: "checkmark.seal.fill")
+                Label(meeting.day != nil ? "\(meeting.title): updated" : "Meeting \(meeting.round) is over",
+                      systemImage: "checkmark.seal.fill")
                     .font(.headline).foregroundStyle(.tint)
                 Spacer()
                 Text(meeting.when).font(.caption).foregroundStyle(.secondary)
@@ -1045,5 +1074,16 @@ private struct ActionItemsTable: View {
         .padding(Theme.s3)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border))
+    }
+}
+
+/// The team room inside Messages (the agents' meetings and your messages to everyone).
+struct RoomOrNotesRoom: View {
+    @Bindable var model: StartupModel
+    let detail: StartupDetail
+    let stackRoot: URL?
+
+    var body: some View {
+        TeamRoom(model: model, detail: detail, stackRoot: stackRoot)
     }
 }

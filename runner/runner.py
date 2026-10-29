@@ -435,6 +435,18 @@ def unload_models(model=None):
     return unloaded
 
 
+def load_model(model, keep_alive="10m"):
+    """Loads a model into memory now (so the first chat answers quickly): an empty Ollama generate."""
+    name = (model or "").split("/", 1)[1] if (model or "").startswith("ollama/") else (model or "")
+    if not name:
+        raise RuntimeError("Which model?")
+    req = urllib.request.Request(f"{BACKENDS['ollama']}/api/generate", method="POST",
+                                 data=json.dumps({"model": name, "keep_alive": keep_alive}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=180).read()
+    return name
+
+
 def stop_ltx(run=subprocess.run):
     """Quits LTX Desktop to free its GPU memory (the runner opens it again when a video or image is asked for)."""
     if IN_CONTAINER or platform.system() != "Darwin":
@@ -1110,6 +1122,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.error(400, "Running a command needs the founder's confirmation.")
                 folder = PROJECTS.resolve(body.get("source", {}))
                 return self.send_json(200, PROJECTS.run_command(folder, body.get("command", ""), body.get("timeout") or 900))
+            except Exception as e:
+                return self.error(400, str(e))
+        if path == "/v1/models/load":
+            try:
+                return self.send_json(200, {"loaded": load_model(body.get("model"))})
             except Exception as e:
                 return self.error(400, str(e))
         if path == "/v1/models/unload":

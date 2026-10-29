@@ -154,14 +154,15 @@ final class HostController {
     /// GET a runner endpoint with the stack's token (nil if it isn't reachable).
     func runnerData(_ port: Int, _ path: String) async -> Data? { await runner(port, path) }
 
-    private func runner(_ port: Int, _ path: String, post: Bool = false) async -> Data? {
+    private func runner(_ port: Int, _ path: String, post: Bool = false, body: [String: Any]? = nil) async -> Data? {
         guard let token = runnerToken, let url = URL(string: "http://localhost:\(port)/\(path)") else { return nil }
-        var request = URLRequest(url: url, timeoutInterval: post ? 90 : 5)
+        let post = post || body != nil
+        var request = URLRequest(url: url, timeoutInterval: post ? 180 : 5)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         if post {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = Data("{}".utf8)
+            request.httpBody = body.flatMap { try? JSONSerialization.data(withJSONObject: $0) } ?? Data("{}".utf8)
         }
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
@@ -205,6 +206,125 @@ final class HostController {
     func start() async { await compose(["up", "-d", "--build"], label: "Starting…") }
     func stop() async { await compose(["stop"], label: "Stopping…") }
     func restart() async { await compose(["restart"], label: "Restarting…") }
+
+    /// What the launch check is doing ("Starting your models…"), shown in the status bar; nil when ready.
+    private(set) var startupNote: String?
+
+    /// On launch: Docker and the agentim containers up, this Mac's runners added, local Claude Code and Codex
+    /// enabled, agentim connected to Claude, then wait for the models and preload the default one.
+    func bringUp(store: AppStore) async {
+        guard !isDemo, let root = stackRoot,
+              FileManager.default.fileExists(atPath: root.appendingPathComponent(".env").path) else { return }
+        startupNote = "Starting agentim…"
+        defer { startupNote = nil }
+        if !(await Shell.run(["docker", "info", "--format", "{{.ServerVersion}}"]).ok) {
+            startupNote = "Starting Docker…"
+            startDocker()
+            for _ in 0..<60 {
+                try? await Task.sleep(for: .seconds(2))
+                if await Shell.run(["docker", "info", "--format", "{{.ServerVersion}}"]).ok { break }
+            }
+        }
+        await refresh()
+        if dockerRunning, services.isEmpty || services.contains(where: { !$0.isRunning }) {
+            startupNote = "Starting your models…"
+            let result = await Shell.run(["docker", "compose", "up", "-d"], in: root)
+            if !result.ok { lastError = String(result.output.suffix(400)) }
+            await refresh()
+        }
+        if store.servers.isEmpty { connectThisMac(to: store) }
+        await enableLocalAgents()
+        await connectClaudeIfNeeded()
+        await syncCloudKeys(store: store)
+        startupNote = "Waiting for the models…"
+        for _ in 0..<40 {
+            await store.refreshServers()
+            if store.hasChatModel { break }
+            try? await Task.sleep(for: .seconds(3))
+        }
+        await preloadDefaultModel(store: store)
+    }
+
+    /// The Claude and ChatGPT (OpenAI) keys saved in the app also go to the gateway's .env (git-ignored), and the
+    /// gateway restarts to pick them up, so startups and Telegram/WhatsApp/Slack can use Claude and ChatGPT too.
+    func syncCloudKeys(store: AppStore) async {
+        guard let env = stackRoot?.appendingPathComponent(".env"),
+              let text = try? String(contentsOf: env, encoding: .utf8), let root = stackRoot else { return }
+        var updated = text
+        for (provider, name) in [(Provider.anthropic, "ANTHROPIC_API_KEY"), (Provider.openAI, "OPENAI_API_KEY")] {
+            if let key = store.apiKey(for: provider), !key.isEmpty {
+                updated = Self.withEnv(name, key, in: updated)
+            }
+        }
+        guard updated != text else { return }
+        try? updated.write(to: env, atomically: true, encoding: .utf8)
+        _ = await Shell.run(["docker", "compose", "up", "-d", "--no-deps", "gateway"], in: root)
+    }
+
+    /// Sets `name=value` in a .env text (replacing the line, or adding it).
+    nonisolated static func withEnv(_ name: String, _ value: String, in env: String) -> String {
+        var lines = env.components(separatedBy: "\n")
+        if let i = lines.firstIndex(where: { $0.hasPrefix("\(name)=") }) {
+            if lines[i] == "\(name)=\(value)" { return env }
+            lines[i] = "\(name)=\(value)"
+        } else {
+            if lines.last == "" { lines.removeLast() }
+            lines.append("\(name)=\(value)")
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Turns on the coding agents installed on this Mac (Claude Code, Codex for ChatGPT) for chats and startups.
+    func enableLocalAgents() async {
+        guard let env = stackRoot?.appendingPathComponent(".env"),
+              let text = try? String(contentsOf: env, encoding: .utf8) else { return }
+        var installed: [String] = []
+        for (name, bin) in [("claude-code", "claude"), ("codex", "codex")]
+        where await Shell.run(["/bin/zsh", "-lc", "command -v \(bin)"]).ok {
+            installed.append(name)
+        }
+        let updated = Self.withLocalAgents(installed, in: text)
+        if updated != text { try? updated.write(to: env, atomically: true, encoding: .utf8) }
+    }
+
+    /// Adds `agents` to AGENTIM_LOCAL_AGENTS (keeping what's there, never removing).
+    nonisolated static func withLocalAgents(_ agents: [String], in env: String) -> String {
+        guard !agents.isEmpty else { return env }
+        var lines = env.components(separatedBy: "\n")
+        if let i = lines.firstIndex(where: { $0.hasPrefix("AGENTIM_LOCAL_AGENTS=") }) {
+            var current = String(lines[i].dropFirst("AGENTIM_LOCAL_AGENTS=".count)).split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let missing = agents.filter { !current.contains($0) }
+            guard !missing.isEmpty else { return env }
+            current += missing
+            lines[i] = "AGENTIM_LOCAL_AGENTS=" + current.joined(separator: ",")
+        } else {
+            if lines.last == "" { lines.removeLast() }
+            lines.append("AGENTIM_LOCAL_AGENTS=" + agents.joined(separator: ","))
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// agentim in Claude (Desktop and Code), if it isn't there yet. Local only: no tunnel, nothing public.
+    func connectClaudeIfNeeded() async {
+        let config = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude/claude_desktop_config.json")
+        let desktop = (try? Data(contentsOf: config)).map(Self.configHasAgentim) ?? false
+        let code = await Shell.run(["/bin/zsh", "-lc", "command -v claude >/dev/null && claude mcp get agentim"]).ok
+        let hasClaudeCode = await Shell.run(["/bin/zsh", "-lc", "command -v claude"]).ok
+        if !desktop || (hasClaudeCode && !code) { await connectClaude() }
+    }
+
+    /// Loads the model chats will use first, so the first answer doesn't wait for it.
+    func preloadDefaultModel(store: AppStore) async {
+        guard let decision = try? ModelRouter(available: store.availableModels, settings: store.router).route(
+            RoutingRequest(text: "Hello", history: [], agent: store.agents.first, conversationPin: nil, isOnline: true)),
+              decision.model.serverID != nil, !decision.model.capabilities.contains(.agent) else { return }
+        startupNote = "Loading \(decision.model.displayName)…"
+        _ = await runner(8765, "v1/models/load", body: ["model": decision.model.modelName])
+    }
 
     func startDocker() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Docker.app"))

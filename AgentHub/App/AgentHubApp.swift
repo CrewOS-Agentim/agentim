@@ -19,6 +19,16 @@ struct AgentimApp: App {
                     async let account: Void = store.refreshHuggingFaceAccount()
                     async let servers: Void = store.refreshServers()
                     _ = await (account, servers)
+                    // Start Docker, the models and the local agents if they aren't running, and connect Claude.
+                    await host.bringUp(store: store)
+                    // Keep the model list current: every 10 s while something's offline, else every minute.
+                    while !Task.isCancelled {
+                        let offline = store.servers.contains { server in
+                            if case .online? = store.serverStatus[server.id] { false } else { true }
+                        }
+                        try? await Task.sleep(for: .seconds(offline || !store.hasChatModel ? 10 : 60))
+                        await store.refreshServers()
+                    }
                 }
         }
         .defaultSize(width: 1180, height: 780)
@@ -28,6 +38,11 @@ struct AgentimApp: App {
                 Button("Suggest a Feature…") { IssueReporter.open(kind: .feature) }
                 Button("Share an Idea or Ask a Question…") { IssueReporter.openIdeas() }
             }
+        }
+        .onChange(of: store.credentialsVersion) {
+            // A Claude or ChatGPT key was saved in Settings: the gateway gets it too.
+            guard !AppStore.isDemo, !AppStore.isTesting else { return }
+            Task { await host.syncCloudKeys(store: store) }
         }
         .onChange(of: scenePhase) { _, phase in
             guard !AppStore.isDemo, !AppStore.isTesting else { return }
@@ -89,6 +104,8 @@ struct RootView: View {
     @AppStorage("onboardingComplete") private var onboardingComplete = false
     @State private var onboarding = OnboardingModel(demo: AppStore.isDemo)
     @State private var startup = StartupModel(demo: AppStore.isDemo)
+    /// The left nav collapses to an icon rail for more room (⌃⌘S).
+    @AppStorage("navCollapsed") private var navCollapsed = false
 
     private var showOnboarding: Bool {
         if UserDefaults.standard.bool(forKey: "onboarding") { return true }
@@ -120,22 +137,23 @@ struct RootView: View {
     }
 
     private var split: some View {
-        NavigationSplitView {
-            List(SidebarItem.allCases, selection: $selection) { item in
-                Label(item.title, systemImage: item.symbol).tag(item)
-            }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 190)
-        } detail: {
-            switch selection ?? .chats {
-            case .chats: ConversationListView()
-            case .startup: StartupView(model: startup)
-            case .agents: AgentListView()
-            case .skills: SkillListView()
-            case .models: ModelsView()
-            case .status: StatusView()
-            case .host: HostView()
-            case .settings: SettingsView()
-            }
+        HStack(spacing: 0) {
+            NavRail(selection: $selection, collapsed: $navCollapsed)
+            Divider()
+            section.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    @ViewBuilder private var section: some View {
+        switch selection ?? .chats {
+        case .chats: ConversationListView()
+        case .startup: StartupView(model: startup)
+        case .agents: AgentListView()
+        case .skills: SkillListView()
+        case .models: ModelsView()
+        case .status: StatusView()
+        case .host: HostView()
+        case .settings: SettingsView()
         }
     }
 }
@@ -173,5 +191,51 @@ enum Snapshots {
         else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+}
+
+/// The app's left navigation: icons and names, or just icons (hover for names) when collapsed.
+struct NavRail: View {
+    @Binding var selection: SidebarItem?
+    @Binding var collapsed: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { collapsed.toggle() }
+            } label: {
+                Image(systemName: "sidebar.left").font(.system(size: 15))
+                    .frame(width: 36, height: 30)
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut("s", modifiers: [.control, .command])
+            .help(collapsed ? "Show names (⌃⌘S)" : "Collapse the sidebar (⌃⌘S)")
+            .accessibilityLabel(collapsed ? "Expand sidebar" : "Collapse sidebar")
+            .padding(.leading, 6).padding(.bottom, 6)
+
+            ForEach(SidebarItem.allCases) { item in
+                let isOn = (selection ?? .chats) == item
+                Button { selection = item } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: item.symbol).font(.system(size: 15)).frame(width: 22)
+                        if !collapsed { Text(item.title).lineLimit(1) }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10).frame(height: 32)
+                    .foregroundStyle(isOn ? Color.white : Color.primary)
+                    .background(isOn ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Color.clear),
+                                in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(item.title)
+                .accessibilityLabel(item.title)
+                .accessibilityAddTraits(isOn ? .isSelected : [])
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 8).padding(.vertical, 10)
+        .frame(width: collapsed ? 60 : 200, alignment: .leading)
+        .background(.regularMaterial)
     }
 }

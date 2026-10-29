@@ -135,12 +135,15 @@ def model_from_runner(info, runner_url):
 
 CLOUD_MODELS = {
     "anthropic": [
+        Model("anthropic/claude-opus-5-5", "opus", "anthropic", "claude-opus-5-5",
+              {"coding", "reasoning", "creative", "longContext", "general"}, 200_000, 4, 5, False),
         Model("anthropic/claude-sonnet-5-5", "sonnet", "anthropic", "claude-sonnet-5-5",
               {"coding", "reasoning", "creative", "longContext", "general"}, 200_000, 3, 4, False),
         Model("anthropic/claude-haiku-5-5", "haiku", "anthropic", "claude-haiku-5-5",
               {"fast", "general", "coding"}, 200_000, 1, 3, False),
     ],
     "openai": [
+        Model("openai/gpt-5", "gpt5", "openai", "gpt-5", {"coding", "reasoning", "creative", "general"}, 400_000, 3, 5, False),
         Model("openai/gpt-5-mini", "gpt5mini", "openai", "gpt-5-mini", {"fast", "general", "coding"}, 400_000, 1, 3, False),
     ],
 }
@@ -182,6 +185,12 @@ class Router:
             return [m for m in self.models if profile.primary in m.caps]
         return [m for m in self.models if not m.explicit_only]
 
+    def local_agents(self):
+        """Coding agents on the Mac: Claude Code first, then Codex (ChatGPT), then any other."""
+        rank = {"claude-code": 0, "codex": 1}
+        return sorted((m for m in self.models if "agent" in m.caps),
+                      key=lambda m: rank.get(m.id.rsplit("/", 1)[-1], 2))
+
     def ranked(self, profile):
         fitting = [m for m in self.candidates(profile) if m.context >= profile.tokens + 1024]
         return sorted(fitting, key=lambda m: (-self.score(m, profile), m.alias))
@@ -206,6 +215,10 @@ class Router:
             return decide(model, f"{agent.name} is pinned to it")
 
         ranking = self.ranked(profile)
+        if not ranking and profile.primary not in MEDIA and (agents := self.local_agents()):
+            # No chat model is up: Claude Code (then Codex, i.e. ChatGPT) on the Mac answers instead.
+            return Decision(agents[0], agents[1:], f"no local model is running, so {agents[0].alias} answers",
+                            cleaned, profile)
         if not ranking:
             raise NoModel("No models are ready yet. Agent Tim is still pulling them, try again in a minute.")
         if profile.sensitive and self.keep_sensitive_local:

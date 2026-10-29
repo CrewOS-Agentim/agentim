@@ -105,6 +105,9 @@ struct StartupDetail: Decodable, Equatable {
     var providers: [DeployProvider]? = nil
     var launch_running: Bool? = nil
     var sprint: SprintState? = nil
+    /// "events" (hand off as they finish) or "timer" (meet every min–max minutes), and who's working now.
+    var rhythm: String? = nil
+    var working: [String]? = nil
     let next_run: Double?
     var rounds: Int
     let now: Double
@@ -197,6 +200,18 @@ struct StartupClient {
         _ = try await raw("v1/startups/\(id)/run", method: "POST", body: [:])
     }
 
+    /// One rolling meeting per day, newest first.
+    func days(_ id: String) async throws -> [MeetingSummary] {
+        struct Days: Decodable { let days: [MeetingSummary] }
+        let data = try await raw("v1/startups/\(id)/days", method: "GET", body: nil)
+        return try JSONDecoder().decode(Days.self, from: data).days
+    }
+
+    func dayNotes(_ id: String, day: String) async throws -> MeetingNotes {
+        let data = try await raw("v1/startups/\(id)/days/\(day)", method: "GET", body: nil)
+        return try JSONDecoder().decode(MeetingNotes.self, from: data)
+    }
+
     func meetings(_ id: String) async throws -> [MeetingSummary] {
         let data = try await raw("v1/startups/\(id)/meetings", method: "GET", body: nil)
         return try JSONDecoder().decode(MeetingList.self, from: data).meetings
@@ -232,6 +247,14 @@ struct StartupClient {
     /// AI answers every question left blank, then the team starts.
     func autocomplete(_ id: String, answers: [String]) async throws -> StartupDetail {
         try await send("v1/startups/\(id)/autocomplete", body: ["answers": answers])
+    }
+
+    func sendBoard(_ path: String, body: [String: Any]) async throws -> WorkBoard {
+        try await send(path, body: body)
+    }
+
+    func sendGroup(_ path: String, body: [String: Any]) async throws -> DirectChat.Group {
+        try await send(path, body: body)
     }
 
     func getJSON<T: Decodable>(_ path: String) async throws -> T {
@@ -294,8 +317,18 @@ final class StartupModel {
     var versions: ProjectVersions?
     var githubDraft: GitHubDraft?
     var confirmingGitHub = false
+    /// The work board, and the task being assigned.
+    var workBoard: WorkBoard?
+    var taskOwner = ""
+    var taskDraft = ""
     /// The launch-mode confirmation dialog is open.
     var confirmingSprint = false
+    /// Messages: the conversation list, the open one ("room", a person's key or "group-<id>"), and a new group.
+    var threads: [StartupThread] = []
+    var selectedThread = "room"
+    var composingGroup = false
+    var groupDraft: Set<String> = []
+    var groupDraftName = ""
     /// The open 1:1 chat: who, the conversation, and the unsent message.
     var dmKey: String?
     var dmChat: DirectChat?
@@ -735,18 +768,26 @@ final class StartupModel {
             return
         }
         guard let client = Self.client(stackRoot: stackRoot) else { return }
-        meetingList = (try? await client.meetings(detail.id)) ?? []
+        meetingList = (try? await client.days(detail.id)) ?? []
     }
 
     func open(_ meeting: MeetingSummary, stackRoot: URL?) async {
         guard let detail else { return }
         if isDemo {
-            openMeeting = MeetingNotes.fromMessages(detail.messages.filter { $0.round == meeting.round },
-                                                     round: meeting.round, people: detail.people)
+            let rounds = Set(meeting.rounds ?? [meeting.round])
+            var notes = MeetingNotes.fromMessages(detail.messages.filter { rounds.contains($0.round) },
+                                                  round: meeting.round, people: detail.people)
+            notes.day = meeting.day
+            notes.rounds = meeting.rounds
+            openMeeting = notes
             return
         }
         guard let client = Self.client(stackRoot: stackRoot) else { return }
         do {
+            if let day = meeting.day {
+                openMeeting = try await client.dayNotes(detail.id, day: day)
+                return
+            }
             openMeeting = try await client.meeting(detail.id, round: meeting.round)
         } catch {
             self.error = "Couldn't open meeting \(meeting.round): \(error.localizedDescription)"
@@ -1040,7 +1081,25 @@ struct MeetingSummary: Decodable, Equatable, Identifiable {
     let summary: String?
     /// Meeting minutes (markdown: Summary, Decisions, Action items, Metrics, Open questions).
     var minutes: String? = nil
+    /// A day's rolling meeting: the date ("2026-10-29") and the rounds folded into it.
+    var day: String? = nil
+    var rounds: [Int]? = nil
     var id: Int { round }
+
+    /// "Today's meeting" / "Yesterday's meeting" / "Monday's meeting", or "Meeting 6".
+    var title: String {
+        guard let day else { return "Meeting \(round)" }
+        return "\(MeetingSummary.dayName(day))'s meeting"
+    }
+
+    static func dayName(_ day: String) -> String {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        guard let date = parser.date(from: day) else { return day }
+        if Calendar.current.isDateInToday(date) { return "Today" }
+        if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+    }
 
     /// The "Summary" section of the minutes, else Tim's wrap-up.
     var headline: String? { MeetingNotes.section("Summary", in: minutes) ?? summary }
@@ -1053,11 +1112,26 @@ struct MeetingSummary: Decodable, Equatable, Identifiable {
         let day = startDate.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
         let start = startDate.formatted(date: .omitted, time: .shortened)
         let end = endDate.formatted(date: .omitted, time: .shortened)
-        return start == end ? "\(day) · \(start)" : "\(day) · \(start) – \(end)"
+        let span = start == end ? "\(day) · \(start)" : "\(day) · \(start) – \(end)"
+        guard let rounds, rounds.count > 1 else { return span }
+        return span + " · \(rounds.count) rounds"
     }
 
-    /// Demo mode: group the demo messages by meeting.
+    /// Demo mode: one rolling meeting per day.
     static func fromMessages(_ messages: [StartupDetail.Message]) -> [MeetingSummary] {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd"
+        return Dictionary(grouping: messages) { parser.string(from: Date(timeIntervalSince1970: $0.ts)) }.map { day, items in
+            let rounds = Array(Set(items.map(\.round))).sorted()
+            return MeetingSummary(round: rounds.last ?? 0, started: items.map(\.ts).min() ?? 0, ended: items.map(\.ts).max() ?? 0,
+                                  messages: items.count, attendees: Array(Set(items.map(\.role))).sorted(),
+                                  summary: items.last { $0.role == "ceo" }?.content,
+                                  minutes: MeetingNotes.demoMinutes(items), day: day, rounds: rounds)
+        }
+        .sorted { $0.started > $1.started }
+    }
+
+    static func fromMessagesByRound(_ messages: [StartupDetail.Message]) -> [MeetingSummary] {
         Dictionary(grouping: messages, by: \.round).map { round, items in
             MeetingSummary(round: round, started: items.map(\.ts).min() ?? 0, ended: items.map(\.ts).max() ?? 0,
                            messages: items.count, attendees: Array(Set(items.map(\.role))).sorted(),
@@ -1078,6 +1152,9 @@ struct MeetingNotes: Decodable, Identifiable {
     let messages: [StartupDetail.Message]
     let people: [String: StartupDetail.PersonInfo]
     var action_items: [ActionItem]? = nil
+    /// A day's rolling meeting: its date and rounds.
+    var day: String? = nil
+    var rounds: [Int]? = nil
     var id: Int { round }
 
     /// Who does what by when, from the meeting's minutes.
