@@ -235,6 +235,7 @@ final class HostController {
         if store.servers.isEmpty { connectThisMac(to: store) }
         await enableLocalAgents()
         await connectClaudeIfNeeded()
+        await syncCloudKeys(store: store)
         startupNote = "Waiting for the models…"
         for _ in 0..<40 {
             await store.refreshServers()
@@ -242,6 +243,36 @@ final class HostController {
             try? await Task.sleep(for: .seconds(3))
         }
         await preloadDefaultModel(store: store)
+    }
+
+    /// The Claude and ChatGPT (OpenAI) keys saved in the app also go to the gateway's .env (git-ignored), and the
+    /// gateway restarts to pick them up, so startups and Telegram/WhatsApp/Slack can use Claude and ChatGPT too.
+    func syncCloudKeys(store: AppStore) async {
+        guard let env = stackRoot?.appendingPathComponent(".env"),
+              let text = try? String(contentsOf: env, encoding: .utf8), let root = stackRoot else { return }
+        var updated = text
+        for (provider, name) in [(Provider.anthropic, "ANTHROPIC_API_KEY"), (Provider.openAI, "OPENAI_API_KEY")] {
+            if let key = store.apiKey(for: provider), !key.isEmpty {
+                updated = Self.withEnv(name, key, in: updated)
+            }
+        }
+        guard updated != text else { return }
+        try? updated.write(to: env, atomically: true, encoding: .utf8)
+        _ = await Shell.run(["docker", "compose", "up", "-d", "--no-deps", "gateway"], in: root)
+    }
+
+    /// Sets `name=value` in a .env text (replacing the line, or adding it).
+    nonisolated static func withEnv(_ name: String, _ value: String, in env: String) -> String {
+        var lines = env.components(separatedBy: "\n")
+        if let i = lines.firstIndex(where: { $0.hasPrefix("\(name)=") }) {
+            if lines[i] == "\(name)=\(value)" { return env }
+            lines[i] = "\(name)=\(value)"
+        } else {
+            if lines.last == "" { lines.removeLast() }
+            lines.append("\(name)=\(value)")
+            lines.append("")
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Turns on the coding agents installed on this Mac (Claude Code, Codex for ChatGPT) for chats and startups.

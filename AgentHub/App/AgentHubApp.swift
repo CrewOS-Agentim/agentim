@@ -39,6 +39,11 @@ struct AgentimApp: App {
                 Button("Share an Idea or Ask a Question…") { IssueReporter.openIdeas() }
             }
         }
+        .onChange(of: store.credentialsVersion) {
+            // A Claude or ChatGPT key was saved in Settings: the gateway gets it too.
+            guard !AppStore.isDemo, !AppStore.isTesting else { return }
+            Task { await host.syncCloudKeys(store: store) }
+        }
         .onChange(of: scenePhase) { _, phase in
             guard !AppStore.isDemo, !AppStore.isTesting else { return }
             if phase == .background { store.saveNow() }

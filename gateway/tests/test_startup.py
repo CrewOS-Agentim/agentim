@@ -150,7 +150,9 @@ class MeetingTests(unittest.TestCase):
         _, mode = make_startup_mode(llm=llm, clock=clock)
         sent = []
         mode.notify = lambda channel, chat, text: sent.append((channel, chat, text))
+        mode.notify_mode = "meeting"  # AGENTIM_STARTUP_NOTIFY=meeting: a message after every meeting
         startup = mode.create(PITCH, channel="telegram", chat_id="42")
+        mode.set_rhythm(startup["id"], "timer")  # this test covers the every-10–30-minutes rhythm
         mode.answer(startup["id"], ["Office managers", "$300", "Austin"] + ["more"] * 7)
         text = mode.run_round(startup["id"])
         after = mode.store.get(startup["id"])

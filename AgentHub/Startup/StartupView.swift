@@ -476,6 +476,12 @@ private struct RunningStartup: View {
                 }
                 Text(detail.pitch).font(.callout).foregroundStyle(.secondary).lineLimit(2)
                 HStack(spacing: 14) {
+                    if let working = detail.working, !working.isEmpty {
+                        Label(working.map { detail.person($0).name.split(separator: " ").first.map(String.init) ?? $0 }
+                                  .joined(separator: ", ") + (working.count == 1 ? " is working" : " are working"),
+                              systemImage: "hammer.fill")
+                            .foregroundStyle(.tint)
+                    }
                     Label("\(detail.rounds) meetings", systemImage: "arrow.triangle.2.circlepath")
                     if let minutes = detail.minutesToNext {
                         Label(minutes == 0 ? "Meeting now…" : "Next meeting in \(minutes) min", systemImage: "clock")
@@ -832,7 +838,7 @@ private struct RoomOrNotes: View {
     let stackRoot: URL?
     @State private var tab = Tab.messages
 
-    enum Tab: String, CaseIterable { case messages = "Messages", launch = "Launch", notes = "Meetings" }
+    enum Tab: String, CaseIterable { case messages = "Messages", work = "Work", launch = "Launch", notes = "Meetings" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -844,6 +850,7 @@ private struct RoomOrNotes: View {
             .padding(.horizontal, 20).padding(.top, 14)
             switch tab {
             case .messages: MessagesPanel(model: model, detail: detail, stackRoot: stackRoot)
+            case .work: WorkPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .launch: LaunchPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .notes: MeetingNotesList(model: model, detail: detail, stackRoot: stackRoot)
             }
@@ -867,14 +874,14 @@ private struct MeetingNotesList: View {
             LazyVStack(alignment: .leading, spacing: 10) {
                 if model.meetingList.isEmpty {
                     ContentUnavailableView("No meetings yet", systemImage: "calendar",
-                                           description: Text("Notes from every meeting show up here, with the date and time."))
+                                           description: Text("The team holds one rolling meeting a day; its summary and action items update after every round."))
                         .padding(.top, 40)
                 }
                 ForEach(model.meetingList) { meeting in
                     Button { Task { await model.open(meeting, stackRoot: stackRoot) } } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             HStack {
-                                Text("Meeting \(meeting.round)").font(.headline)
+                                Text(meeting.title).font(.headline)
                                 Spacer()
                                 Label(meeting.when, systemImage: "calendar").font(.caption).foregroundStyle(.secondary)
                             }
@@ -920,7 +927,8 @@ private struct MeetingNotesView: View {
         VStack(spacing: 0) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(startup.name) · Meeting \(notes.round)").headlineStyle(22)
+                    Text("\(startup.name) · " + (notes.day.map { "\(MeetingSummary.dayName($0))'s meeting" } ?? "Meeting \(notes.round)")
+                         + ((notes.rounds?.count ?? 0) > 1 ? " (\(notes.rounds!.count) rounds)" : "")).headlineStyle(22)
                     let start = Date(timeIntervalSince1970: notes.started)
                     let end = Date(timeIntervalSince1970: notes.ended)
                     Label("\(start.formatted(date: .complete, time: .shortened)) – \(end.formatted(date: .omitted, time: .shortened))",
@@ -941,7 +949,7 @@ private struct MeetingNotesView: View {
                             if writing {
                                 ProgressView().controlSize(.small)
                                 Text("Writing…").font(.caption).foregroundStyle(.secondary)
-                            } else if !startup.id.isEmpty {
+                            } else if !startup.id.isEmpty && notes.day == nil {
                                 Button(notes.minutes == nil ? "Write the summary" : "Rewrite",
                                        systemImage: "wand.and.stars", action: write)
                                     .controlSize(.small)
@@ -994,7 +1002,8 @@ private struct MeetingOverCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label("Meeting \(meeting.round) is over", systemImage: "checkmark.seal.fill")
+                Label(meeting.day != nil ? "\(meeting.title): updated" : "Meeting \(meeting.round) is over",
+                      systemImage: "checkmark.seal.fill")
                     .font(.headline).foregroundStyle(.tint)
                 Spacer()
                 Text(meeting.when).font(.caption).foregroundStyle(.secondary)

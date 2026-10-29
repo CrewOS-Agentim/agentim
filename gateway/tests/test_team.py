@@ -302,7 +302,8 @@ class MentionAndNotesTests(unittest.TestCase):
         self.assertTrue(first["summary"])
         notes = mode.meeting(startup["id"], 2)
         self.assertEqual(notes["messages"][0]["role"], "founder", "the founder's note opens meeting 2")
-        self.assertEqual(notes["summary"], notes["messages"][-1]["content"])
+        self.assertEqual(notes["summary"], next(m["content"] for m in reversed(notes["messages"]) if m["role"] == "ceo"),
+                         "Tim's wrap-up (agents' finished work can follow it)")
         self.assertIsNone(mode.meeting(startup["id"], 99))
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(gateway, {}, lambda: [QWEN]))

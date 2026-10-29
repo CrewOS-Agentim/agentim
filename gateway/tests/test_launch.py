@@ -386,5 +386,149 @@ class GroupChatTests(unittest.TestCase):
         self.assertNotIn(key, {t["key"] for t in mode.threads(sid)["threads"]})
 
 
+class DailyMeetingTests(unittest.TestCase):
+    def test_rounds_fold_into_one_daily_meeting_with_one_summary(self):
+        llm = TeamLLM()
+        _, mode = make_startup_mode(llm=llm)
+        sent = []
+        mode.notify = lambda channel, chat, text: sent.append(text)
+        mode.daily_hour = 24  # not yet: the meetings themselves don't send today's summary
+        startup = mode.create(PITCH, channel="telegram", chat_id="42")
+        sid = startup["id"]
+        mode.skip_questions(sid)
+        mode.run_round(sid)
+        mode.run_round(sid)
+        days = mode.days(sid)
+        self.assertEqual(len(days), 1, "one rolling meeting for the day")
+        self.assertEqual(days[0]["rounds"], [1, 2])
+        self.assertIn("## Summary", days[0]["minutes"])
+        self.assertTrue(all(i["owner"] and i["eta"] for i in days[0]["action_items"]))
+        self.assertEqual(mode.detail(sid)["today"]["rounds"], [1, 2])
+        full = mode.day(sid, days[0]["day"])
+        self.assertEqual({m["round"] for m in full["messages"]}, {1, 2}, "the whole day's conversation")
+
+        # One message a day, not one per meeting: nothing before the summary hour, then once.
+        self.assertEqual(mode.send_daily(mode.store.get(sid), hour=24), [])
+        self.assertEqual(mode.send_daily(mode.store.get(sid), hour=0), [days[0]["day"]])
+        self.assertEqual(mode.send_daily(mode.store.get(sid), hour=0), [], "sent once")
+        self.assertIn("meeting (2 rounds)", sent[-1])
+        mode.notify_mode = "meeting"
+        before = len(sent)
+        mode.run_round(sid)
+        self.assertEqual(len(sent), before + 1, "AGENTIM_STARTUP_NOTIFY=meeting: after every meeting")
+
+    def test_merge_without_a_model(self):
+        from agentim.startup import merge_minutes
+        merged = merge_minutes(["## Summary\nMorning.\n## Action items\n- **Zoe**: pilots — ETA: in 1 h\n",
+                                "## Summary\nAfternoon.\n## Action items\n- **Zoe**: pilots — ETA: in 1 h\n"
+                                "- **Leo**: ROI page — ETA: in 2 h\n"])
+        self.assertIn("Afternoon.", merged)
+        self.assertNotIn("Morning.", merged)
+        self.assertEqual(merged.count("**Zoe**"), 1, "duplicates merged")
+
+
+class ClaudeAndChatGPTTests(unittest.TestCase):
+    def test_local_claude_code_then_codex_answer_when_no_model_is_up(self):
+        from agentim.router import CLOUD_MODELS, Router, model_from_runner
+        url = "http://host.docker.internal:8766"
+        agents = [model_from_runner({"id": "local/codex", "kind": "agent"}, url),
+                  model_from_runner({"id": "local/claude-code", "kind": "agent"}, url)]
+        decision = Router(agents).route("Write a tagline for my bakery")
+        self.assertEqual([decision.model.id, decision.fallbacks[0].id], ["local/claude-code", "local/codex"])
+        self.assertIn("no local model is running", decision.reason)
+        cloud = Router(CLOUD_MODELS["anthropic"] + CLOUD_MODELS["openai"] + agents).route("Plan our pricing strategy step by step")
+        self.assertFalse(cloud.model.id.startswith("local/"), "with Claude/ChatGPT keys, the API models answer")
+        self.assertIn("opus", {m.alias for m in CLOUD_MODELS["anthropic"]})
+        self.assertIn("gpt5", {m.alias for m in CLOUD_MODELS["openai"]})
+
+
+class EventWorkTests(unittest.TestCase):
+    def setUp(self):
+        self.gateway, self.mode = make_startup_mode(llm=TeamLLM())
+        startup = self.mode.create(PITCH)
+        self.sid = startup["id"]
+        self.mode.skip_questions(self.sid)
+        team = self.mode.detail(self.sid)["team"]
+        self.first = {p["key"]: p["name"].split()[0] for p in team}
+        self.keys = [p["key"] for p in team]
+        self.prompts = []
+        original = self.mode._ask
+
+        def ask(prompt, label=""):
+            if "YOUR TASK" not in prompt:
+                return original(prompt, label)
+            self.prompts.append(prompt)
+            me = prompt.split("You are ")[1].split(",")[0].split()[0]
+            nxt = self.first[self.keys[1]] if me == self.first[self.keys[0]] else None
+            return (f"**Result** by {me}\nThe ROI page copy." +
+                    (f"\nHANDOFF: @{nxt}: put the ROI page in the welcome email — ETA: in 20 min" if nxt and "HANDOFF:" in prompt
+                     else "\nHANDOFF: none"))
+
+        self.mode._ask = ask
+
+    def wait(self):
+        import time as t
+        end = t.time() + 5
+        while self.sid in self.mode.work.running and t.time() < end:
+            t.sleep(0.01)
+
+    def test_an_agent_finishes_and_hands_off_to_the_next(self):
+        a, b = self.keys[0], self.keys[1]
+        self.mode.work.assign(self.sid, self.first[a], "Write the ROI page")
+        self.wait()
+        board = self.mode.work.board(self.sid)["tasks"]
+        self.assertEqual([(t["owner"], t["status"], t["from_role"]) for t in board],
+                         [(a, "done", "founder"), (b, "done", a)], "the handoff started the next agent right away")
+        self.assertIn("The ROI page copy", board[1]["input"], "the next agent gets the result as input")
+        self.assertIn("Input from", self.prompts[1])
+        room = "\n".join(m["content"] for m in self.mode.store.messages(self.sid))
+        self.assertIn("➡️ Handed off to @" + self.first[b], room)
+        self.assertNotIn("HANDOFF:", room)
+        self.assertIsNotNone(self.mode.store.get(self.sid)["next_run"], "board empty: the team meets after a break")
+
+    def test_meeting_action_items_become_tasks_with_dependencies(self):
+        a, b = self.keys[0], self.keys[1]
+        minutes = (f"## Action items\n- **{self.first[a]}**: ROI page — ETA: in 30 min\n"
+                   f"- **{self.first[b]}**: email sequence — ETA: after {self.first[a]}'s ROI page\n")
+        self.mode.work.max_depth = 0  # no handoffs in this test
+        created = self.mode.work.seed(self.sid, 1, __import__("agentim.startup").startup.parse_action_items(minutes, 0))
+        self.assertEqual(created[1]["depends_on"], created[0]["id"])
+        board = {t["owner"]: t for t in self.mode.work.board(self.sid)["tasks"]}
+        self.assertTrue(board[a]["ready"])
+        self.assertFalse(board[b]["ready"], "waits for the ROI page")
+        self.mode.work.kick(self.sid)
+        self.wait()
+        self.assertEqual([t["status"] for t in self.mode.work.board(self.sid)["tasks"]], ["done", "done"],
+                         "the second started as soon as the first finished")
+        self.assertEqual(len(self.mode.work.seed(self.sid, 1, [])), 0)
+
+    def test_budgets_and_pausing_stop_the_chain(self):
+        self.mode.work.max_per_day = 1
+        self.mode.work.assign(self.sid, self.first[self.keys[0]], "Write the ROI page")
+        self.wait()
+        statuses = [t["status"] for t in self.mode.work.board(self.sid)["tasks"]]
+        self.assertEqual(statuses, ["done", "todo"], "over the daily budget: the handoff waits")
+        self.mode.work.max_per_day = 40
+        self.mode.set_enabled(self.sid, False)
+        self.mode.work.kick(self.sid)
+        self.wait()
+        self.assertEqual([t["status"] for t in self.mode.work.board(self.sid)["tasks"]], ["done", "todo"], "paused")
+        with self.assertRaisesRegex(ValueError, "Pick someone"):
+            self.mode.work.assign(self.sid, "nobody", "x")
+
+    def test_timer_rhythm_keeps_the_old_schedule(self):
+        self.mode.set_rhythm(self.sid, "timer")
+        self.assertEqual(self.mode.detail(self.sid)["rhythm"], "timer")
+        self.assertEqual(self.mode.begin_work(self.sid, 1, "## Action items\n- **X**: y\n"), [])
+        with self.assertRaisesRegex(ValueError, "events or timer"):
+            self.mode.set_rhythm(self.sid, "sometimes")
+
+    def test_parse_handoffs(self):
+        from agentim.work import parse_handoffs
+        text, handoffs = parse_handoffs("Done it.\nHANDOFF: @Sam: wire the emails — ETA: in 20 min\n**HANDOFF:** none")
+        self.assertEqual(text, "Done it.")
+        self.assertEqual(handoffs, [("Sam", "wire the emails", "in 20 min")])
+
+
 if __name__ == "__main__":
     unittest.main()
