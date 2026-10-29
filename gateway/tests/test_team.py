@@ -243,7 +243,7 @@ class PersonaAndPlaybookTests(unittest.TestCase):
         self.assertEqual(playbook_slug("Chief Marketing Officer"), "cmo")
         self.assertEqual(playbook_slug("CISO"), "ciso")
         self.assertEqual(playbook_slug("Head of Product (CPO)"), "cpo")
-        self.assertIsNone(playbook_slug("Designer"))
+        self.assertEqual(playbook_slug("Designer"), "product-designer")
         self.assertIsNone(playbook_slug("Director"), "no accidental match inside words")
 
     def test_playbook_text_reaches_the_prompt(self):

@@ -655,6 +655,17 @@ final class AppStore {
         }
         seen.formUnion(Skill.builtIn.map { "skill:\($0.slug)" })
         seen.formUnion(Agent.starters(skills: skills).map { "agent:\($0.name)" })
+        // Built-ins whose source is gone (removed from the app or from your private folder) are dropped too.
+        // Only ones agentim added: agents and skills you created were never "seen" as built-ins.
+        let current = Set(Skill.builtIn.map { "skill:\($0.slug)" } + Agent.starters(skills: skills).map { "agent:\($0.name)" })
+        let retired = seen.subtracting(current)
+        if !retired.isEmpty {
+            agents.removeAll { retired.contains("agent:\($0.name)") }
+            let retiredSkills = Set(skills.filter { retired.contains("skill:\($0.slug)") }.map(\.id))
+            skills.removeAll { retiredSkills.contains($0.id) }
+            for i in agents.indices { agents[i].skillIDs.removeAll { retiredSkills.contains($0) } }
+            seen.subtract(retired)
+        }
         defaults.set(Array(seen).sorted(), forKey: seenKey)
     }
 

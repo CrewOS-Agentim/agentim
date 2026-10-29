@@ -105,14 +105,18 @@ def person_dict(person):
 MAX_PERSONA = 600
 
 # Agents whose title matches a C-level skill follow that skill's playbook in meetings.
-ROLE_PLAYBOOKS = {"cto": "cto", "chief technology": "cto", "cmo": "cmo", "chief marketing": "cmo",
+ROLE_PLAYBOOKS = {"brand designer": "brand-designer", "visual designer": "brand-designer", "brand": "brand-designer",
+                  "graphic designer": "brand-designer", "designer": "product-designer", "ux": "product-designer",
+                  "ui": "product-designer", "cto": "cto", "chief technology": "cto", "cmo": "cmo", "chief marketing": "cmo",
                   "cro": "cro", "chief revenue": "cro", "cfo": "cfo", "chief financial": "cfo",
                   "coo": "coo", "chief operating": "coo",
                   "chro": "chro", "chief human": "chro", "chief people": "chro", "cdo": "cdo", "chief data": "cdo",
                   "cco": "cco", "chief customer": "cco", "clo": "clo", "chief legal": "clo", "general counsel": "clo",
                   "caio": "caio", "chief ai": "caio",
                   "cpo": "cpo", "chief product": "cpo", "ciso": "ciso", "chief information security": "ciso",
-                  "data analyst": "data-analytics", "qa": "web-qa"}
+                  "data analyst": "data-analytics", "qa": "web-qa",
+                  "business development": "business-development", "bizdev": "business-development",
+                  "biz dev": "business-development", "partnerships": "business-development"}
 
 
 def playbook_slug(title):
