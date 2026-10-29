@@ -235,6 +235,10 @@ final class HostController {
         if store.servers.isEmpty { connectThisMac(to: store) }
         await enableLocalAgents()
         await connectClaudeIfNeeded()
+        if store.claudeVia == "tmux" && claude.claudeInstalled == false {
+            await refreshClaude()
+        }
+        if store.claudeVia == "tmux" && claude.claudeInstalled { await installTmuxIfNeeded() }
         await syncCloudKeys(store: store)
         startupNote = "Waiting for the models…"
         for _ in 0..<40 {
@@ -273,6 +277,57 @@ final class HostController {
             lines.append("")
         }
         return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Claude in a background terminal (tmux)
+
+    struct ClaudeStatus: Equatable {
+        var claudeInstalled = false
+        var tmuxInstalled = false
+        var sessions: [String] = []   // agentim's running Claude sessions (tmux)
+    }
+
+    private(set) var claude = ClaudeStatus()
+
+    static let tmuxPaths = ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]
+
+    func refreshClaude() async {
+        let tmux = Self.tmuxPaths.first { FileManager.default.fileExists(atPath: $0) }
+        let installed = await Shell.run(["/bin/zsh", "-lc", "command -v claude"]).ok
+        var sessions: [String] = []
+        if let tmux {
+            let ls = await Shell.run([tmux, "ls", "-F", "#{session_name}"])
+            sessions = ls.output.split(separator: "\n").map(String.init).filter { $0.hasPrefix("agentim-claude") }
+        }
+        claude = ClaudeStatus(claudeInstalled: installed, tmuxInstalled: tmux != nil, sessions: sessions)
+    }
+
+    /// Claude via tmux (default) or the API: saved for the app and in the stack's .env for the gateway and runner.
+    func setClaudeVia(_ via: String, store: AppStore) async {
+        store.claudeVia = via
+        guard let env = stackRoot?.appendingPathComponent(".env"),
+              let text = try? String(contentsOf: env, encoding: .utf8), let root = stackRoot else { return }
+        let updated = Self.withEnv("AGENTIM_CLAUDE_VIA", via, in: text)
+        guard updated != text else { return }
+        try? updated.write(to: env, atomically: true, encoding: .utf8)
+        _ = await Shell.run(["docker", "compose", "up", "-d", "--no-deps", "gateway"], in: root)
+        if via == "tmux" { await installTmuxIfNeeded() }
+    }
+
+    func installTmuxIfNeeded() async {
+        guard !Self.tmuxPaths.contains(where: FileManager.default.fileExists(atPath:)) else { return }
+        busy = "Installing tmux…"
+        defer { busy = nil }
+        let result = await Shell.run(["/bin/zsh", "-lc", "brew install tmux"])
+        if !result.ok { lastError = "Couldn't install tmux: \(result.output.suffix(300))" }
+        await refreshClaude()
+    }
+
+    /// Opens Terminal attached to agentim's latest Claude session.
+    func watchClaude() {
+        guard let session = claude.sessions.last,
+              let tmux = Self.tmuxPaths.first(where: FileManager.default.fileExists(atPath:)) else { return }
+        Shell.runInTerminal("\(tmux) attach -t \(session)")
     }
 
     /// Turns on the coding agents installed on this Mac (Claude Code, Codex for ChatGPT) for chats and startups.

@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  Powered by <a href="https://tryperdiem.com"><b>Per Diem</b></a> (tryperdiem.com)
+</p>
+
+<p align="center">
   <a href="https://crewos-agentim.github.io/agentim/"><b>Website</b></a> ·
   <a href="#-quick-start">Quick start</a> ·
   <a href="#-how-it-works">How it works</a> ·
@@ -157,6 +161,8 @@ Before any download, the runner looks up the real file sizes from the Ollama reg
 | `not_enough_disk` | there isn't enough free disk space | refused (HTTP 409) |
 
 ## 🖥 The Mac app
+
+**Claude through tmux, not the API (the default).** In **Settings → Claude**, choose *Your Claude login, in a background terminal (tmux)* or *An Anthropic API key* (`AGENTIM_CLAUDE_VIA=tmux|api`). In tmux mode the Anthropic API is never called, even if a key is saved; Settings shows whether Claude Code and tmux are installed (tmux is installed for you), how many Claude sessions are running, and **Watch in Terminal** opens the latest one.
 
 **Claude without an API key.** If Claude Code is installed, agentim uses your Claude login: **Claude Opus, Sonnet and Haiku** run through `claude -p` (read-only, in an empty folder, so plain chats never read your code), each in a **tmux** session you can watch (`tmux ls`, `tmux attach -t agentim-…`; tmux is used automatically when it's installed, `AGENTIM_LOCAL_AGENTS_TMUX=0` turns it off). They're real models: routing can pick them, any agent can be set to one, and `@sonnet` asks one directly. They use your Claude plan's limits; set `AGENTIM_CLAUDE_LOGIN=explicit` to use them only when you pick them (background work then stays on local models).
 
@@ -470,3 +476,5 @@ Found a bug or want a feature? [Open an issue](https://github.com/CrewOS-Agentim
 ## 📄 License
 
 [MIT](LICENSE). Agent Tim was drawn and animated locally with LTX Desktop. No octopuses were harmed. 🐙
+
+agentim is powered by [Per Diem](https://tryperdiem.com).

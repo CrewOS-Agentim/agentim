@@ -598,6 +598,9 @@ class LocalAgents:
                "--output-format", "text"]
         if self.use_tmux():
             return self.run_in_tmux("claude-code", cmd, CLAUDE_CHAT_DIR, timeout)[0]
+        if (self.env.get("AGENTIM_LOCAL_AGENTS_TMUX") or "auto").lower() not in ("0", "false", "no", "off"):
+            raise RuntimeError("Claude runs in a background terminal (tmux): install it with `brew install tmux` "
+                               "(or set AGENTIM_LOCAL_AGENTS_TMUX=0 to run it directly).")
         result = self.run(cmd, cwd=CLAUDE_CHAT_DIR, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
         output = (result.stdout or "").strip() or (result.stderr or "").strip()
         if result.returncode != 0:

@@ -866,6 +866,18 @@ class SupervisorTests(unittest.TestCase):
         self.assertEqual(node["eta"], 25)
 
 
+class ClaudeViaTests(unittest.TestCase):
+    def test_tmux_mode_never_lists_the_claude_api(self):
+        from agentim.config import from_env as load_config
+        from agentim.models import Catalog as Models
+        tmux = load_config({"ANTHROPIC_API_KEY": "sk-ant-x", "RUNNER_TOKEN": "t"})
+        self.assertEqual(tmux.claude_via, "tmux", "the default")
+        models = Models(tmux, api_factory=lambda url, token: None)
+        self.assertFalse(any(m.backend == "anthropic" for m in models.cloud()), "a key alone doesn't switch to the API")
+        api = load_config({"ANTHROPIC_API_KEY": "sk-ant-x", "RUNNER_TOKEN": "t", "AGENTIM_CLAUDE_VIA": "api"})
+        self.assertTrue(any(m.backend == "anthropic" for m in Models(api, api_factory=lambda url, token: None).cloud()))
+
+
 class BackgroundLimitTests(unittest.TestCase):
     def test_background_work_shares_two_slots_and_the_founder_skips_the_line(self):
         import threading

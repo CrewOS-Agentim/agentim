@@ -389,6 +389,11 @@ class ProjectsTests(unittest.TestCase):
             self.assertIn("--permission-mode plan", tmux_cmd[-1], "read-only")
             off = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "claude-code", "AGENTIM_LOCAL_AGENTS_TMUX": "0"},
                                      which=lambda n, path=None: f"/fake/{n}", run=run)
+            missing = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "claude-code"},
+                                         which=lambda n, path=None: f"/fake/{n}", run=run)
+            with mock.patch.object(runner.LocalAgents, "tmux", lambda self: None):
+                with self.assertRaisesRegex(RuntimeError, "brew install tmux"):
+                    missing.chat("sonnet", "hi")  # tmux mode never falls back silently
             self.assertFalse(off.use_tmux())
             self.assertEqual(off.chat("haiku", "hi"), "Hello from Sonnet")
             self.assertEqual(calls[-1][1], os.path.join(self.tmp.name, "chat"), "an empty folder: never your code")

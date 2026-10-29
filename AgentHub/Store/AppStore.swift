@@ -84,10 +84,17 @@ final class AppStore {
 
     var allModels: [AIModel] { AIModel.cloudCatalog + customModels + installedLocalModels + serverModels }
 
+    /// How Claude is used: "tmux" (your Claude login, claude -p in a background terminal) or "api" (an API key).
+    var claudeVia: String = UserDefaults.standard.string(forKey: "claudeVia") ?? "tmux" {
+        didSet { UserDefaults.standard.set(claudeVia, forKey: "claudeVia") }
+    }
+
     /// What the router may choose from: connected providers + installed local weights.
     var availableModels: [AIModel] {
         allModels.filter { model in
             switch model.location {
+            case .cloud(let id) where id == Provider.anthropic.id && claudeVia == "tmux":
+                false  // Claude goes through tmux (claude -p), never the API
             case .cloud(let id): provider(id: id).map(isConnected) ?? false
             case .local(let repo): LocalModelManager.isInstalled(repo)
             case .server(let id): if case .online? = serverStatus[id] { true } else { false }

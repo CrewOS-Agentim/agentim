@@ -111,7 +111,8 @@ def model_from_runner(info, runner_url):
         # Claude through the founder's Claude login (claude -p on the Mac): a real chat model, no API key.
         # AGENTIM_CLAUDE_LOGIN=explicit: only when picked (an agent's model, @sonnet), so background work stays local.
         tier = {"opus": (5, 4), "sonnet": (4, 3), "haiku": (3, 1)}.get(short, (4, 3))
-        explicit = os.environ.get("AGENTIM_CLAUDE_LOGIN", "auto") == "explicit"
+        explicit = os.environ.get("AGENTIM_CLAUDE_LOGIN", "auto") == "explicit" \
+            or os.environ.get("AGENTIM_CLAUDE_VIA", "tmux").lower() == "api"  # the API models answer instead
         return Model(id=mid, alias=short, backend="runner", name=mid,
                      caps=({"agent"} if explicit else set()) | {"coding", "reasoning", "creative", "longContext", "general"}
                      | ({"fast"} if short == "haiku" else set()),

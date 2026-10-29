@@ -35,6 +35,16 @@ final class ServerRoutingTests: XCTestCase {
         XCTAssertThrowsError(try route("Write a tagline", [ltxImage]))
     }
 
+    @MainActor
+    func testTmuxModeNeverUsesTheClaudeAPI() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        let saved = store.claudeVia
+        defer { store.claudeVia = saved }
+        store.claudeVia = "tmux"
+        XCTAssertFalse(store.availableModels.contains { if case .cloud(let id) = $0.location { id == Provider.anthropic.id } else { false } },
+                       "tmux mode: Claude never goes through the API, even with a key")
+    }
+
     func testClaudeThroughTheLoginIsARealChatModel() throws {
         let sonnet = AIModel.server(ServerModelInfo(id: "claude/sonnet", kind: "claude", size_bytes: nil, parameter_size: nil,
                                                     loaded: nil, name: "Claude Sonnet (your Claude login)"), on: server)
