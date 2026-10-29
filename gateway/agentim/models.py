@@ -56,7 +56,8 @@ class Catalog:
 
     def cloud(self):
         models = []
-        if self.config.anthropic_key:
+        # Claude through the API only when the founder chose it; otherwise Claude runs via tmux (claude -p).
+        if self.config.anthropic_key and getattr(self.config, "claude_via", "tmux") == "api":
             models += CLOUD_MODELS["anthropic"]
         if self.config.openai_key:
             models += CLOUD_MODELS["openai"]

@@ -47,6 +47,8 @@ struct SettingsView: View {
                     Text("Models on your own computers: the agentim runner (native or Docker, with memory checks and LTX), or Ollama, LM Studio and other OpenAI-compatible servers.")
                 }
 
+                ClaudeSection()
+
                 Section("Cloud providers") {
                     ForEach(store.providers.filter { $0.id != Provider.huggingFace.id }) { provider in
                         NavigationLink { ProviderKeyView(provider: provider) } label: {
@@ -171,5 +173,55 @@ private struct HuggingFaceAccountView: View {
             }
         }
         .navigationTitle("Hugging Face")
+    }
+}
+
+/// How Claude is used: your Claude login in a background terminal (tmux), or an API key.
+struct ClaudeSection: View {
+    @Environment(AppStore.self) private var store
+    @Environment(HostController.self) private var host
+
+    var body: some View {
+        Section {
+            Picker("Use Claude through", selection: Binding(get: { store.claudeVia },
+                                                            set: { via in Task { await host.setClaudeVia(via, store: store) } })) {
+                Text("Your Claude login, in a background terminal (tmux)").tag("tmux")
+                Text("An Anthropic API key").tag("api")
+            }
+            if store.claudeVia == "tmux" {
+                LabeledContent("Claude Code") {
+                    Label(host.claude.claudeInstalled ? "Installed" : "Not found",
+                          systemImage: host.claude.claudeInstalled ? "checkmark.circle.fill" : "xmark.circle")
+                        .foregroundStyle(host.claude.claudeInstalled ? .green : .orange)
+                }
+                LabeledContent("tmux") {
+                    if host.claude.tmuxInstalled {
+                        Label("Installed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Button("Install tmux") { Task { await host.installTmuxIfNeeded() } }
+                    }
+                }
+                LabeledContent("Running now") {
+                    HStack {
+                        Text(host.claude.sessions.isEmpty ? "No Claude sessions"
+                             : "\(host.claude.sessions.count) session\(host.claude.sessions.count == 1 ? "" : "s")")
+                        Button("Watch in Terminal", systemImage: "terminal") { host.watchClaude() }
+                            .disabled(host.claude.sessions.isEmpty)
+                    }
+                }
+            }
+        } header: {
+            Text("Claude")
+        } footer: {
+            Text(store.claudeVia == "tmux"
+                 ? "Claude Opus, Sonnet and Haiku run with claude -p in tmux sessions on this Mac, using your Claude login: no API key, and the Anthropic API is never called. Watch any session with tmux attach."
+                 : "Claude runs through the Anthropic API with the key under Cloud providers.")
+        }
+        .task {
+            while !Task.isCancelled {
+                await host.refreshClaude()
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
     }
 }

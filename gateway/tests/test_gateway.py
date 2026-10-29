@@ -320,7 +320,9 @@ class ModelBootstrapTests(unittest.TestCase):
         catalog = Catalog(config, api_factory=lambda url, token: FakeRunnerAPI({}))
         self.assertEqual([m.id for m in catalog()], ["ollama/llama3.1:8b"])
         keyed = Catalog(make_config(ANTHROPIC_API_KEY="k"), api_factory=lambda url, token: FakeRunnerAPI({}))
-        self.assertIn("anthropic/claude-sonnet-5-5", [m.id for m in keyed()])
+        self.assertNotIn("anthropic/claude-sonnet-5-5", [m.id for m in keyed()], "Claude via tmux by default")
+        api = Catalog(make_config(ANTHROPIC_API_KEY="k", AGENTIM_CLAUDE_VIA="api"), api_factory=lambda url, token: FakeRunnerAPI({}))
+        self.assertIn("anthropic/claude-sonnet-5-5", [m.id for m in api()])
 
     def test_catalog_ignores_speech_models(self):
         class Mixed(FakeRunnerAPI):

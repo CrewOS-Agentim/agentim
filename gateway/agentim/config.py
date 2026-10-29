@@ -33,6 +33,8 @@ class Config:
     runner_token: str = ""
     anthropic_key: str = ""
     openai_key: str = ""
+    # How Claude is used: "tmux" (the Claude login, claude -p in a background terminal) or "api" (ANTHROPIC_API_KEY).
+    claude_via: str = "tmux"
     telegram_token: str = ""
     slack_bot_token: str = ""
     slack_app_token: str = ""
@@ -95,6 +97,7 @@ def from_env(env=None):
         runner_token=env.get("RUNNER_TOKEN", ""),
         anthropic_key=env.get("ANTHROPIC_API_KEY", ""),
         openai_key=env.get("OPENAI_API_KEY", ""),
+        claude_via="api" if env.get("AGENTIM_CLAUDE_VIA", "tmux").lower() == "api" else "tmux",
         telegram_token=env.get("TELEGRAM_BOT_TOKEN", ""),
         slack_bot_token=env.get("SLACK_BOT_TOKEN", ""),
         slack_app_token=env.get("SLACK_APP_TOKEN", ""),

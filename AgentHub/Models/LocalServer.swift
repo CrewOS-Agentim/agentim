@@ -55,6 +55,18 @@ extension AIModel {
                 location: .server(serverID: server.id), capabilities: [.agent],
                 contextWindow: 10_000_000, costTier: 0, qualityTier: 5, alias: alias)
         }
+        if info.kind == "claude" {
+            // Claude through the Claude login on the Mac (claude -p in tmux): a real chat model, no API key.
+            let alias = String(info.id.split(separator: "/").last ?? Substring(info.id))
+            let tier: (quality: Int, cost: Int) = ["opus": (5, 4), "sonnet": (4, 3), "haiku": (3, 1)][alias] ?? (4, 3)
+            var caps: Set<Capability> = [.general, .coding, .reasoning, .creative, .longContext]
+            if alias == "haiku" { caps.insert(.fast) }
+            return AIModel(
+                id: "server-\(server.id.uuidString.prefix(8))/\(info.id)",
+                displayName: info.name ?? "Claude \(alias.capitalized) (your Claude login)", modelName: info.id,
+                location: .server(serverID: server.id), capabilities: caps,
+                contextWindow: 200_000, costTier: tier.cost, qualityTier: tier.quality, alias: alias)
+        }
         if info.kind == "video" || info.kind == "image" {
             let cap: Capability = info.kind == "video" ? .video : .image
             return AIModel(

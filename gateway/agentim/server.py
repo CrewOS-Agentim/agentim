@@ -137,6 +137,18 @@ def make_handler(gateway, channels, catalog):
             parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) == 4 and parts[3] == "candidates":  # the hiring pipeline
+                if not gateway.startup.store.get(parts[2]):
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, gateway.startup.recruit.board(parts[2]))
+            if len(parts) == 4 and parts[3] == "summaries":  # Agent Tim's summaries, newest first
+                if not gateway.startup.store.get(parts[2]):
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, {"summaries": gateway.startup.store.summaries(parts[2])})
+            if len(parts) == 4 and parts[3] == "memory":  # the team's memory (harness)
+                if not gateway.startup.store.get(parts[2]):
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, {"memory": gateway.startup.memory.all(parts[2])})
             if len(parts) == 4 and parts[3] == "tasks":  # the work board
                 if not gateway.startup.store.get(parts[2]):
                     return self.send_json(404, {"error": "no such startup"})
@@ -209,9 +221,40 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "recruit":
+                    # The Recruiter sources engineers on GitHub and drafts messages (the founder sends them).
+                    startup.recruit.start(startup_id, body.get("role", ""), body.get("limit") or 8)
+                    return self.send_json(202, startup.recruit.board(startup_id))
+                elif action == "candidates":
+                    return self.send_json(200, startup.recruit.set_status(
+                        startup_id, body.get("id", ""), body.get("status"), body.get("note"), body.get("message")))
+                elif action == "check":
+                    startup.start_check(startup_id)  # (again) is it worth building?
+                elif action == "decision":
+                    startup.decide(startup_id, body.get("decision", ""))
+                elif action == "goal":
+                    # Agent Tim turns the goal into a task graph; the tasks without dependencies start now.
+                    startup.set_goal(startup_id, body.get("goal", ""))
+                    return self.send_json(200, startup.work.board(startup_id))
+                elif action == "summary":
+                    return self.send_json(200, startup.work.summarize(startup_id))
+                elif action == "memory":
+                    if body.get("delete"):
+                        startup.memory.delete(startup_id, body["delete"])
+                    elif (body.get("text") or "").strip():
+                        startup.memory.add(startup_id, "rule", body["text"])
+                    else:
+                        raise ValueError("Write the rule.")
+                    return self.send_json(200, {"memory": startup.memory.all(startup_id)})
                 elif action == "tasks":
-                    # The founder assigns a task to someone (it starts right away), or cancels one.
-                    if body.get("cancel"):
+                    # The founder assigns, cancels, approves, sends back or retries a task.
+                    if body.get("approve"):
+                        startup.work.approve(startup_id, body["approve"])
+                    elif body.get("reject"):
+                        startup.work.reject(startup_id, body["reject"], body.get("note", ""))
+                    elif body.get("retry"):
+                        startup.work.retry(startup_id, body["retry"], body.get("hint", ""))
+                    elif body.get("cancel"):
                         startup.work.cancel(startup_id, body["cancel"])
                     else:
                         startup.work.assign(startup_id, body.get("owner", ""), body.get("task", ""))

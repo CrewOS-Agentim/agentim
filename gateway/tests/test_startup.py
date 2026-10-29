@@ -54,6 +54,8 @@ def make_startup_mode(llm=None, seed=7, clock=None):
     mode = StartupMode(gateway, StartupStore(gateway.store.db, gateway.store.lock), rng=random.Random(seed),
                        clock=clock or Clock())
     gateway.startup = mode
+    mode.default_rhythm = "events"  # these tests cover meeting rounds; graph tests opt in
+    mode.auto_check = False  # and the worth-building check has its own tests
     return gateway, mode
 
 

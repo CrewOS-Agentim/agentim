@@ -1,4 +1,5 @@
 import json
+import json
 import os
 import re
 import tempfile
@@ -10,6 +11,20 @@ import runner
 
 GB = 1024 ** 3
 
+
+
+_NO_TMUX = None
+
+
+def setUpModule():
+    """The tests don't depend on this Mac having tmux: off unless a test turns it on."""
+    global _NO_TMUX
+    _NO_TMUX = mock.patch.object(runner.LocalAgents, "tmux", lambda self: None)
+    _NO_TMUX.start()
+
+
+def tearDownModule():
+    _NO_TMUX.stop()
 
 class AssessTests(unittest.TestCase):
     def check(self, weights, available, ceiling=20 * GB, disk=100 * GB):
@@ -314,6 +329,82 @@ class ProjectsTests(unittest.TestCase):
             projects.push(folder)
         with self.assertRaisesRegex(RuntimeError, "GitHub CLI"):
             projects.create_github(folder, "leafy")
+
+    def test_github_research_reads_public_work_and_never_emails(self):
+        calls = []
+
+        class R:
+            def __init__(self, out):
+                self.returncode, self.stdout, self.stderr = 0, json.dumps(out), ""
+
+        def run(args, **kw):
+            calls.append(args)
+            path = args[4]
+            if path == "search/users":
+                return R({"items": [{"login": "ada"}]})
+            if path == "users/ada":
+                return R({"login": "ada", "name": "Ada L", "email": "ada@example.com", "location": "Berlin", "followers": 90})
+            if path == "users/ada/repos":
+                return R([{"name": "swift-sync", "description": "CRDT sync", "language": "Swift", "stargazers_count": 2100,
+                           "pushed_at": "2026-10-20", "html_url": "u", "fork": False},
+                          {"name": "fork", "fork": True}])
+            return R([{"type": "PushEvent", "repo": {"name": "ada/swift-sync"}, "created_at": "2026-10-28",
+                       "payload": {"commits": [{"message": "Fix actor reentrancy in sync engine\n\nlong body",
+                                                "author": {"email": "ada@example.com"}}]}}])
+
+        research = runner.GitHubResearch(run=run, which=lambda n: "/usr/bin/gh")
+        [ada] = research.search("language:swift location:berlin", 5)
+        self.assertEqual(ada["name"], "Ada L")
+        self.assertNotIn("email", ada, "never read emails")
+        self.assertNotIn("ada@example.com", json.dumps(ada))
+        self.assertEqual([r["name"] for r in ada["repos"]], ["swift-sync"], "forks skipped")
+        self.assertEqual(ada["commits"][0]["message"], "Fix actor reentrancy in sync engine")
+        self.assertEqual(calls[0][:5], ["gh", "api", "-X", "GET", "search/users"])
+        with self.assertRaises(RuntimeError):
+            runner.GitHubResearch(run=run, which=lambda n: None).search("x")
+
+    def test_claude_through_the_login_in_tmux(self):
+        calls = []
+
+        class R:
+            returncode, stdout, stderr = 0, "Hello from Sonnet", ""
+
+        def run(cmd, **kw):
+            calls.append((cmd, kw.get("cwd")))
+            if cmd[1] == "new-session":  # tmux: write the output and exit code like the real script
+                log = cmd[-1].split(" > ")[1].split(" 2>&1")[0].strip("'")
+                open(log, "w").write("Hello from Sonnet")
+                open(log + ".exit", "w").write("0")
+            return R()
+
+        agents = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "claude-code"}, which=lambda n, path=None: f"/fake/{n}", run=run)
+        with mock.patch.object(runner.LocalAgents, "tmux", lambda self: "/opt/homebrew/bin/tmux"), \
+                mock.patch.object(runner, "FILES_DIR", self.tmp.name), \
+                mock.patch.object(runner, "CLAUDE_CHAT_DIR", os.path.join(self.tmp.name, "chat")):
+            self.assertTrue(agents.use_tmux(), "tmux is on by default when it's installed")
+            self.assertEqual(agents.chat("sonnet", "hi"), "Hello from Sonnet")
+            tmux_cmd, cwd = calls[-1]
+            self.assertEqual(tmux_cmd[:2], ["/opt/homebrew/bin/tmux", "new-session"])
+            self.assertIn("--model sonnet", tmux_cmd[-1])
+            self.assertIn("--permission-mode plan", tmux_cmd[-1], "read-only")
+            off = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "claude-code", "AGENTIM_LOCAL_AGENTS_TMUX": "0"},
+                                     which=lambda n, path=None: f"/fake/{n}", run=run)
+            missing = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "claude-code"},
+                                         which=lambda n, path=None: f"/fake/{n}", run=run)
+            with mock.patch.object(runner.LocalAgents, "tmux", lambda self: None):
+                with self.assertRaisesRegex(RuntimeError, "brew install tmux"):
+                    missing.chat("sonnet", "hi")  # tmux mode never falls back silently
+            self.assertFalse(off.use_tmux())
+            self.assertEqual(off.chat("haiku", "hi"), "Hello from Sonnet")
+            self.assertEqual(calls[-1][1], os.path.join(self.tmp.name, "chat"), "an empty folder: never your code")
+        with self.assertRaises(RuntimeError):
+            agents.chat("gpt-9", "hi")
+        prompt = runner.claude_chat_prompt([{"role": "system", "content": "Be brief."},
+                                            {"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"},
+                                            {"role": "user", "content": "Price?"}])
+        self.assertTrue(prompt.startswith("Be brief."))
+        self.assertIn("User: Hi", prompt)
+        self.assertTrue(prompt.endswith("Price?"))
 
     def test_summary_has_readme_stack_structure_and_commits(self):
         summary = self.projects.summary(self.svc)

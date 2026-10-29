@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  Powered by <a href="https://tryperdiem.com"><b>Per Diem</b></a> (tryperdiem.com)
+</p>
+
+<p align="center">
   <a href="https://crewos-agentim.github.io/agentim/"><b>Website</b></a> ·
   <a href="#-quick-start">Quick start</a> ·
   <a href="#-how-it-works">How it works</a> ·
@@ -37,7 +41,9 @@
 - 💬 answers you on **Telegram, WhatsApp and Slack**, in text or 🎙️ **voice notes**
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
-- 🚀 **Startup Mode**: pitch any number of startups; Tim interviews you (10 YC + co-founder questions), then a team of agent employees works on each one every 10–30 minutes
+- 🚀 **Projects**: tell it the goal (a new idea, a new project, or a feature for your code); the team checks it's worth building, Agent Tim turns it into a graph of checked tasks, runs the loop every minute (ETAs, Gantt in minutes) and, on autopilot, keeps building until it's developed
+- 🧲 **Recruiter**: finds engineers from their GitHub repos and commits and drafts a personal LinkedIn message you send yourself
+- 🤖 **Claude without an API key**: Opus, Sonnet and Haiku through your Claude login (`claude -p` in tmux)
 - 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics, AWS DevOps
 - 👔 a full **C-suite of agents** (CTO, CPO, CMO, CRO, CFO, COO, CISO, CHRO, CDO, CCO, CLO, CAIO) that also sit in your startup meetings
 - 🐞 ships **agents with their own cartoon avatars** (made locally with LTX), including a **QA Engineer** that tests web apps, mobile apps and APIs and a **Data Analyst** that sets up your metrics
@@ -156,6 +162,10 @@ Before any download, the runner looks up the real file sizes from the Ollama reg
 
 ## 🖥 The Mac app
 
+**Claude through tmux, not the API (the default).** In **Settings → Claude**, choose *Your Claude login, in a background terminal (tmux)* or *An Anthropic API key* (`AGENTIM_CLAUDE_VIA=tmux|api`). In tmux mode the Anthropic API is never called, even if a key is saved; Settings shows whether Claude Code and tmux are installed (tmux is installed for you), how many Claude sessions are running, and **Watch in Terminal** opens the latest one.
+
+**Claude without an API key.** If Claude Code is installed, agentim uses your Claude login: **Claude Opus, Sonnet and Haiku** run through `claude -p` (read-only, in an empty folder, so plain chats never read your code), each in a **tmux** session you can watch (`tmux ls`, `tmux attach -t agentim-…`; tmux is used automatically when it's installed, `AGENTIM_LOCAL_AGENTS_TMUX=0` turns it off). They're real models: routing can pick them, any agent can be set to one, and `@sonnet` asks one directly. They use your Claude plan's limits; set `AGENTIM_CLAUDE_LOGIN=explicit` to use them only when you pick them (background work then stays on local models).
+
 **Claude and ChatGPT, everywhere.** Two ways, both supported by the app *and* the gateway (startups, Telegram, WhatsApp, Slack): **API keys**, where a Claude or OpenAI key you save in Settings is shared with the gateway automatically (Claude Opus/Sonnet/Haiku 5.5, GPT-5, GPT-5 mini), or **your local logins**, Claude Code and Codex (ChatGPT) on your Mac, which answer whenever no other model is running. You can always ask for one by name: `@opus`, `@gpt5`, `@claude-code`, `@codex`. And agentim works *inside* Claude (connected automatically) and ChatGPT (the connector button in This Mac).
 
 **It starts everything for you.** When the app opens it makes sure agentim is ready: it starts Docker Desktop and any stopped agentim container, adds this Mac's runners, turns on the coding agents you have installed (**Claude Code**, and **Codex** for ChatGPT), connects agentim to Claude, waits for the models to answer and preloads your default chat model so the first reply is quick (the status bar shows *Starting your models…*). It keeps re-checking every 10 seconds while something is offline. If no local chat model is up, chats are answered by **Claude Code** on your Mac (then Codex) instead of failing with "No model is available". The ChatGPT web connector isn't opened automatically, because it makes agentim reachable from the internet: that stays a button in **This Mac**.
@@ -267,7 +277,7 @@ triggers: release notes, changelog
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
 
-## 🚀 Startups & Ideas
+## 🚀 Projects
 
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 
@@ -323,9 +333,26 @@ Every step reports in the agents room, and the agents see where the launch stand
 
 Then Claude Code builds the product **with** that launch kit (the CMO's copy on the landing page, the tracking plan instrumented) and saves the marketing assets under `launch/` in the project, the tests run, and the team holds a wrap-up meeting with action items. Deploying stays a separate confirmation, and nothing is posted to social networks: the posts and emails are ready for you to send. Ollama runs up to 4 requests at once (`OLLAMA_NUM_PARALLEL`, default 4) so the agents really work in parallel. API: `POST /v1/startups/{id}/sprint {"confirmed": true}`.
 
-**Work flows by handoffs, not by the clock.** A meeting's action items become tasks on the startup's **Work** board (owner, ETA, and what each waits for: *after Leo's ROI page*). An agent starts as soon as a task is ready (up to 3 at a time), delivers the actual result (the copy, numbers, plan or checklist), and **hands off** to whoever continues from it ("@Sam: put this ROI page in the welcome email"), which starts Sam right away with Leo's result as input. When the board is empty, the team meets (after the startup's minimum break) to plan the next tasks. You can assign anyone a task from the Work tab, and cancel ones that aren't needed. Guard rails: 40 tasks a day per startup, a handoff chain stops after 4 steps, and pausing a startup pauses its work. Prefer the old rhythm? Switch the Work tab to **Meet every 10–30 min**. API: `GET /v1/startups/{id}/tasks`, `POST /v1/startups/{id}/tasks {"owner": "Ava", "task": "…"}`, `PATCH`-style `POST /v1/startups/{id} {"rhythm": "events" | "timer"}`.
+**Start with the goal, and check it's worth building.** **New project** asks one thing: *what's the goal?* It can be a **new idea**, a **new project** to build, or a **feature for your existing code**. Before anyone builds, the team checks it's worth it: who already solves this (companies, products, open source, with prices), **build vs buy**, and the gap no one fills. With Claude Code on your Mac this is real research with web search; otherwise it's the model's knowledge, and the card says which. A "build" verdict starts the work. "Buy", "build on top" or "stop" waits for your call: **Build anyway** or **Stop**.
 
-**One rolling meeting a day.** The team still meets every 10–30 minutes, but every round of a day folds into **one daily meeting** with **one summary** that's rewritten after each round: what happened, the decisions (the latest one wins), the open action items with owners and ETAs, metrics and open questions. The **Meetings** tab lists one meeting per day ("Today's meeting · 9:12 AM – 5:40 PM · 18 rounds"); open it for the day's summary, the action-item table and every round's conversation. On Telegram/WhatsApp/Slack you get **one message a day** with that summary (after 18:00, `AGENTIM_DAILY_SUMMARY_HOUR`, or at the first meeting of the next day) instead of one per meeting; `AGENTIM_STARTUP_NOTIFY=meeting` brings back a message after every meeting. API: `GET /v1/startups/{id}/days`, `GET /v1/startups/{id}/days/{YYYY-MM-DD}`.
+**Harness, loops and graphs** (after *Harness, Loops, Graphs: what each layer fixes*). By default a project runs as **one continuous meeting** with no scheduled rounds; you get a **summary on demand** (the **Summarize** button):
+- **Harness**: the team's **memory** (your rules, the decisions, lessons) lives outside any one chat and goes into every agent's brief; permissions stay tight.
+- **Graph**: set a goal and Agent Tim turns it into a **graph of tasks** with dependencies. Tasks that don't need each other run **in parallel**; each starts from the results it depends on, and passed work is frozen. **Gates follow the cost of undoing**: *auto* (cheap), *checked* (Tim reviews), *code* (Claude Code changes the project and the tests check it), *you approve* (anything public, sent to customers, money or a deploy).
+- **Loop**: every task has a **"done when"** (evidence that can fail). Agent Tim checks each result, **on a different model than the one that did the work**. A fail goes back with the specific reason, and the agent tries again (max 2 retries). Then it's **blocked** and comes to you: give a hint and retry, send it back, or cancel.
+- **Learning**: a task that fails its check twice leaves a **lesson** in that role's memory, so the same mistake doesn't come back.
+- **Different models**: each agent can think with its own model (set it in **Agents**: any local model, Claude, ChatGPT, or Claude Code/Codex on your Mac); by default coders get the best coding model.
+- **Autopilot** (a switch per project): the team keeps going, goal after goal, until Agent Tim judges the project developed. Coding tasks are done by **Claude Code in the project folder**, your tests are the proof, and each passing change becomes a version. Deploys, public posts, customer emails and spending still wait for you. Limits per rolling 60 minutes: `AGENTIM_AUTOPILOT_GOALS_PER_HOUR` (3) and `AGENTIM_TASKS_PER_HOUR` (20).
+- Talk to the room any time: Agent Tim answers, and a new goal ("goal: get 10 pilot customers") becomes a new graph. Prefer meetings? Switch a project to *Meetings → handoffs* or *Meet every 10–30 min*.
+
+**Hiring: a Recruiter that reads code.** Each project has a **Hiring** tab (and a **Recruiter** you can add to the team, or chat with in Agents). Describe the role ("Senior iOS engineer, Swift, Europe"); the Recruiter turns it into a GitHub search, reads each person's public profile, recent repos and recent commit messages (with your `gh` login), scores the fit from that evidence, and drafts a **LinkedIn connection note** (≤ 280 characters) and a longer message that mention something they actually built. You review each one: edit, **Copy**, **Find on LinkedIn**, **Open GitHub**, and track *shortlisted → contacted → replied*. **You send the messages yourself**: GitHub's terms don't allow using information from GitHub (such as commit emails) for unsolicited outreach, recruiters included, and LinkedIn doesn't allow automated messaging, so agentim never collects emails and never sends anything.
+
+**Shared, fair model time.** Background work (agents working, checks, ETA questions, meetings) shares 2 model slots across every project (`AGENTIM_BACKGROUND_PARALLEL`), so what you're waiting for (interviews, replies, plans, 1:1s) never waits behind it.
+
+**Agent Tim runs the loop, in minutes.** Every minute Tim checks each project: he restarts ready work nobody picked up, **asks each owner for an ETA in minutes** ("Zoe: ~25 min for the pricing page"), chases anything past its ETA for a new one (after 3 slips you hear about it), reminds you about approvals, and posts a **summary every 120 minutes** when something changed (`AGENTIM_SUMMARY_EVERY_MINUTES`; also sent to Telegram/WhatsApp/Slack). The Graph tab shows a **Gantt chart in minutes**: each task's planned bar (from the first ETA, after what it waits for) and its actual or forecast bar, with a line at *now*. **Nothing runs on days**: budgets are per rolling 60 minutes (`AGENTIM_TASKS_PER_HOUR` 20, `AGENTIM_AUTOPILOT_GOALS_PER_HOUR` 3) and ETAs are in minutes.
+
+API: `POST /v1/startups/{id}/goal`, `/summary`, `/decision {"decision": "build"|"stop"}`, `/check`, `/memory`, `/tasks {"approve"|"reject"|"retry"|"cancel": id}`.
+
+**Work flows by handoffs, not by the clock.** A meeting's action items become tasks on the startup's **Work** board (owner, ETA, and what each waits for: *after Leo's ROI page*). An agent starts as soon as a task is ready (up to 3 at a time), delivers the actual result (the copy, numbers, plan or checklist), and **hands off** to whoever continues from it ("@Sam: put this ROI page in the welcome email"), which starts Sam right away with Leo's result as input. When the board is empty, the team meets (after the startup's minimum break) to plan the next tasks. You can assign anyone a task from the Work tab, and cancel ones that aren't needed. Guard rails: 20 tasks per rolling 60 minutes per project, a handoff chain stops after 4 steps, and pausing a startup pauses its work. Prefer the old rhythm? Switch the Work tab to **Meet every 10–30 min**. API: `GET /v1/startups/{id}/tasks`, `POST /v1/startups/{id}/tasks {"owner": "Ava", "task": "…"}`, `PATCH`-style `POST /v1/startups/{id} {"rhythm": "events" | "timer"}`.
 
 **Action items with owners and ETAs, in time.** The team meets every 10–30 minutes, so plans run on minutes and hours, never days. Every meeting ends with action items, each with one owner and an ETA like *in 45 min*, *in 2 h*, *by 15:30*, or a dependency: *right after Leo's ROI page*. ETAs nobody set are marked *proposed*, and a meeting that forgot action items gives one to each person who spoke. The next meeting opens with the open items, their due times and what's **overdue**, and each owner reports done or a new ETA. They show as a table (with the due time) in the meeting notes, in Tim's summary, and as `action_items` (`eta`, `due`, `after`) in `GET /v1/startups/{id}/meetings/{n}`.
 
@@ -449,3 +476,5 @@ Found a bug or want a feature? [Open an issue](https://github.com/CrewOS-Agentim
 ## 📄 License
 
 [MIT](LICENSE). Agent Tim was drawn and animated locally with LTX Desktop. No octopuses were harmed. 🐙
+
+agentim is powered by [Per Diem](https://tryperdiem.com).
