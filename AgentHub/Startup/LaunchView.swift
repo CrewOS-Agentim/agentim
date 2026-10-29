@@ -12,6 +12,12 @@ struct LaunchConfig: Codable, Equatable {
     var test_command = ""
     var live_url = ""
     var team_reviews = true
+    /// Commit + tag every build: "auto" (only in folders agentim created), "on" or "off".
+    var versioning = "auto"
+    var auto_push = false
+    /// Set by agentim: the latest version and the project's GitHub repo.
+    var version: String? = nil
+    var github_repo: String? = nil
 
     init() {}
 
@@ -24,11 +30,16 @@ struct LaunchConfig: Codable, Equatable {
         test_command = try c.decodeIfPresent(String.self, forKey: .test_command) ?? ""
         live_url = try c.decodeIfPresent(String.self, forKey: .live_url) ?? ""
         team_reviews = try c.decodeIfPresent(Bool.self, forKey: .team_reviews) ?? true
+        versioning = try c.decodeIfPresent(String.self, forKey: .versioning) ?? "auto"
+        auto_push = try c.decodeIfPresent(Bool.self, forKey: .auto_push) ?? false
+        version = try c.decodeIfPresent(String.self, forKey: .version)
+        github_repo = try c.decodeIfPresent(String.self, forKey: .github_repo)
     }
 
     var json: [String: Any] {
         ["folder": folder, "stack": stack, "deploy": deploy, "deploy_command": deploy_command,
-         "test_command": test_command, "live_url": live_url, "team_reviews": team_reviews]
+         "test_command": test_command, "live_url": live_url, "team_reviews": team_reviews,
+         "versioning": versioning, "auto_push": auto_push]
     }
 }
 
@@ -79,6 +90,21 @@ struct LaunchStage: Decodable, Equatable, Identifiable {
     }
 }
 
+/// The project's commits with their version tags (newest first).
+struct ProjectVersions: Decodable, Equatable {
+    struct Commit: Decodable, Equatable, Identifiable {
+        let sha: String
+        let subject: String
+        let ts: Double
+        var version: String? = nil
+        var id: String { sha }
+    }
+
+    let commits: [Commit]
+    var version: String? = nil
+    var remote: String? = nil
+}
+
 /// Launch mode's progress: everyone in parallel, then the build, then a wrap-up meeting.
 struct SprintState: Decodable, Equatable {
     let status: String   // running | done | failed
@@ -96,6 +122,19 @@ struct DeployProvider: Decodable, Equatable, Identifiable {
 extension StartupClient {
     func configureLaunch(_ id: String, _ config: LaunchConfig) async throws -> StartupDetail {
         try await sendDetail("v1/startups/\(id)/config", body: config.json)
+    }
+
+    func versions(_ id: String) async throws -> ProjectVersions {
+        try await getJSON("v1/startups/\(id)/versions")
+    }
+
+    func createGitHub(_ id: String, name: String, isPrivate: Bool, autoPush: Bool) async throws -> StartupDetail {
+        try await sendDetail("v1/startups/\(id)/github",
+                             body: ["name": name, "private": isPrivate, "auto_push": autoPush, "confirmed": true])
+    }
+
+    func pushVersions(_ id: String) async throws {
+        try await post("v1/startups/\(id)/push", body: ["confirmed": true])
     }
 
     func sprint(_ id: String) async throws {
@@ -132,6 +171,34 @@ extension StartupModel {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         Self.allowWorkspace(url, stackRoot: stackRoot)
         launchDraft?.folder = url.path
+    }
+
+    func loadVersions(stackRoot: URL?) async {
+        guard let id = detail?.id, !isDemo, let client = Self.client(stackRoot: stackRoot) else { return }
+        versions = try? await client.versions(id)
+    }
+
+    /// Opens the inline "Create GitHub repo" form, with a name from the startup's.
+    func beginGitHub() {
+        let slug = (detail?.name ?? "startup").lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        githubDraft = GitHubDraft(name: slug.isEmpty ? "startup" : slug)
+    }
+
+    func createGitHub(stackRoot: URL?) async {
+        guard let id = detail?.id, let draft = githubDraft else { return }
+        confirmingGitHub = false
+        await act("Creating the GitHub repo…", stackRoot) { client in
+            self.detail = try await client.createGitHub(id, name: draft.name, isPrivate: draft.isPrivate, autoPush: draft.autoPush)
+            self.githubDraft = nil
+        }
+        await loadVersions(stackRoot: stackRoot)
+    }
+
+    func pushVersions(stackRoot: URL?) async {
+        guard let id = detail?.id else { return }
+        await act("Pushing…", stackRoot) { client in try await client.pushVersions(id) }
     }
 
     /// Launch mode (confirmed in its dialog): design + every employee's launch deliverable in parallel, then the build.
@@ -171,7 +238,8 @@ struct LaunchPanel: View {
                 rail
                 if model.launchDraft != nil { settingsForm } else { settingsSummary }
                 ForEach(stages) { stage in stageCard(stage) }
-                Text("agentim never pushes your code. Deploys use your own CLI (vercel, netlify, fly…) and its saved login on this Mac.")
+                versionsCard
+                Text("agentim pushes only to a repo you created here, and only when you say so. Deploys use your own CLI (vercel, netlify, fly…) and its saved login on this Mac.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .padding(Theme.s4)
@@ -182,6 +250,92 @@ struct LaunchPanel: View {
             Button(stage == "deploy" ? "Deploy" : "Build it") { Task { await model.runStage(stage, stackRoot: stackRoot) } }
         } message: { stage in
             Text(dialogMessage(stage))
+        }
+    }
+
+    // MARK: Code & versions
+
+    private var versionsCard: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            HStack {
+                Label("Code & versions", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
+                if let version = config.version {
+                    Text(version).font(.caption.weight(.bold).monospaced())
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Theme.accent.opacity(0.15), in: Capsule())
+                }
+                Spacer()
+                if let repo = config.github_repo, let url = URL(string: repo) {
+                    Link(destination: url) { Label(repo.replacingOccurrences(of: "https://github.com/", with: ""), systemImage: "arrow.up.right.square") }
+                        .font(.callout)
+                    if !config.auto_push {
+                        Button("Push") { Task { await model.pushVersions(stackRoot: stackRoot) } }
+                            .disabled(model.busy != nil)
+                    }
+                } else if model.githubDraft == nil {
+                    Button("Create GitHub repo…", systemImage: "plus") { model.beginGitHub() }
+                        .disabled(config.version == nil)
+                        .help(config.version == nil ? "Build a first version, then put it on GitHub." : "A private repo with every version so far")
+                }
+            }
+            if model.githubDraft != nil { githubForm }
+            let commits = model.versions?.commits ?? []
+            if commits.isEmpty {
+                Text(versioningNote).font(.caption).foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(commits.prefix(12)) { commit in
+                        HStack(spacing: Theme.s2) {
+                            Text(commit.version ?? "").font(.caption.weight(.bold).monospaced())
+                                .frame(width: 58, alignment: .leading).foregroundStyle(.tint)
+                            Text(commit.subject).font(.callout).lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text(Date(timeIntervalSince1970: commit.ts), style: .relative).font(.caption).foregroundStyle(.secondary)
+                            Text(commit.sha).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text("Every version is in CHANGELOG.md in the project, newest first.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(Theme.s3)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border))
+        .task(id: config.version) { await model.loadVersions(stackRoot: stackRoot) }
+        .confirmationDialog("Create \(model.githubDraft?.name ?? "") on GitHub?", isPresented: $model.confirmingGitHub) {
+            Button("Create \(model.githubDraft?.isPrivate == false ? "public" : "private") repo") {
+                Task { await model.createGitHub(stackRoot: stackRoot) }
+            }
+        } message: {
+            Text("Uses your GitHub login (gh) to create the repository and push every version so far."
+                 + (model.githubDraft?.autoPush == true ? " New versions will be pushed automatically." : ""))
+        }
+    }
+
+    private var versioningNote: String {
+        switch config.versioning {
+        case "off": "Versioning is off. Turn it on in the launch settings to commit and tag every build."
+        case "on": "Every build is committed and tagged (v0.1.0, v0.2.0…) with a CHANGELOG.md entry."
+        default: "Every build in a folder agentim created is committed and tagged (v0.1.0, v0.2.0…) with a CHANGELOG.md entry. For your own folders, turn versioning on in the settings."
+        }
+    }
+
+    @ViewBuilder private var githubForm: some View {
+        if let draft = Binding($model.githubDraft) {
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Repository name (or owner/name)", text: draft.name).textFieldStyle(.roundedBorder)
+                Toggle("Private", isOn: draft.isPrivate)
+                Toggle("Push every new version automatically", isOn: draft.autoPush)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { model.githubDraft = nil }
+                    Button("Create…") { model.confirmingGitHub = true }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(draft.wrappedValue.name.trimmingCharacters(in: .whitespaces).isEmpty || model.busy != nil)
+                }
+            }
+            .padding(Theme.s2)
+            .background(Theme.surfaceMuted, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         }
     }
 
@@ -315,6 +469,14 @@ struct LaunchPanel: View {
                               text: draft.deploy_command)
                 }
                 labeled("Live URL") { TextField("https://… (empty: taken from the deploy output)", text: draft.live_url) }
+                labeled("Commit and version every build") {
+                    Picker("", selection: draft.versioning) {
+                        Text("Auto (folders agentim created)").tag("auto")
+                        Text("On").tag("on")
+                        Text("Off").tag("off")
+                    }
+                    .labelsHidden()
+                }
                 Toggle("The team meets after the design and after going live", isOn: draft.team_reviews)
                 HStack {
                     Spacer()
@@ -408,6 +570,13 @@ struct LaunchPanel: View {
         }
         return "Claude Code will create and edit files in \(config.folder.isEmpty ? "the project folder" : config.folder), then run the tests. It doesn't push or deploy."
     }
+}
+
+/// The "Create GitHub repo" form.
+struct GitHubDraft: Equatable {
+    var name: String
+    var isPrivate = true
+    var autoPush = false
 }
 
 private extension String {

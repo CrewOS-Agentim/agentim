@@ -32,6 +32,17 @@ class LaunchTests(unittest.TestCase):
                 return {"folder": "/f", "exit_code": code, "output": out if code == 0 else "1 failed", "seconds": 2}
             if path == "/v1/projects/check":
                 return {"ok": True, "status": 200, "ms": 120}
+            if path == "/v1/projects/commit":
+                self.version = f"v0.{getattr(self, 'version_n', 0) + 1}.0"
+                self.version_n = getattr(self, "version_n", 0) + 1
+                return {"committed": True, "version": self.version, "sha": "abc1234", "files": 7}
+            if path == "/v1/projects/push":
+                return {"pushed": True}
+            if path == "/v1/projects/github":
+                return {"url": "https://github.com/me/" + body["name"], "private": body["private"]}
+            if path == "/v1/projects/history":
+                return {"commits": [{"sha": "abc1234", "subject": "feat: build v1", "ts": 1, "version": "v0.1.0"}],
+                        "version": "v0.1.0", "remote": ""}
             raise AssertionError(path)
 
         self.gateway.claude.call = call
@@ -121,6 +132,44 @@ class LaunchTests(unittest.TestCase):
         self.assertIn("Launch mode done", room)
         self.assertFalse(any(p == "/v1/projects/run" and "vercel" in b["command"] for p, b in self.calls),
                          "never deploys on its own")
+
+    def test_every_build_is_a_version_and_github_is_suggested(self):
+        self.run_stage("build", confirmed=True)
+        commit = next(b for p, b in self.calls if p == "/v1/projects/commit")
+        self.assertEqual(commit["message"], f"feat: build v1 of {self.startup['name']}")
+        self.assertIn("Tests: `npm test` done", commit["body"])
+        detail = self.mode.detail(self.id)
+        self.assertEqual(detail["config"]["version"], "v0.1.0")
+        room = "\n".join(m["content"] for m in detail["messages"])
+        self.assertIn("**v0.1.0** committed", room)
+        self.assertIn("Create GitHub repo", room, "the first version suggests a repo")
+        self.assertFalse(any(p == "/v1/projects/github" for p, _ in self.calls), "never creates one by itself")
+
+        self.run_stage("build", confirmed=True)
+        commits = [b for p, b in self.calls if p == "/v1/projects/commit"]
+        self.assertEqual(commits[-1]["message"], f"feat: update {self.startup['name']}")
+        self.assertEqual(self.mode.detail(self.id)["config"]["version"], "v0.2.0")
+        self.assertEqual(room.count("Create GitHub repo"), 1)
+
+        with self.assertRaisesRegex(ValueError, "confirmation"):
+            self.launch.create_github(self.id, "leafy")
+        config = self.launch.create_github(self.id, "leafy", auto_push=True, confirmed=True)
+        self.assertEqual((config["github_repo"], config["auto_push"]), ("https://github.com/me/leafy", True))
+        github = next(b for p, b in self.calls if p == "/v1/projects/github")
+        self.assertTrue(github["private"], "private by default")
+        self.run_stage("build", confirmed=True)
+        self.assertTrue(any(p == "/v1/projects/push" for p, _ in self.calls), "auto-push after the founder turned it on")
+        self.assertEqual(self.launch.versions(self.id)["version"], "v0.1.0")
+
+    def test_no_versioning_in_your_own_folder_unless_asked(self):
+        self.launch.configure(self.id, {"folder": "/Users/me/code/leafy"})
+        self.run_stage("build", confirmed=True)
+        self.assertFalse(any(p == "/v1/projects/commit" for p, _ in self.calls), "never commits your own WIP by default")
+        self.launch.configure(self.id, {"versioning": "on"})
+        self.run_stage("build", confirmed=True)
+        self.assertTrue(any(p == "/v1/projects/commit" for p, _ in self.calls))
+        with self.assertRaisesRegex(ValueError, "auto, on or off"):
+            self.launch.configure(self.id, {"versioning": "sometimes"})
 
     def test_failing_tests_get_one_fix(self):
         self.exit_codes = [1, 0]

@@ -27,7 +27,10 @@ PROVIDERS = {
 }
 
 CONFIG_DEFAULTS = {"folder": "", "stack": "", "deploy": "none", "deploy_command": "", "test_command": "",
-                   "live_url": "", "team_reviews": True}
+                   "live_url": "", "team_reviews": True,
+                   # Commit + tag every build: "auto" = only in folders agentim created (never your own WIP).
+                   "versioning": "auto", "auto_push": False}
+VERSIONING = ("auto", "on", "off")
 
 EMOJI = {"design": "📐", "build": "🛠️", "test": "🧪", "deploy": "🚀", "live": "🌍"}
 URL = re.compile(r"https?://[^\s'\"<>()\[\]`]+")
@@ -41,6 +44,8 @@ def normalize_config(current, fields):
             continue
         value = fields[key]
         config[key] = bool(value) if isinstance(default, bool) else str(value).strip()[:500]
+    if config["versioning"] not in VERSIONING:
+        raise ValueError("Versioning is auto, on or off.")
     if config["deploy"] not in PROVIDERS:
         raise ValueError(f"Deploy to one of: {', '.join(PROVIDERS)}.")
     if config["live_url"] and not config["live_url"].startswith(("http://", "https://")):
@@ -208,6 +213,85 @@ class Launch:
         # The wrap-up: the team reviews the launch and sets action items (owners and ETAs in minutes).
         self.mode.run_round(startup_id)
 
+    # ---- versions and GitHub
+
+    def versioning_on(self, config):
+        return config.get("versioning") == "on" or (config.get("versioning", "auto") == "auto" and config.get("created"))
+
+    def _version(self, startup_id, message, body="", bump="minor"):
+        """Commits the project, tags the next version and updates CHANGELOG.md; pushes if the founder turned that on.
+        The first version suggests a GitHub repo."""
+        config = {**CONFIG_DEFAULTS, **(self._get(startup_id).get("config") or {})}
+        if not self.versioning_on(config):
+            return None
+        try:
+            result = self.runner("/v1/projects/commit", {"source": self.workspace(startup_id), "message": message,
+                                                         "body": body, "bump": bump}, timeout=120)
+        except Exception as e:  # noqa: BLE001 - versioning never fails the build
+            self._say(startup_id, f"📦 Couldn't commit this version: {e}")
+            return None
+        if not result.get("committed"):
+            return None
+        config["version"] = result["version"]
+        text = f"📦 **{result['version']}** committed (`{result['sha']}`, {result['files']} files): {message}"
+        if config.get("github_repo") and config.get("auto_push"):
+            try:
+                self.runner("/v1/projects/push", {"source": self.workspace(startup_id), "confirmed": True}, timeout=200)
+                text += f" · pushed to {config['github_repo']}"
+            except Exception as e:  # noqa: BLE001
+                text += f" · push failed: {e}"
+        elif not config.get("github_repo") and not config.get("github_suggested"):
+            config["github_suggested"] = True
+            text += ("\n\n💡 Want every version on GitHub? Press **Create GitHub repo** in the Launch tab (private by "
+                     "default); you choose whether new versions are pushed automatically.")
+        self.store.save_launch(startup_id, config=config)
+        self._say(startup_id, text)
+        return result
+
+    def existing_source(self, startup_id):
+        """The project's source if it has one already (never creates a folder)."""
+        startup = self._get(startup_id)
+        config = startup.get("config") or {}
+        if config.get("folder"):
+            return {"type": "dir", "path": config["folder"]}
+        return (startup.get("sources") or [None])[0]
+
+    def versions(self, startup_id):
+        source = self.existing_source(startup_id)
+        if not source:
+            return {"commits": [], "version": None, "remote": ""}
+        try:
+            return self.runner("/v1/projects/history", {"source": source}, timeout=30)
+        except Exception as e:  # noqa: BLE001
+            return {"commits": [], "version": None, "remote": "", "error": str(e)}
+
+    def create_github(self, startup_id, name, private=True, auto_push=False, confirmed=False):
+        """Creates the project's GitHub repo with the founder's gh login (they confirm in the app)."""
+        if not confirmed:
+            raise ValueError("Creating a GitHub repository needs your confirmation.")
+        source = self.existing_source(startup_id)
+        if not source:
+            raise ValueError("Build a first version before creating the repo.")
+        result = self.runner("/v1/projects/github", {"source": source, "name": name, "private": private is not False,
+                                                     "confirmed": True}, timeout=240)
+        config = {**CONFIG_DEFAULTS, **(self._get(startup_id).get("config") or {})}
+        config.update(github_repo=result["url"], auto_push=bool(auto_push), github_suggested=True)
+        self.store.save_launch(startup_id, config=config)
+        self._say(startup_id, f"🐙 Created {result['url']} ({'private' if result['private'] else 'public'}) and pushed "
+                              f"every version so far." + (" New versions are pushed automatically." if auto_push else ""))
+        return config
+
+    def push(self, startup_id, confirmed=False):
+        if not confirmed:
+            raise ValueError("Pushing needs your confirmation.")
+        source = self.existing_source(startup_id)
+        if not source:
+            raise ValueError("Nothing to push yet.")
+        self.runner("/v1/projects/push", {"source": source, "confirmed": True}, timeout=200)
+        config = self._get(startup_id).get("config") or {}
+        self._say(startup_id, f"🐙 Pushed {config.get('version') or 'the latest version'} to {config.get('github_repo', 'GitHub')}.")
+        return {"pushed": True}
+
     # ---- the project folder
 
     def workspace(self, startup_id):
@@ -221,6 +305,7 @@ class Launch:
             return sources[0]
         created = self.runner("/v1/projects/create", {"name": startup["name"]})
         config["folder"] = created["folder"]
+        config["created"] = True  # agentim made it: safe to commit everything in it
         self.store.save_launch(startup_id, config=config)
         self._say(startup_id, f"📁 Created the project folder `{created['folder']}`.")
         return {"type": "dir", "path": created["folder"]}
@@ -287,6 +372,15 @@ class Launch:
         # The build is checked right away (part of the build the founder approved), with one fix attempt.
         self._set(startup_id, "test", "running", output="")
         self._test(startup_id, fix=True)
+        test = (self._get(startup_id).get("pipeline") or {}).get("test", {})
+        summary = [line.strip("-*# ").strip() for line in output.splitlines() if line.strip()
+                   and not line.startswith("TEST_COMMAND")][:3]
+        first = not config.get("version")
+        message = ("feat: launch mode: design, build and launch kit" if kit
+                   else f"feat: build v1 of {startup['name']}" if first else f"feat: update {startup['name']}")
+        body = "\n".join(summary + [f"Tests: `{config.get('test_command') or 'none'}` {test.get('status', 'not run')}"]
+                         + (["Launch kit saved under launch/"] if kit else []))
+        self._version(startup_id, message, body)
 
     def _test(self, startup_id, fix=False):
         config = {**CONFIG_DEFAULTS, **(self._get(startup_id).get("config") or {})}
@@ -331,8 +425,10 @@ class Launch:
         if url and not config["live_url"]:
             config["live_url"] = url
             self.store.save_launch(startup_id, config=config)
-        self._set(startup_id, "deploy", "done", output=result["output"], url=url)
-        self._say(startup_id, f"🚀 **Deployed** with `{command}`" + (f": {url}" if url else "."))
+        version = config.get("version")
+        self._set(startup_id, "deploy", "done", output=result["output"], url=url, version=version)
+        self._say(startup_id, f"🚀 **Deployed**{f' {version}' if version else ''} with `{command}`"
+                              + (f": {url}" if url else "."))
         if url:
             self._set(startup_id, "live", "running", output="")
             self._live(startup_id)

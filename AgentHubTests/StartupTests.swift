@@ -385,6 +385,11 @@ final class StartupTests: XCTestCase {
         XCTAssertEqual(detail.config?.test_command, "", "missing settings decode as empty")
         XCTAssertEqual(detail.pipeline?.map(\.statusText), ["Done", "Ready"])
         XCTAssertEqual(LaunchConfig().json["deploy"] as? String, "none")
+        XCTAssertEqual(LaunchConfig().json["versioning"] as? String, "auto")
+        XCTAssertNil(LaunchConfig().json["version"], "the version is agentim's, not a setting")
+        let history = #"{"commits":[{"sha":"abc1234","subject":"feat: build v1 of Leafy","ts":1800000000,"version":"v0.1.0"},{"sha":"def5678","subject":"wip","ts":1799999000}],"version":"v0.1.0","remote":""}"#
+        let versions = try JSONDecoder().decode(ProjectVersions.self, from: Data(history.utf8))
+        XCTAssertEqual(versions.commits.map(\.version), ["v0.1.0", nil])
         json["sprint"] = ["status": "running", "started": 1_800_000_000]
         let sprinting = try JSONDecoder().decode(StartupDetail.self, from: JSONSerialization.data(withJSONObject: json))
         XCTAssertEqual(sprinting.sprint?.status, "running")

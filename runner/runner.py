@@ -638,6 +638,102 @@ class Projects:
         return {"folder": folder, "exit_code": code, "output": output.strip()[-6000:],
                 "seconds": round(time.time() - started, 1)}
 
+    # ---- versions: commits, semver tags and a changelog, so progress is easy to follow
+
+    VERSION = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+    def git(self, folder, *args, timeout=60):
+        result = self.run(["git", "-C", folder, *args], capture_output=True, text=True, timeout=timeout)
+        return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
+
+    def version(self, folder):
+        """The latest vX.Y.Z tag, or None."""
+        code, out, _ = self.git(folder, "tag", "--list", "v*", "--sort=-v:refname")
+        return next((t for t in out.splitlines() if self.VERSION.match(t.strip())), None) if code == 0 else None
+
+    @classmethod
+    def bumped(cls, current, bump):
+        if not current:
+            return "v0.1.0"
+        major, minor, patch = (int(x) for x in cls.VERSION.match(current).groups())
+        if bump == "major":
+            return f"v{major + 1}.0.0"
+        if bump == "patch":
+            return f"v{major}.{minor}.{patch + 1}"
+        return f"v{major}.{minor + 1}.0"
+
+    def commit(self, folder, message, bump="minor", body=""):
+        """Commits everything in the project folder with `message`, tags the next version and adds it to
+        CHANGELOG.md. Returns {"committed": False} when nothing changed."""
+        if not os.path.isdir(os.path.join(folder, ".git")):
+            self.git(folder, "init", "--quiet")
+        code, status, _ = self.git(folder, "status", "--porcelain")
+        if code != 0 or not status.strip():
+            return {"committed": False, "version": self.version(folder)}
+        version = self.bumped(self.version(folder), bump)
+        changed = len(status.splitlines())
+        path = os.path.join(folder, "CHANGELOG.md")
+        old = open(path).read() if os.path.exists(path) else "# Changelog\n\nEvery version agentim builds, newest first.\n"
+        head, _, rest = old.partition("\n## ")
+        entry = (f"## {version} · {time.strftime('%Y-%m-%d %H:%M')}\n\n- {message}\n"
+                 + "".join(f"- {line}\n" for line in body.splitlines()[:6] if line.strip()) + "\n")
+        open(path, "w").write(head.rstrip() + "\n\n" + entry + (("## " + rest) if rest else ""))
+        self.git(folder, "add", "-A")
+        identity = []
+        if self.git(folder, "config", "user.email")[0] != 0:  # no git identity on this Mac: sign as agentim
+            identity = ["-c", "user.name=agentim", "-c", "user.email=agentim@localhost"]
+        full = message + (f"\n\n{body.strip()}" if body.strip() else "") + f"\n\nVersion: {version}"
+        code, _, err = self.git(folder, *identity, "commit", "--quiet", "-m", full)
+        if code != 0:
+            raise RuntimeError(f"git commit failed: {err[-300:]}")
+        self.git(folder, *identity, "tag", "-a", version, "-m", f"{version}: {message}")
+        sha = self.git(folder, "rev-parse", "--short", "HEAD")[1]
+        return {"committed": True, "version": version, "sha": sha, "files": changed}
+
+    def history(self, folder, limit=40):
+        """Commits, newest first, with the version tag on each (if any)."""
+        code, out, _ = self.git(folder, "log", f"-{int(limit)}", "--pretty=format:%h\x1f%s\x1f%ct\x1f%D")
+        if code != 0:
+            return []
+        commits = []
+        for line in out.splitlines():
+            sha, subject, ts, refs = (line.split("\x1f") + ["", "", "0", ""])[:4]
+            tags = [r.strip()[5:] for r in refs.split(",") if r.strip().startswith("tag: ")]
+            commits.append({"sha": sha, "subject": subject, "ts": int(ts or 0),
+                            "version": next((t for t in tags if self.VERSION.match(t)), None)})
+        return commits
+
+    def remote(self, folder):
+        code, url, _ = self.git(folder, "remote", "get-url", "origin")
+        return url if code == 0 else ""
+
+    def create_github(self, folder, name, private=True):
+        """Creates a GitHub repo for the project with the founder's gh login and pushes the history and tags."""
+        if not self.which("gh"):
+            raise RuntimeError("Install the GitHub CLI (brew install gh) and run gh auth login first.")
+        if not re.match(r"^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)?$", name or ""):
+            raise RuntimeError("Use a repo name like my-startup (or owner/my-startup).")
+        if self.remote(folder):
+            raise RuntimeError(f"This project already has a remote: {self.remote(folder)}")
+        if not self.git(folder, "rev-parse", "HEAD")[0] == 0:
+            raise RuntimeError("Build a first version before creating the repo.")
+        result = self.run(["gh", "repo", "create", name, "--private" if private else "--public", "--source", folder,
+                           "--remote", "origin", "--push"], capture_output=True, text=True, timeout=180)
+        if result.returncode != 0:
+            raise RuntimeError(f"gh repo create failed: {(result.stderr or result.stdout).strip()[-400:]}")
+        self.git(folder, "push", "--quiet", "origin", "--tags", timeout=180)
+        url = self.remote(folder)
+        return {"url": re.sub(r"\.git$", "", url.replace("git@github.com:", "https://github.com/")), "private": private}
+
+    def push(self, folder):
+        """Pushes the current branch and its version tags (never forced)."""
+        if not self.remote(folder):
+            raise RuntimeError("No GitHub repo yet: create one first.")
+        code, _, err = self.git(folder, "push", "--quiet", "--follow-tags", "origin", "HEAD", timeout=180)
+        if code != 0:
+            raise RuntimeError(f"git push failed: {err[-400:]}")
+        return {"pushed": True}
+
     @staticmethod
     def check(url, opener=urllib.request.urlopen):
         """Is the live URL answering? (http/https only)."""
@@ -979,6 +1075,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"folder": cwd, "mode": mode, "output": output[-6000:], "changed": changed})
             except subprocess.TimeoutExpired:
                 return self.error(504, "The coding agent took too long and was stopped.")
+            except Exception as e:
+                return self.error(400, str(e))
+        if path in ("/v1/projects/commit", "/v1/projects/history", "/v1/projects/github", "/v1/projects/push"):
+            # Versions: commit + tag + changelog, the log, and (confirmed by the founder) GitHub.
+            if IN_CONTAINER:
+                return self.error(404, "Projects are run by the runner on the Mac.")
+            try:
+                folder = PROJECTS.resolve(body.get("source", {}))
+                if path == "/v1/projects/commit":
+                    return self.send_json(200, PROJECTS.commit(folder, body.get("message") or "chore: update",
+                                                               body.get("bump", "minor"), body.get("body", "")))
+                if path == "/v1/projects/history":
+                    return self.send_json(200, {"commits": PROJECTS.history(folder), "version": PROJECTS.version(folder),
+                                                "remote": PROJECTS.remote(folder)})
+                if body.get("confirmed") is not True:
+                    return self.error(400, "GitHub actions need the founder's confirmation.")
+                if path == "/v1/projects/github":
+                    return self.send_json(200, PROJECTS.create_github(folder, body.get("name", ""),
+                                                                      body.get("private", True) is not False))
+                return self.send_json(200, PROJECTS.push(folder))
             except Exception as e:
                 return self.error(400, str(e))
         if path in ("/v1/projects/create", "/v1/projects/run", "/v1/projects/check"):

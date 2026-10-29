@@ -299,7 +299,9 @@ Run **as many startups as you like**, each with its own team of agents who act l
 | 🚀 Deploy | Your deploy command runs with your own CLI login (`vercel`, `netlify`, `fly`…); the live URL is read from its output. | Yes |
 | 🌍 Live | agentim checks the URL answers, posts it in the agents room, and the team meets to plan the launch. | No |
 
-Every step reports in the agents room, and the agents see where the launch stands in every meeting. agentim never pushes your code, never stores deploy secrets (your CLIs keep their own logins), and only works in folders you picked.
+Every step reports in the agents room, and the agents see where the launch stands in every meeting. agentim never stores deploy secrets (your CLIs keep their own logins), and only works in folders you picked.
+
+**Versions and GitHub.** Every build (and every launch-mode run) becomes a version: agentim commits the project with a Conventional Commit message (`feat: build v1 of Leafy`, `feat: update Leafy`, `fix: …`), tags it **v0.1.0, v0.2.0…** (patch bumps for fixes) and adds it to `CHANGELOG.md`, newest first, with what changed and whether the tests passed. The Launch tab's **Code & versions** list shows each version, its message, time and commit. After the first version, Tim suggests a GitHub repo: **Create GitHub repo…** makes one with your own `gh` login (**private** by default) and pushes every version and tag so far; you choose whether new versions are pushed automatically, or press **Push** when you want. agentim never creates a repo or pushes without your click, and never force-pushes. Versioning is automatic in folders agentim created; in your own folders it's off unless you turn it on (so your work in progress is never swept into a commit).
 
 **⚡ Launch mode: everyone at once.** Press **Launch mode** on a startup (you confirm, since it writes code) and the meeting rhythm is skipped: Claude Code designs v1 while *every* employee delivers their part of the launch at the same time, finished and ready to use:
 

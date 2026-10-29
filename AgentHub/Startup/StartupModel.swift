@@ -234,6 +234,10 @@ struct StartupClient {
         try await send("v1/startups/\(id)/autocomplete", body: ["answers": answers])
     }
 
+    func getJSON<T: Decodable>(_ path: String) async throws -> T {
+        try await send(path)
+    }
+
     func sendDirectChat(_ path: String, body: [String: Any]?) async throws -> DirectChat {
         try await send(path, body: body)
     }
@@ -286,6 +290,10 @@ final class StartupModel {
     var draftKind = "startup"
     var draftSources: [ProjectSource] = []
     var draftRepo = ""
+    /// The project's commits and versions, and the GitHub repo form.
+    var versions: ProjectVersions?
+    var githubDraft: GitHubDraft?
+    var confirmingGitHub = false
     /// The launch-mode confirmation dialog is open.
     var confirmingSprint = false
     /// The open 1:1 chat: who, the conversation, and the unsent message.
