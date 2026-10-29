@@ -226,7 +226,8 @@ class Work:
 YOUR TASK (from {source}): {task['task']}
 {f"Input from {source}:{chr(10)}{task['input']}{chr(10)}" if task['input'] else ""}
 Do the task now and deliver the actual result (the draft, copy, numbers, plan or checklist), not a promise or a plan to \
-do it. Under 300 words, markdown.""" + (f"""
+do it. Under 300 words, markdown. Never invent traction (users, sign-ups, revenue, customers): use a placeholder like \
+[X users] unless the founder or the team gave the real number.""" + (f"""
 Then, on the last lines, hand off to colleagues who should continue from your result ({colleagues}), 0–2 of them:
 HANDOFF: @FirstName: <their next task, building on your result> — ETA: in N min
 Write "HANDOFF: none" if your result needs nothing more.""" if can_hand_off else ""))

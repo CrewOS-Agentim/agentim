@@ -481,6 +481,7 @@ class EventWorkTests(unittest.TestCase):
                          [(a, "done", "founder"), (b, "done", a)], "the handoff started the next agent right away")
         self.assertIn("The ROI page copy", board[1]["input"], "the next agent gets the result as input")
         self.assertIn("Input from", self.prompts[1])
+        self.assertIn("Never invent traction", self.prompts[0])
         room = "\n".join(m["content"] for m in self.mode.store.messages(self.sid))
         self.assertIn("➡️ Handed off to @" + self.first[b], room)
         self.assertNotIn("HANDOFF:", room)
