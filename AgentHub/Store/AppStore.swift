@@ -638,8 +638,12 @@ final class AppStore {
         router = snapshot.router
         servers = snapshot.servers ?? []
         serverModels = snapshot.serverModels ?? []
+        let before = (agents.map(\.name), skills.map(\.slug))
         addNewBuiltIns()
         isLoading = false
+        // New or retired built-ins changed the lists while loading (when saves are off): save them now.
+        // Saved right away: the "seen" list is already updated, so these changes must not be lost on a quick quit.
+        if before.0 != agents.map(\.name) || before.1 != skills.map(\.slug) { saveNow() }
     }
 
     /// Adds built-in skills and agents shipped after this Mac first ran agentim (e.g. QA Engineer),
