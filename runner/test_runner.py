@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 import urllib.request
 
 import runner
@@ -263,6 +264,56 @@ class ProjectsTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_launch_create_run_and_check(self):
+        with mock.patch.object(runner, "REPOS_DIR", os.path.join(self.tmp.name, "repos")):
+            first = self.projects.create("Leafy Plants!")
+            second = self.projects.create("Leafy Plants!")
+        self.assertTrue(first.endswith(os.path.join("startups", "leafy-plants")))
+        self.assertTrue(second.endswith("leafy-plants-2"), "never reuses another startup's folder")
+        self.assertIn(["git", "init", "--quiet", first], self.calls)
+
+        result = self.projects.run_command(self.svc, "npm test")
+        self.assertEqual(self.calls[-1], ["/bin/zsh", "-lc", "npm test"])
+        self.assertEqual(result["exit_code"], 0)
+        with self.assertRaises(RuntimeError):
+            self.projects.run_command(self.svc, "  ")
+
+        class Resp:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        self.assertTrue(runner.Projects.check("https://leafy.app", opener=lambda req, timeout: Resp())["ok"])
+        self.assertFalse(runner.Projects.check("file:///etc/passwd")["ok"], "only http(s)")
+
+    def test_versions_commit_tag_changelog_and_history(self):
+        import subprocess as sp
+        projects = runner.Projects(agents=self.projects.agents, run=sp.run, which=lambda n: None)
+        folder = os.path.join(self.tmp.name, "leafy")
+        os.makedirs(folder)
+        sp.run(["git", "init", "--quiet", folder], check=True)
+        sp.run(["git", "-C", folder, "config", "user.email", "t@example.com"], check=True)
+        sp.run(["git", "-C", folder, "config", "user.name", "Test"], check=True)
+        self.assertEqual(projects.commit(folder, "feat: nothing yet"), {"committed": False, "version": None})
+        open(os.path.join(folder, "index.html"), "w").write("<h1>Leafy</h1>")
+        first = projects.commit(folder, "feat: v1 landing page", body="Built by Claude Code\nTests: npm test passed")
+        self.assertEqual((first["committed"], first["version"]), (True, "v0.1.0"))
+        open(os.path.join(folder, "index.html"), "a").write("<p>fixed</p>")
+        self.assertEqual(projects.commit(folder, "fix: typo", bump="patch")["version"], "v0.1.1")
+        open(os.path.join(folder, "app.js"), "w").write("// pricing")
+        self.assertEqual(projects.commit(folder, "feat: pricing page")["version"], "v0.2.0")
+        changelog = open(os.path.join(folder, "CHANGELOG.md")).read()
+        self.assertLess(changelog.index("## v0.2.0"), changelog.index("## v0.1.1"), "newest first")
+        self.assertIn("- Tests: npm test passed", changelog)
+        history = projects.history(folder)
+        self.assertEqual([(c["subject"], c["version"]) for c in history],
+                         [("feat: pricing page", "v0.2.0"), ("fix: typo", "v0.1.1"), ("feat: v1 landing page", "v0.1.0")])
+        self.assertEqual(runner.Projects.bumped("v1.4.2", "major"), "v2.0.0")
+        with self.assertRaisesRegex(RuntimeError, "No GitHub repo"):
+            projects.push(folder)
+        with self.assertRaisesRegex(RuntimeError, "GitHub CLI"):
+            projects.create_github(folder, "leafy")
 
     def test_summary_has_readme_stack_structure_and_commits(self):
         summary = self.projects.summary(self.svc)

@@ -38,7 +38,7 @@
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
 - 🚀 **Startup Mode**: pitch any number of startups; Tim interviews you (10 YC + co-founder questions), then a team of agent employees works on each one every 10–30 minutes
-- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics
+- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics, AWS DevOps
 - 👔 a full **C-suite of agents** (CTO, CPO, CMO, CRO, CFO, COO, CISO, CHRO, CDO, CCO, CLO, CAIO) that also sit in your startup meetings
 - 🐞 ships **agents with their own cartoon avatars** (made locally with LTX), including a **QA Engineer** that tests web apps, mobile apps and APIs and a **Data Analyst** that sets up your metrics
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
@@ -241,6 +241,7 @@ Skills are plain `SKILL.md` files in [`gateway/skills/`](gateway/skills). They'r
 | 📋 **Project Manager**: plans, critical path, risks, status updates | `/project-manager plan a launch in 6 weeks` |
 | 🎥 **Video Director**: idea → on-model shot prompts → LTX clips | `/video-director a 20 s teaser for my app` |
 | 🌐 **Web QA**: risk-based test plans, Playwright tests, accessibility, flaky-test hygiene, bug reports | `/web-qa test the checkout on staging.example.com` |
+| ☁️ **AWS DevOps**: reads a simple project and lays out at least 3 ways to deploy it to AWS (static, serverless, containers, managed platform…), each with architecture, monthly cost, effort, tradeoffs and exact commands; then recommends one and plans CI/CD (GitHub Actions + OIDC), security, monitoring and rollback. Also an agent: **AWS DevOps**. | `/aws-devops my Express API + React app with Postgres, 200 users a day` |
 | 📱 **Mobile QA**: device matrix, Maestro/XCUITest/Espresso flows, interruptions, offline, store readiness | `/mobile-qa test our iOS onboarding` |
 | 🔌 **API Testing**: contract, negative and OWASP API Top 10 checks, pytest + httpx suites, k6 load tests | `/api-testing here's our openapi.yaml` |
 | 🧠 **CTO** · 🧭 **CPO** · 📣 **CMO** · 💼 **CRO**: tech, product, marketing and revenue leadership playbooks | `/cro build our Q3 revenue plan` |
@@ -265,7 +266,7 @@ Group changes by user benefit, lead with the biggest one, keep it under 200 word
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 
 1. **Pitch it.** Write the pitch in the Mac app (Startups → New startup) or in any chat: `/startup new <your pitch>`.
-2. **Get interviewed.** Agent Tim asks **10 follow-up questions**: five as a 🟧 *YC partner* (who desperately needs it, how do you know, why now, what's the insight, how you make money) and five as a 🤝 *co-founder* (why you, commitment and runway, roles, the first 90 days, kill criteria). They come from the `yc-partner` and `co-founder` skills; swap in your own with `AGENTIM_STARTUP_SKILLS`. In the Mac app they come one at a time, with **Back**, **Skip** and **Next** (Return moves on), and a progress bar.
+2. **Get interviewed.** Agent Tim asks **10 follow-up questions**: five as a 🟧 *YC partner* (who desperately needs it, how do you know, why now, what's the insight, how you make money) and five as a 🤝 *co-founder* (why you, commitment and runway, roles, the first 90 days, kill criteria). They come from the `yc-partner` and `co-founder` skills; swap in your own with `AGENTIM_STARTUP_SKILLS`. In the Mac app they come one at a time, with **Back**, **Skip** and **Next** (Return moves on), and a progress bar. Not sure what to say? **✨ Suggest an answer** has the AI draft one from your pitch and your other answers (edit it, then Next), and **Let AI answer the rest** fills every blank question (marked *suggested by AI*, so the agents know it's a guess) and starts the team.
 3. **The agents get to work.** Every 10–30 minutes, at a random time, the team of agents meets. You can watch the meeting live in the **Agents room**: who's in it, who's typing, and each message as it lands. Their standing goals: **launch fast, measure, improve**; sales and marketing grow revenue and weekly active users; design ships one improvement every meeting; and Nina (Data Analyst) reports the numbers. The people who spoke least recently report what they did, propose next moves in their own area, and ask colleagues for help by name ("@Leo, can you mock the ROI page?"). Tim (CEO) updates the living plan and sends you a two-line summary in your chat.
 
 | | The team |
@@ -287,6 +288,38 @@ Run **as many startups as you like**, each with its own team of agents who act l
 **Review every meeting.** The **Meetings** tab lists each meeting with its date and time, who was there and Tim's summary; open one to read the whole conversation.
 
 **Link your code.** A startup can point at local folders and GitHub repos (`owner/name`, cloned on your Mac): every meeting starts with a short brief of each codebase (README, structure, stack, recent commits), so the agents improve what's really there.
+
+**Launch it: design → code → test → deploy → live.** Every startup and idea has a **Launch** tab with its own settings: the project folder (created for you if there's no code yet), the stack, the test command, where to deploy (Vercel, Netlify, Cloudflare Pages, Fly.io, Docker on this Mac, or your own command) and the live URL. Then the pipeline really ships it:
+
+| Stage | What happens | Needs your OK |
+|---|---|---|
+| 📐 Design | Claude Code designs v1 from the team's plan: screens, look, data model, stack, files. Read-only. The team meets on it. | No |
+| 🛠️ Build | Claude Code writes the code in the project folder, adds tests and a README, and reports the test command. | Yes |
+| 🧪 Test | Your test command runs; if it fails, Claude Code gets one try to fix it (without weakening the tests). | Part of the build |
+| 🚀 Deploy | Your deploy command runs with your own CLI login (`vercel`, `netlify`, `fly`…); the live URL is read from its output. | Yes |
+| 🌍 Live | agentim checks the URL answers, posts it in the agents room, and the team meets to plan the launch. | No |
+
+Every step reports in the agents room, and the agents see where the launch stands in every meeting. agentim never stores deploy secrets (your CLIs keep their own logins), and only works in folders you picked.
+
+**Versions and GitHub.** Every build (and every launch-mode run) becomes a version: agentim commits the project with a Conventional Commit message (`feat: build v1 of Leafy`, `feat: update Leafy`, `fix: …`), tags it **v0.1.0, v0.2.0…** (patch bumps for fixes) and adds it to `CHANGELOG.md`, newest first, with what changed and whether the tests passed. The Launch tab's **Code & versions** list shows each version, its message, time and commit. After the first version, Tim suggests a GitHub repo: **Create GitHub repo…** makes one with your own `gh` login (**private** by default) and pushes every version and tag so far; you choose whether new versions are pushed automatically, or press **Push** when you want. agentim never creates a repo or pushes without your click, and never force-pushes. Versioning is automatic in folders agentim created; in your own folders it's off unless you turn it on (so your work in progress is never swept into a commit).
+
+**⚡ Launch mode: everyone at once.** Press **Launch mode** on a startup (you confirm, since it writes code) and the meeting rhythm is skipped: Claude Code designs v1 while *every* employee delivers their part of the launch at the same time, finished and ready to use:
+
+| Who | Delivers |
+|---|---|
+| CPO | v1 scope, activation event, success metric |
+| Designer | landing page and key screens, colors, fonts, onboarding |
+| CTO | stack, data model, routes, analytics events |
+| CMO | landing copy, LinkedIn and X launch posts, Show HN / Product Hunt blurb |
+| Marketing Automation | welcome email sequence and the activation funnel |
+| CRO | pricing, outreach messages, 20 target customers, objection answers |
+| BizDev, CFO, Data, CISO, COO | launch partners, unit economics, tracking plan, security checklist, launch-day run sheet |
+
+Then Claude Code builds the product **with** that launch kit (the CMO's copy on the landing page, the tracking plan instrumented) and saves the marketing assets under `launch/` in the project, the tests run, and the team holds a wrap-up meeting with action items. Deploying stays a separate confirmation, and nothing is posted to social networks: the posts and emails are ready for you to send. Ollama runs up to 4 requests at once (`OLLAMA_NUM_PARALLEL`, default 4) so the agents really work in parallel. API: `POST /v1/startups/{id}/sprint {"confirmed": true}`.
+
+**Action items with owners and ETAs, in time.** The team meets every 10–30 minutes, so plans run on minutes and hours, never days. Every meeting ends with action items, each with one owner and an ETA like *in 45 min*, *in 2 h*, *by 15:30*, or a dependency: *right after Leo's ROI page*. ETAs nobody set are marked *proposed*, and a meeting that forgot action items gives one to each person who spoke. The next meeting opens with the open items, their due times and what's **overdue**, and each owner reports done or a new ETA. They show as a table (with the due time) in the meeting notes, in Tim's summary, and as `action_items` (`eta`, `due`, `after`) in `GET /v1/startups/{id}/meetings/{n}`.
+
+**1:1 with one employee.** The **1:1** tab lets you chat privately with any employee (or Agent Tim): pick their avatar and ask for a draft, a number or a decision. They answer in character with the plan and recent meetings in mind; the agents room doesn't see it, but they bring what you agreed into the next meeting. API: `GET`/`POST /v1/startups/{id}/dm/{person}`.
 
 **Ideas for your code.** Choose **New → Idea for my code**, describe a feature, and pick the services it touches (one folder or repo each). **Plan with Claude Code** asks your local Claude Code to plan the change in *each* service, read-only, and posts every plan in the agents room before the team meets on it. **Build it…** (after you confirm) lets Claude Code make the changes in each service and reports the changed files; it never commits or pushes. Folders you pick are added to `AGENTIM_WORKSPACES`; agentim can't read anything else.
 

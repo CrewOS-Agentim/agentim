@@ -19,6 +19,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
+from .launch import PROVIDERS, Launch, pipeline_view, status_line
 from .llm import LLMError, labelled
 
 log = logging.getLogger("agentim.startup")
@@ -173,6 +174,28 @@ FALLBACK_QUESTIONS = [
 
 
 # How every startup's agents work, whatever the idea.
+def time_rule(startup):
+    """The team meets every few minutes, so plans are in minutes and hours, never days."""
+    return (f"Timelines are in minutes or hours, never days: the team meets every {startup.get('min_minutes', 10)}–"
+            f"{startup.get('max_minutes', 30)} minutes and it's {time.strftime('%H:%M')} now. Give every ETA as "
+            "\"in 40 min\", \"in 2 h\", \"by 15:30\", or as a dependency: \"right after Leo's ROI page\".")
+
+
+# Launch mode: the one finished deliverable each role produces, in parallel, right now.
+SPRINT_TASKS = {
+    "product": "the v1 scope: the one core user, the 3–5 must-have features (and what's cut), the activation event and the success metric with a target",
+    "design": "the design brief for v1: the landing page and the 2–3 key screens section by section, the look (colors with hex codes, fonts, tone), and the onboarding flow",
+    "engineering": "the technical plan: the stack, the data model, the pages and API routes, analytics events to instrument, and what to skip for v1",
+    "marketing": "the launch kit: the landing page copy (headline, subheadline, 3 benefit blocks, call to action, FAQ), a launch post for LinkedIn, a post for X, and a Show HN / Product Hunt blurb",
+    "automation": "the welcome email sequence (3 emails with subject lines and body) and the sign-up → activation funnel with the trigger for each email",
+    "sales": "the pricing (plans and prices), the cold outreach message (email + LinkedIn DM), the first 20 target customer profiles to contact, and answers to the top 3 objections",
+    "bizdev": "the 5 best partners or channels to launch with, why each, and the exact intro message to send each",
+    "finance": "the unit economics for the chosen pricing (price, cost to serve, margin, payback) and the launch budget",
+    "data": "the tracking plan: the north star metric, the funnel steps, the events with names and properties, and the launch-day dashboard",
+    "security": "the launch security checklist: auth, secrets, data protection, privacy policy and terms points, and the top 3 risks to fix before going live",
+    "operations": "the launch-day run sheet: who does what in the first 2 hours after going live, by the minute or hour, and how the team reports back",
+}
+
 OPERATING_PRINCIPLES = """How this company works:
 - Launch fast: ship the smallest useful version this week, not the perfect one next month.
 - Measure everything: every launch has a metric and a target; look at the numbers before deciding.
@@ -276,11 +299,31 @@ def brief(startup):
     else:
         head = f"Startup: {startup['name']}\nPitch: {startup['pitch']}"
     code = startup.get("codebase")
+    launch = status_line(startup)
+    if startup.get("open_items"):
+        launch = (launch + "\n\n" if launch else "") + ("Open action items (if one is yours, say if it's done, or "
+                                                          "your new ETA):\n" + startup["open_items"])
     return (head + (f"\n\nFounder's answers:\n{answers}" if answers else "")
-            + (f"\n\nThe code (improve it based on what's really there; name files when you can):\n{code}" if code else ""))
+            + (f"\n\nThe code (improve it based on what's really there; name files when you can):\n{code}" if code else "")
+            + (f"\n\n{launch}" if launch else ""))
 
 
-def person_prompt(person, startup, discussion, team=None, playbook=""):
+def person_prompt(person, startup, discussion, team=None, playbook="", private=""):
+    return person_context(person, startup, discussion, team, playbook, private) + f"""
+
+Post your update for this meeting, under 180 words, in first person like you would in the team Slack:
+1. What you did or decided since last time (be specific and realistic).
+2. Two or three concrete next moves in YOUR area: what, an ETA in minutes or hours (or "right after @Name's …"), \
+and the metric that shows it worked.
+3. One ask for a colleague, by first name (e.g. "@Leo, can you…").
+If the Founder said something in the discussion, start by answering it or acting on it: the founder has the final call.
+React to colleagues (agree, push back, or build on one point) but never repeat or re-list their suggestions.
+Do NOT write the company plan or other people's tasks: Agent Tim keeps the plan.
+Remember: you are {person.first}, the {person.title}. Everything you propose is about {person.owns}.
+Short bullets, no headings, start with "{person.first} here:"."""
+
+
+def person_context(person, startup, discussion, team=None, playbook="", private=""):
     colleagues = ", ".join(f"{p.first} ({p.title})" for p in (team or TEAM) if p.key != person.key) or "none yet"
     return f"""You are {person.name}, {person.title} at "{startup['name']}", an early-stage startup. You are a real, \
 experienced employee: you own {person.owns}. Your colleagues: {colleagues}. The CEO is Agent Tim.
@@ -295,18 +338,11 @@ Your goal: {ROLE_GOALS.get(person.key, f"push {person.owns} forward, fast and me
 {f"Your persona (stay in character, including how you talk): {person.persona}" if person.persona else ""}
 {f"Your playbook as {person.title}:{chr(10)}{playbook}" if playbook else ""}
 
+{time_rule(startup)}
+
 Recent team discussion:
 {discussion or "(this is the team's first meeting)"}
-
-Post your update for this meeting, under 180 words, in first person like you would in the team Slack:
-1. What you did or decided since last time (be specific and realistic).
-2. Two or three concrete next moves in YOUR area: what, by when, and the metric that shows it worked.
-3. One ask for a colleague, by first name (e.g. "@Leo, can you…").
-If the Founder said something in the discussion, start by answering it or acting on it: the founder has the final call.
-React to colleagues (agree, push back, or build on one point) but never repeat or re-list their suggestions.
-Do NOT write the company plan or other people's tasks: Agent Tim keeps the plan.
-Remember: you are {person.first}, the {person.title}. Everything you propose is about {person.owns}.
-Short bullets, no headings, start with "{person.first} here:"."""
+{f"{chr(10)}Your private chat with the founder (act on what you agreed there):{chr(10)}{private}" if private else ""}"""
 
 
 def ceo_prompt(startup, posted, people=None, founder_notes=()):
@@ -318,6 +354,7 @@ def ceo_prompt(startup, posted, people=None, founder_notes=()):
     return f"""You are Agent Tim, CEO of "{startup['name']}". Keep the company plan short, concrete and current.
 
 {OPERATING_PRINCIPLES}
+{time_rule(startup)}
 
 {brief(startup)}
 
@@ -329,7 +366,7 @@ Updates from this meeting:
 
 Reply with exactly two parts:
 PLAN:
-<the full updated plan in markdown with: Top 3 priorities, Metrics (north star, active users, revenue, with current value or "not measured yet" and a target), By area (short bullets per area that changed, with the owner's first name), Experiments this week, Open questions. Keep what still holds, replace what changed, under 400 words.>
+<the full updated plan in markdown with: Top 3 priorities, Metrics (north star, active users, revenue, with current value or "not measured yet" and a target), By area (short bullets per area that changed, with the owner's first name and an ETA in minutes or hours, or "after <Name>'s <task>"), Next experiments, Open questions. Keep what still holds, replace what changed, under 400 words.>
 SUMMARY:
 <2–3 sentences for the founder: what the team decided and the single next action, with the owner's name.>"""
 
@@ -337,9 +374,13 @@ SUMMARY:
 MINUTES_SECTIONS = ["Summary", "Decisions", "Action items", "Metrics", "Open questions"]
 
 
-def minutes_prompt(startup, round_no, transcript):
-    return f"""You are the note-taker for "{startup['name']}" (meeting {round_no}). Write the meeting minutes from \
-this transcript. Only what was actually said: never invent numbers, owners or dates.
+def minutes_prompt(startup, round_no, transcript, today=None):
+    today = today or time.strftime("%A, %b %d, %Y, %H:%M")
+    return f"""You are the note-taker for "{startup['name']}" (meeting {round_no}, today is {today}). Write the \
+meeting minutes from this transcript. Only what was actually said: never invent numbers or decisions.
+Every action item needs ONE owner (a first name from the meeting) and an ETA in time, never days: "in 30 min", \
+"in 2 h", "by 15:30", or a dependency: "after Leo's ROI page". Use what the meeting said; if it said nothing, \
+propose a realistic one and add "(proposed)".
 
 Transcript:
 {transcript}
@@ -350,7 +391,8 @@ Reply in markdown with exactly these sections, short bullets:
 ## Decisions
 - <decision> (who decided or proposed it)
 ## Action items
-- **<Owner first name>**: <task> (by <when, if said>)
+- **<Owner first name>**: <task> — ETA: <in N min | in N h | by HH:MM | after <Name>'s <task>> [(proposed)]
+(at least one per person who committed to something; never leave the owner or the ETA out)
 ## Metrics
 - <metric: value or target, as mentioned> (or "- None mentioned")
 ## Open questions
@@ -375,6 +417,88 @@ def minutes_section(minutes, name):
     match = re.search(rf"^## {re.escape(name)}\s*$(.*?)(?=^## |\Z)", minutes, re.MULTILINE | re.DOTALL)
     body = match.group(1).strip() if match else ""
     return body or None
+
+
+ACTION = re.compile(r"^-\s*(?:\[[ x]\]\s*)?(?:\*\*(?P<owner>[^*]+?)\*\*\s*[:\-–—]?\s*)?(?P<rest>.+)$")
+ETA = re.compile(r"\s*(?:[—–-]\s*)?\(?\s*(?:ETA|by|due)\s*:?\s*(?P<eta>[^)]+?)\)?\s*(?P<proposed>\(proposed\))?\s*$",
+                 re.IGNORECASE)
+
+
+REL_ETA = re.compile(r"\bin\s+(\d+(?:\.\d+)?)\s*(m|mins?|minutes?|h|hrs?|hours?)\b", re.IGNORECASE)
+CLOCK_ETA = re.compile(r"(?:^|\bby\s+|\bat\s+)(\d{1,2}):(\d{2})\b", re.IGNORECASE)
+AFTER_ETA = re.compile(r"^(?:right\s+|just\s+)?(?:after|once|as soon as|when)\s+(.+)$", re.IGNORECASE)
+
+
+def eta_due(eta, base):
+    """("in 45 min" | "by 15:30" | "after Leo's …", meeting time) → (due timestamp or None, dependency or None)."""
+    after = AFTER_ETA.match(eta.strip())
+    if after:
+        return None, after.group(1).strip()
+    rel = REL_ETA.search(eta)
+    if rel and base:
+        amount, unit = float(rel.group(1)), rel.group(2).lower()
+        return base + amount * (3600 if unit.startswith("h") else 60), None
+    clock = CLOCK_ETA.search(eta)
+    if clock and base:
+        local = time.localtime(base)
+        due = time.mktime((local.tm_year, local.tm_mon, local.tm_mday, int(clock.group(1)), int(clock.group(2)), 0,
+                           0, 0, -1))
+        return (due + 86400 if due < base - 3600 else due), None
+    return None, None
+
+
+def parse_action_items(minutes, base=None):
+    """The minutes' action items as [{"owner", "task", "eta", "proposed", "due", "after"}] (`base`: the meeting's
+    end, so "in 45 min" gets a due time)."""
+    items = []
+    for line in (minutes_section(minutes, "Action items") or "").splitlines():
+        match = ACTION.match(line.strip())
+        if not match or line.strip().lower().startswith(("- none", "- no action")):
+            continue
+        rest = match.group("rest").strip()
+        eta = ETA.search(rest)
+        task = rest[:eta.start()].strip(" —–-:") if eta else rest
+        items.append({"owner": (match.group("owner") or "").strip().rstrip(":"), "task": task,
+                      "eta": eta.group("eta").strip() if eta else "",
+                      "proposed": bool(eta and (eta.group("proposed") or "proposed" in eta.group("eta").lower()))})
+    for item in items:
+        item["eta"] = re.sub(r"\s*\(?proposed\)?\s*$", "", item["eta"], flags=re.IGNORECASE).strip()
+        item["due"], item["after"] = eta_due(item["eta"], base)
+    return items
+
+
+def open_items_text(items, now):
+    """The last meeting's action items for the next meeting's brief, with what's due or overdue."""
+    lines = []
+    for item in items:
+        if item.get("after"):
+            when = f"after {item['after']}"
+        elif item.get("due"):
+            minutes = int((item["due"] - now) / 60)
+            when = (f"due {time.strftime('%H:%M', time.localtime(item['due']))}, "
+                    + (f"OVERDUE by {-minutes} min" if minutes < 0 else f"in {minutes} min"))
+        else:
+            when = item.get("eta") or "no ETA"
+        lines.append(f"- {item['owner']}: {item['task']} ({when})")
+    return "\n".join(lines)
+
+
+def with_owners_and_etas(minutes, speakers, now, default_eta="in 1 h"):
+    """Makes sure every action item has an owner and an ETA (and that the meeting has action items at all):
+    a missing owner becomes Tim (the CEO follows up), a missing ETA becomes a proposed "in 1 h"."""
+    items = parse_action_items(minutes) or [
+        {"owner": name, "task": "follow up on what they committed to in this meeting", "eta": "", "proposed": True}
+        for name in speakers] or [{"owner": "Tim", "task": "set next steps", "eta": "", "proposed": True}]
+    lines = []
+    for item in items:
+        eta = item["eta"] or default_eta
+        proposed = item["proposed"] or not item["eta"]
+        lines.append(f"- **{item['owner'] or 'Tim'}**: {item['task']} — ETA: {eta}{' (proposed)' if proposed else ''}")
+    body = "\n".join(lines)
+    if minutes_section(minutes, "Action items") is None and "## Action items" not in minutes:
+        return minutes.rstrip() + f"\n\n## Action items\n{body}\n"
+    return re.sub(r"(^## Action items\s*$)(.*?)(?=^## |\Z)", lambda m: f"{m.group(1)}\n{body}\n\n", minutes,
+                  count=1, flags=re.MULTILINE | re.DOTALL).rstrip() + "\n"
 
 
 def fallback_minutes(messages, people):
@@ -402,8 +526,10 @@ class StartupStore:
 
     COLUMNS = ["id", "name", "pitch", "questions", "answers", "status", "plan", "min_minutes", "max_minutes",
                "next_run", "rounds", "notify_channel", "notify_chat", "created", "updated", "team", "alumni",
-               "kind", "sources"]
-    JSON_COLUMNS = ("questions", "answers", "team", "alumni", "sources")
+               "kind", "sources", "config", "pipeline"]
+    JSON_COLUMNS = ("questions", "answers", "team", "alumni", "sources", "config", "pipeline")
+    # Written only by save_launch, so a long meeting saving its plan never overwrites launch progress.
+    LAUNCH_COLUMNS = ("config", "pipeline")
 
     def __init__(self, db: sqlite3.Connection, lock: threading.Lock):
         self.db, self.lock = db, lock
@@ -415,11 +541,14 @@ class StartupStore:
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_team_messages (
                 startup_id TEXT, round INTEGER, role TEXT, content TEXT, ts REAL)""")
             self.db.execute("CREATE INDEX IF NOT EXISTS startup_team_messages_id ON startup_team_messages (startup_id, ts)")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS startup_dms (
+                startup_id TEXT, person TEXT, role TEXT, content TEXT, ts REAL)""")
+            self.db.execute("CREATE INDEX IF NOT EXISTS startup_dms_id ON startup_dms (startup_id, person, ts)")
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_meeting_minutes (
                 startup_id TEXT, round INTEGER, minutes TEXT, created REAL, PRIMARY KEY (startup_id, round))""")
             # Databases from before editable teams: add the new columns in place.
             existing = {row[1] for row in self.db.execute("PRAGMA table_info(startups)")}
-            for column in ("team", "alumni", "kind", "sources"):
+            for column in ("team", "alumni", "kind", "sources", "config", "pipeline"):
                 if column not in existing:
                     self.db.execute(f"ALTER TABLE startups ADD COLUMN {column} TEXT")
 
@@ -428,7 +557,7 @@ class StartupStore:
             return None
         s = dict(zip(self.COLUMNS, row))
         for column in self.JSON_COLUMNS:
-            s[column] = json.loads(s[column] or "[]")
+            s[column] = json.loads(s[column] or ("{}" if column in self.LAUNCH_COLUMNS else "[]"))
         return s
 
     def get(self, startup_id):
@@ -445,15 +574,26 @@ class StartupStore:
         startup["updated"] = time.time()
         startup.setdefault("team", [])
         startup.setdefault("alumni", [])
-        values = [json.dumps(startup[c]) if c in self.JSON_COLUMNS else startup[c] for c in self.COLUMNS]
+        columns = [c for c in self.COLUMNS if c not in self.LAUNCH_COLUMNS]
+        values = [json.dumps(startup[c]) if c in self.JSON_COLUMNS else startup[c] for c in columns]
+        updates = ", ".join(f"{c} = excluded.{c}" for c in columns if c != "id")
         with self.lock, self.db:
-            self.db.execute(f"INSERT OR REPLACE INTO startups ({', '.join(self.COLUMNS)}) VALUES ({', '.join('?' * len(self.COLUMNS))})",
-                            values)
+            self.db.execute(f"INSERT INTO startups ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))}) "
+                            f"ON CONFLICT(id) DO UPDATE SET {updates}", values)
         return startup
+
+    def save_launch(self, startup_id, config=None, pipeline=None):
+        """Writes only the launch columns (config and/or pipeline)."""
+        with self.lock, self.db:
+            if config is not None:
+                self.db.execute("UPDATE startups SET config = ? WHERE id = ?", (json.dumps(config), startup_id))
+            if pipeline is not None:
+                self.db.execute("UPDATE startups SET pipeline = ? WHERE id = ?", (json.dumps(pipeline), startup_id))
 
     def delete(self, startup_id):
         with self.lock, self.db:
             self.db.execute("DELETE FROM startups WHERE id = ?", (startup_id,))
+            self.db.execute("DELETE FROM startup_dms WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_team_messages WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_meeting_minutes WHERE startup_id = ?", (startup_id,))
 
@@ -461,6 +601,16 @@ class StartupStore:
         with self.lock, self.db:
             self.db.execute("INSERT INTO startup_team_messages VALUES (?, ?, ?, ?, ?)",
                             (startup_id, round_no, role, content, time.time()))
+
+    def add_dm(self, startup_id, person, role, content):
+        with self.lock, self.db:
+            self.db.execute("INSERT INTO startup_dms VALUES (?, ?, ?, ?, ?)", (startup_id, person, role, content, time.time()))
+
+    def dms(self, startup_id, person, limit=60):
+        with self.lock:
+            rows = self.db.execute("""SELECT role, content, ts FROM startup_dms WHERE startup_id = ? AND person = ?
+                ORDER BY ts DESC, rowid DESC LIMIT ?""", (startup_id, person, limit)).fetchall()
+        return [{"role": role, "content": c, "ts": ts} for role, c, ts in reversed(rows)]
 
     def messages(self, startup_id, limit=40):
         with self.lock:
@@ -523,6 +673,8 @@ class StartupMode:
         self.locks = {}
         self.locks_guard = threading.Lock()
         self.live = {}  # startup id → {"round", "speaking", "started"} while a meeting runs
+        self.launch = Launch(self)  # design → build → test → deploy → live
+        self.dm_typing = set()  # (startup id, person key) while that person writes a 1:1 reply
 
     # ---- creating a startup: pitch → follow-up questions → team
 
@@ -589,6 +741,53 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
         if len(startup["answers"]) >= len(startup["questions"]):
             self._launch(startup)
         return self.store.save(startup)
+
+    AI_MARK = " (suggested by AI)"
+
+    def suggest_answers(self, startup_id, indexes=None, answers=None):
+        """AI drafts answers to the interview questions from the pitch (and the founder's own answers so far).
+        Returns {index: answer} for the asked questions (default: every unanswered one)."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        questions = startup["questions"]
+        given = [str(a).strip() for a in (answers if answers is not None else startup["answers"])][:len(questions)]
+        wanted = [i for i in (indexes if indexes is not None else range(len(questions)))
+                  if 0 <= i < len(questions) and (indexes is not None or i >= len(given) or not given[i])]
+        if not wanted:
+            return {}
+        known = "\n".join(f"Q: {questions[i]}\nA: {a}" for i, a in enumerate(given) if a and i not in wanted)
+        asked = "\n".join(f"{i + 1}. {questions[i]}" for i in wanted)
+        reply = self._ask(f"""You are helping a founder fill in a startup interview. Startup: "{startup['name']}".
+Pitch: {startup['pitch']}
+{f"What the founder already answered:{chr(10)}{known}" if known else ""}
+
+Answer each question below as the founder would: specific, realistic and consistent with the pitch, 1–3 sentences, \
+with concrete guesses (a named customer type, a price, a number) rather than "it depends". Never contradict the founder.
+
+{asked}
+
+Reply with one line per question, starting with its number exactly as above, like "{wanted[0] + 1}. <answer>".""",
+                          f"Startup interview · {startup['name']} · AI answers") or ""
+        found = {}
+        for line in reply.splitlines():
+            match = re.match(r"^\s*\**(\d+)[.)]\**\s*(.+)$", line)
+            if match and int(match.group(1)) - 1 in wanted:
+                found[int(match.group(1)) - 1] = match.group(2).strip().strip("*").strip()
+        if not found:
+            raise ValueError("No model could suggest answers right now. Check that a model is running.")
+        return found
+
+    def autocomplete(self, startup_id, answers=None):
+        """AI answers every remaining question (marked as suggested by AI), then the team starts."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        given = [str(a).strip() for a in (answers if answers is not None else startup["answers"])][:len(startup["questions"])]
+        suggested = self.suggest_answers(startup_id, answers=given)
+        full = [given[i] if i < len(given) and given[i]
+                else (suggested[i] + self.AI_MARK if i in suggested else "") for i in range(len(startup["questions"]))]
+        return self.answer(startup_id, full)
 
     def skip_questions(self, startup_id):
         startup = self.store.get(startup_id)
@@ -672,6 +871,95 @@ under 180 words, start with "{person.first} here:"."""
         finally:
             if owns_live and self.live.get(startup_id, {}).get("direct"):
                 self.live.pop(startup_id, None)
+
+    # ---- launch mode: everyone works in parallel
+
+    def sprint_task(self, startup_id, person):
+        """One employee's launch-mode deliverable: finished and ready to use, posted in the agents room."""
+        startup = self.store.get(startup_id)
+        team, people = team_of(startup), people_of(startup)
+        current = {p.key for p in team} | {CEO.key, FOUNDER.key}
+        discussion = "\n".join(f"{people[m['role']].name}: {m['content']}"
+                               for m in self.store.messages(startup_id, limit=8) if m["role"] in current)
+        task = SPRINT_TASKS.get(person.key, f"the one deliverable in {person.owns} the launch needs most")
+        prompt = (person_context(person, startup, discussion, team, self.playbook(person)) + f"""
+
+LAUNCH MODE: the whole team is working in parallel right now to design, build and launch v1 today. Claude Code is \
+building the product while you work. Deliver, finished and ready to use (not a plan or a promise): {task}.
+Under 350 words, concrete names and numbers, markdown. Start with a one-line bold title. Don't start with your name.""")
+        reply = self._ask(prompt, f"Launch mode · {startup['name']} · {person.first}")
+        if reply:
+            self.store.add_message(startup_id, startup["rounds"] + 1, person.key, reply)
+        return person, reply
+
+    # ---- open action items and 1:1 chats with one employee
+
+    def open_items(self, startup_id, last_round):
+        """The last meeting's action items with their due times, for the next meeting's brief."""
+        if last_round < 1:
+            return ""
+        messages = self.store.round_messages(startup_id, last_round)
+        items = parse_action_items(self.store.minutes(startup_id, last_round), messages[-1]["ts"] if messages else None)
+        return open_items_text(items, self.clock()) if items else ""
+
+    def private_notes(self, startup_id, person, limit=6):
+        lines = [f"{'Founder' if m['role'] == FOUNDER.key else person.first}: {m['content']}"
+                 for m in self.store.dms(startup_id, person.key, limit)]
+        return "\n".join(lines)[-1200:]
+
+    def chat_person(self, startup, key):
+        people = {**{p.key: p for p in team_of(startup)}, CEO.key: CEO}
+        if key not in people:
+            raise ValueError("Pick someone on the team.")
+        return people[key]
+
+    def dm(self, startup_id, key):
+        """A private 1:1 chat between the founder and one employee."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        person = self.chat_person(startup, key)
+        return {"person": person_dict(person) if person.key != CEO.key else
+                {"key": CEO.key, "name": CEO.name, "title": CEO.title, "emoji": CEO.emoji},
+                "messages": self.store.dms(startup_id, key), "typing": (startup_id, key) in self.dm_typing}
+
+    def send_dm(self, startup_id, key, text):
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        person = self.chat_person(startup, key)
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("Write something.")
+        if len(text) > MAX_FOUNDER_MESSAGE:
+            raise ValueError(f"Keep it under {MAX_FOUNDER_MESSAGE} characters.")
+        self.store.add_dm(startup_id, key, FOUNDER.key, text)
+        self.dm_typing.add((startup_id, key))
+        threading.Thread(target=self.reply_dm, args=(startup_id, person), daemon=True).start()
+        return self.dm(startup_id, key)
+
+    def reply_dm(self, startup_id, person):
+        try:
+            startup = self.store.get(startup_id)
+            team, people = team_of(startup), people_of(startup)
+            current = {p.key for p in team} | {CEO.key, FOUNDER.key}
+            discussion = "\n".join(f"{people[m['role']].name}: {m['content']}"
+                                   for m in self.store.messages(startup_id, limit=8) if m["role"] in current)
+            history = "\n".join(f"{'Founder' if m['role'] == FOUNDER.key else person.first}: {m['content']}"
+                                for m in self.store.dms(startup_id, person.key, 12))
+            prompt = (person_context(person, startup, discussion, team, self.playbook(person)) + f"""
+
+You're in a private 1:1 chat with the founder (the team doesn't see it). The chat so far:
+{history}
+
+Reply to the founder's last message as {person.first}: direct, helpful and in character, under 150 words. If they ask \
+for work, do it now when you can (a draft, numbers, a plan) and give an ETA in minutes or hours for the rest. Don't \
+start with your name.""")
+            reply = self._ask(prompt, f"Startup · {startup['name']} · 1:1 with {person.first}")
+            self.store.add_dm(startup_id, person.key, person.key,
+                              reply or f"(No model answered: {person.first} couldn't reply. Check that a model is running.)")
+        finally:
+            self.dm_typing.discard((startup_id, person.key))
 
     # ---- code: context for meetings, and planning/building ideas with Claude Code on the Mac
 
@@ -758,6 +1046,7 @@ under 180 words, start with "{person.first} here:"."""
         summary = next((m["content"] for m in reversed(messages) if m["role"] == CEO.key), None)
         return {"round": round_no, "started": messages[0]["ts"], "ended": messages[-1]["ts"],
                 "summary": summary, "minutes": self.store.minutes(startup_id, round_no),
+                "action_items": parse_action_items(self.store.minutes(startup_id, round_no), messages[-1]["ts"]),
                 "messages": messages, "people": people}
 
     def write_minutes(self, startup_id, round_no):
@@ -773,6 +1062,9 @@ under 180 words, start with "{person.first} here:"."""
         reply = self._ask(minutes_prompt(startup, round_no, transcript),
                           f"Startup meeting · {startup['name']} · minutes") or ""
         minutes = clean_minutes(reply) or fallback_minutes(messages, people)
+        speakers = [people[m["role"]].first for m in messages if m["role"] in people
+                    and m["role"] not in ("founder", "ceo", "claude-code")]
+        minutes = with_owners_and_etas(minutes, list(dict.fromkeys(speakers)), messages[-1]["ts"])
         self.store.save_minutes(startup_id, round_no, minutes)
         return minutes
 
@@ -847,6 +1139,7 @@ under 180 words, start with "{person.first} here:"."""
                 return None
             round_no = startup["rounds"] + 1
             startup["codebase"] = self.codebase(startup)
+            startup["open_items"] = self.open_items(startup_id, startup["rounds"])
             team, people = team_of(startup), people_of(startup)
             current = {p.key for p in team} | {CEO.key, FOUNDER.key, CODER.key}
 
@@ -863,7 +1156,8 @@ under 180 words, start with "{person.first} here:"."""
                                      "speakers": [p.key for p in speakers]}
             for person in speakers:
                 self.live[startup_id]["speaking"] = person.key
-                reply = self._ask(person_prompt(person, startup, discussion(), team, self.playbook(person)),
+                reply = self._ask(person_prompt(person, startup, discussion(), team, self.playbook(person),
+                                                private=self.private_notes(startup_id, person)),
                                   f"Startup meeting · {startup['name']} · {person.first}")
                 if not reply:
                     continue
@@ -957,7 +1251,10 @@ under 180 words, start with "{person.first} here:"."""
     def summary(self, startup):
         return {**{k: startup[k] for k in ("id", "name", "pitch", "status", "rounds", "next_run", "min_minutes",
                                            "max_minutes", "created", "updated")},
-                "kind": startup.get("kind") or "startup", "sources": startup.get("sources") or []}
+                "kind": startup.get("kind") or "startup", "sources": startup.get("sources") or [],
+                "live_url": (startup.get("config") or {}).get("live_url") or None,
+                "launch_stage": next((s["stage"] for s in reversed(pipeline_view(startup))
+                                      if s["status"] in ("done", "running", "waiting", "failed")), None)}
 
     def detail(self, startup_id):
         startup = self.store.get(startup_id)
@@ -968,7 +1265,10 @@ under 180 words, start with "{person.first} here:"."""
                   for k, p in people_of(startup).items()}
         return {**startup, "now": self.clock(), "team": [person_dict(p) for p in team_of(startup)], "people": people,
                 "presets": ROLE_PRESETS, "messages": self.store.messages(startup_id),
-                "meeting": self.live.get(startup_id)}
+                "meeting": self.live.get(startup_id),
+                "pipeline": pipeline_view(startup), "launch_running": startup_id in self.launch.running,
+                "sprint": (startup.get("pipeline") or {}).get("sprint"),
+                "providers": [{"id": k, **v} for k, v in PROVIDERS.items()]}
 
     def listing(self):
         return {"now": self.clock(), "team": self.team(), "presets": ROLE_PRESETS,

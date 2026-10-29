@@ -233,6 +233,9 @@ private struct Interview: View {
     @State private var forward = true
 
     private var index: Int { min(model.questionIndex, max(detail.questions.count - 1, 0)) }
+    private var answerIsEmpty: Bool {
+        index >= model.draftAnswers.count || model.draftAnswers[index].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -309,6 +312,21 @@ private struct Interview: View {
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
                     .strokeBorder(Theme.accent.opacity(0.4), lineWidth: 1.5))
+
+            HStack(spacing: Theme.s2) {
+                Button {
+                    Task { await model.suggestAnswer(stackRoot: stackRoot) }
+                } label: {
+                    if model.suggestingIndex == index {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Thinking…") }
+                    } else {
+                        Label(answerIsEmpty ? "Suggest an answer" : "Suggest another", systemImage: "sparkles")
+                    }
+                }
+                .disabled(model.suggestingIndex != nil || model.busy != nil)
+                .help("The AI drafts an answer from your pitch and your other answers. Edit it, then press Next.")
+                Text("The AI drafts it from your pitch; edit anything.").font(.caption).foregroundStyle(.secondary)
+            }
         }
         .card(radius: Theme.radiusLarge, padding: Theme.s6)
         .animation(.easeOut(duration: 0.22), value: index)
@@ -325,6 +343,15 @@ private struct Interview: View {
             .controlSize(.large)
             .disabled(index == 0 || model.busy != nil)
             .keyboardShortcut(.leftArrow, modifiers: .command)
+
+            Button {
+                Task { await model.autocompleteAnswers(stackRoot: stackRoot) }
+            } label: {
+                Label("Let AI answer the rest", systemImage: "wand.and.stars")
+            }
+            .controlSize(.large)
+            .disabled(model.busy != nil || model.suggestingIndex != nil)
+            .help("The AI answers every blank question from your pitch (marked \"suggested by AI\"), then the agents start.")
 
             Menu("Skip all") {
                 Button("Skip the rest and start the agents now") { Task { await model.skipQuestions(stackRoot: stackRoot) } }
@@ -461,6 +488,15 @@ private struct RunningStartup: View {
                         Text("Claude Code will edit files in: \((detail.sources ?? []).map(\.label).joined(separator: ", ")). It doesn't commit or push; review the changes with git before you do.")
                     }
             }
+            Button("Launch mode", systemImage: "bolt.fill") { model.confirmingSprint = true }
+                .buttonStyle(.borderedProminent).tint(.orange)
+                .disabled(model.busy != nil || detail.sprint?.status == "running" || detail.launch_running == true)
+                .help("Every agent at once: design, build and the launch kit, then a wrap-up meeting")
+                .confirmationDialog("Start launch mode for \(detail.name)?", isPresented: $model.confirmingSprint) {
+                    Button("Launch now") { Task { await model.runSprint(stackRoot: stackRoot) } }
+                } message: {
+                    Text("Every agent works at once: Claude Code designs v1 and then writes the code in \((detail.config?.folder).flatMap { $0.isEmpty ? nil : $0 } ?? "a new project folder"), while the team writes the launch kit (landing copy, posts, emails, pricing, tracking), saved under launch/. Nothing is deployed or posted until you say so.")
+                }
             Button("Agents", systemImage: "person.2.badge.gearshape") { model.beginTeamEdit() }
             Button("Meet now", systemImage: "person.3.fill") { Task { await model.meetNow(stackRoot: stackRoot) } }
                 .disabled(model.busy != nil || !detail.isRunning)
@@ -775,7 +811,7 @@ private struct RoomOrNotes: View {
     let stackRoot: URL?
     @State private var tab = Tab.room
 
-    enum Tab: String, CaseIterable { case room = "Agents room", notes = "Meetings" }
+    enum Tab: String, CaseIterable { case room = "Agents room", oneOnOne = "1:1", launch = "Launch", notes = "Meetings" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -787,6 +823,8 @@ private struct RoomOrNotes: View {
             .padding(.horizontal, 20).padding(.top, 14)
             switch tab {
             case .room: TeamRoom(model: model, detail: detail, stackRoot: stackRoot)
+            case .oneOnOne: OneOnOnePanel(model: model, detail: detail, stackRoot: stackRoot)
+            case .launch: LaunchPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .notes: MeetingNotesList(model: model, detail: detail, stackRoot: stackRoot)
             }
         }
@@ -889,6 +927,9 @@ private struct MeetingNotesView: View {
                                     .controlSize(.small)
                             }
                         }
+                        if let items = notes.action_items, !items.isEmpty {
+                            ActionItemsTable(items: items)
+                        }
                         if let minutes = notes.minutes {
                             PlanText(markdown: minutes)
                         } else if let summary = notes.summary {
@@ -961,5 +1002,48 @@ private struct MeetingOverCard: View {
         .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.accentColor.opacity(0.25)))
         .padding(.top, 4)
+    }
+}
+
+/// Every action item with its owner and ETA ("proposed" when the meeting didn't set a date).
+private struct ActionItemsTable: View {
+    let items: [MeetingNotes.ActionItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Action items", systemImage: "checklist").font(.headline)
+            Grid(alignment: .leading, horizontalSpacing: Theme.s3, verticalSpacing: 6) {
+                GridRow {
+                    Text("Owner"); Text("What"); Text("ETA")
+                }
+                .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Divider()
+                ForEach(items, id: \.self) { item in
+                    GridRow {
+                        Text(item.owner).font(.callout.weight(.semibold))
+                        Text(LocalizedStringKey(item.task)).font(.callout).fixedSize(horizontal: false, vertical: true)
+                        HStack(spacing: 4) {
+                            if let after = item.after {
+                                Label("after \(after)", systemImage: "arrow.turn.down.right").font(.callout)
+                            } else if let due = item.due {
+                                let late = due < Date().timeIntervalSince1970
+                                Text(item.eta).font(.callout)
+                                Text("· " + Date(timeIntervalSince1970: due).formatted(date: .omitted, time: .shortened))
+                                    .font(.callout.weight(.semibold)).foregroundStyle(late ? Color.red : Color.secondary)
+                                    .help(late ? "Overdue" : "Due")
+                            } else {
+                                Text(item.eta).font(.callout)
+                            }
+                            if item.proposed == true {
+                                Text("proposed").font(.caption2).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(Theme.s3)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border))
     }
 }

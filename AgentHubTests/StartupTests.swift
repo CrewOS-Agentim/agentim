@@ -375,6 +375,39 @@ final class StartupTests: XCTestCase {
         XCTAssertNotEqual(StartupModel.withWorkspace("/Users/me/githubber", in: env), env, "a prefix that isn't a parent folder")
     }
 
+    func testDecodesLaunchAndActionItems() throws {
+        var json = try JSONSerialization.jsonObject(with: Data(detailJSON.utf8)) as! [String: Any]
+        json["config"] = ["deploy": "vercel", "live_url": "https://leafy.vercel.app"]
+        json["pipeline"] = [["stage": "design", "status": "done", "output": "One page"], ["stage": "build", "status": "waiting"]]
+        json["providers"] = [["id": "vercel", "name": "Vercel", "command": "npx vercel"]]
+        let detail = try JSONDecoder().decode(StartupDetail.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(detail.config?.deploy, "vercel")
+        XCTAssertEqual(detail.config?.test_command, "", "missing settings decode as empty")
+        XCTAssertEqual(detail.pipeline?.map(\.statusText), ["Done", "Ready"])
+        XCTAssertEqual(LaunchConfig().json["deploy"] as? String, "none")
+        XCTAssertEqual(LaunchConfig().json["versioning"] as? String, "auto")
+        XCTAssertNil(LaunchConfig().json["version"], "the version is agentim's, not a setting")
+        let history = #"{"commits":[{"sha":"abc1234","subject":"feat: build v1 of Leafy","ts":1800000000,"version":"v0.1.0"},{"sha":"def5678","subject":"wip","ts":1799999000}],"version":"v0.1.0","remote":""}"#
+        let versions = try JSONDecoder().decode(ProjectVersions.self, from: Data(history.utf8))
+        XCTAssertEqual(versions.commits.map(\.version), ["v0.1.0", nil])
+        json["sprint"] = ["status": "running", "started": 1_800_000_000]
+        let sprinting = try JSONDecoder().decode(StartupDetail.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(sprinting.sprint?.status, "running")
+
+        let notes = #"{"round":1,"started":0,"ended":1,"summary":null,"messages":[],"people":{},"action_items":[{"owner":"Zoe","task":"Book pilots","eta":"Fri, Oct 30","proposed":true}]}"#
+        let decoded = try JSONDecoder().decode(MeetingNotes.self, from: Data(notes.utf8))
+        XCTAssertEqual(decoded.action_items?.first?.owner, "Zoe")
+
+        let timed = #"{"round":2,"started":0,"ended":1,"summary":null,"messages":[],"people":{},"action_items":[{"owner":"Leo","task":"ROI page","eta":"in 45 min","due":1800000000},{"owner":"Sam","task":"Emails","eta":"after Leo's ROI page","after":"Leo's ROI page"}]}"#
+        let items = try JSONDecoder().decode(MeetingNotes.self, from: Data(timed.utf8)).action_items
+        XCTAssertEqual(items?.first?.due, 1_800_000_000)
+        XCTAssertEqual(items?.last?.after, "Leo's ROI page")
+
+        let chat = #"{"person":{"key":"sales","name":"Zoe Kim","title":"CRO","emoji":"💼"},"messages":[{"role":"founder","content":"Price?","ts":1},{"role":"sales","content":"$290/floor","ts":2}],"typing":false}"#
+        let dm = try JSONDecoder().decode(DirectChat.self, from: Data(chat.utf8))
+        XCTAssertEqual(dm.messages.map(\.fromFounder), [true, false])
+    }
+
     func testDecodesIdeas() throws {
         var json = try JSONSerialization.jsonObject(with: Data(detailJSON.utf8)) as! [String: Any]
         json["kind"] = "idea"

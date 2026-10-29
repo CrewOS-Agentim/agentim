@@ -137,6 +137,17 @@ def make_handler(gateway, channels, catalog):
             parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) == 4 and parts[3] == "versions":  # commits and version tags of the project
+                if not gateway.startup.store.get(parts[2]):
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, gateway.startup.launch.versions(parts[2]))
+            if len(parts) == 5 and parts[3] == "dm":  # a 1:1 chat with one employee
+                try:
+                    return self.send_json(200, gateway.startup.dm(parts[2], parts[4]))
+                except KeyError:
+                    return self.send_json(404, {"error": "no such startup"})
+                except ValueError as e:
+                    return self.send_json(404, {"error": str(e)})
             if len(parts) >= 4 and parts[3] == "meetings":
                 try:
                     if len(parts) == 4:
@@ -181,6 +192,32 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "dm" and len(parts) == 5:
+                    return self.send_json(202, startup.send_dm(startup_id, parts[4], body.get("text", "")))
+                elif action == "suggest":
+                    # AI drafts answers to interview questions (one, or every unanswered one).
+                    index = body.get("index")
+                    found = startup.suggest_answers(startup_id, [int(index)] if index is not None else None,
+                                                    body.get("answers"))
+                    return self.send_json(200, {"suggestions": {str(k): v for k, v in found.items()}})
+                elif action == "autocomplete":
+                    startup.autocomplete(startup_id, body.get("answers"))
+                elif action == "github":
+                    # Creates the project's GitHub repo (the founder confirms; private unless they say otherwise).
+                    startup.launch.create_github(startup_id, body.get("name", ""), body.get("private", True),
+                                                 body.get("auto_push", False), confirmed=body.get("confirmed") is True)
+                elif action == "push":
+                    return self.send_json(200, startup.launch.push(startup_id, confirmed=body.get("confirmed") is True))
+                elif action == "sprint":
+                    # Launch mode: everyone in parallel (design + launch kit), then build, then a wrap-up meeting.
+                    startup.launch.start_sprint(startup_id, confirmed=body.get("confirmed") is True)
+                    return self.send_json(202, {"started": "sprint"})
+                elif action == "launch":
+                    # One pipeline step: design, build, test, deploy or live (build/test/deploy confirmed in the app).
+                    startup.launch.start(startup_id, body.get("stage", ""), confirmed=body.get("confirmed") is True)
+                    return self.send_json(202, {"started": body.get("stage")})
+                elif action == "config":
+                    startup.launch.configure(startup_id, body)
                 elif action == "run":
                     threading.Thread(target=startup.run_round, args=(startup_id,), daemon=True).start()
                     return self.send_json(202, {"started": True})
