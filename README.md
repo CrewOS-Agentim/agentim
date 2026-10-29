@@ -37,7 +37,9 @@
 - 💬 answers you on **Telegram, WhatsApp and Slack**, in text or 🎙️ **voice notes**
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
-- 🚀 **Startup Mode**: pitch any number of startups; Tim interviews you (10 YC + co-founder questions), then a team of agent employees works on each one every 10–30 minutes
+- 🚀 **Projects**: tell it the goal (a new idea, a new project, or a feature for your code); the team checks it's worth building, Agent Tim turns it into a graph of checked tasks, runs the loop every minute (ETAs, Gantt in minutes) and, on autopilot, keeps building until it's developed
+- 🧲 **Recruiter**: finds engineers from their GitHub repos and commits and drafts a personal LinkedIn message you send yourself
+- 🤖 **Claude without an API key**: Opus, Sonnet and Haiku through your Claude login (`claude -p` in tmux)
 - 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics, AWS DevOps
 - 👔 a full **C-suite of agents** (CTO, CPO, CMO, CRO, CFO, COO, CISO, CHRO, CDO, CCO, CLO, CAIO) that also sit in your startup meetings
 - 🐞 ships **agents with their own cartoon avatars** (made locally with LTX), including a **QA Engineer** that tests web apps, mobile apps and APIs and a **Data Analyst** that sets up your metrics
