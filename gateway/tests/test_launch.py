@@ -155,5 +155,38 @@ class ActionItemTests(unittest.TestCase):
         self.assertTrue(all(i["owner"] and i["eta"] for i in notes["action_items"]))
 
 
+class InterviewAutocompleteTests(unittest.TestCase):
+    class AnswerLLM(TeamLLM):
+        def complete(self, model, system, messages, *args, **kwargs):
+            prompt = messages[-1]["content"]
+            if "fill in a startup interview" in prompt:
+                self.interview_prompt = prompt
+                import re
+                numbers = re.findall(r"^(\d+)\. ", prompt, re.MULTILINE)
+                return "\n".join(f"{n}. AI answer {n}" for n in numbers)
+            return super().complete(model, system, messages, *args, **kwargs)
+
+    def test_ai_suggests_one_answer_or_completes_the_rest(self):
+        llm = self.AnswerLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = mode.create(PITCH)
+        n = len(startup["questions"])
+        self.assertEqual(mode.suggest_answers(startup["id"], [2]), {2: "AI answer 3"})
+
+        done = mode.autocomplete(startup["id"], ["Office managers at 50+ person companies"])
+        self.assertEqual(done["status"], "running", "the team starts")
+        self.assertEqual(done["answers"][0], "Office managers at 50+ person companies", "the founder's answer stays")
+        self.assertEqual(len(done["answers"]), n)
+        self.assertTrue(all(a.endswith("(suggested by AI)") for a in done["answers"][1:]))
+        self.assertIn("Office managers", llm.interview_prompt, "the AI builds on what the founder said")
+
+    def test_no_model_is_a_clear_error(self):
+        _, mode = make_startup_mode(llm=TeamLLM())
+        startup = mode.create(PITCH)
+        mode._ask = lambda *a, **k: None
+        with self.assertRaisesRegex(ValueError, "No model"):
+            mode.autocomplete(startup["id"])
+
+
 if __name__ == "__main__":
     unittest.main()

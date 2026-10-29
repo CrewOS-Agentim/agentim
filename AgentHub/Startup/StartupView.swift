@@ -233,6 +233,9 @@ private struct Interview: View {
     @State private var forward = true
 
     private var index: Int { min(model.questionIndex, max(detail.questions.count - 1, 0)) }
+    private var answerIsEmpty: Bool {
+        index >= model.draftAnswers.count || model.draftAnswers[index].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -309,6 +312,21 @@ private struct Interview: View {
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
                     .strokeBorder(Theme.accent.opacity(0.4), lineWidth: 1.5))
+
+            HStack(spacing: Theme.s2) {
+                Button {
+                    Task { await model.suggestAnswer(stackRoot: stackRoot) }
+                } label: {
+                    if model.suggestingIndex == index {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Thinking…") }
+                    } else {
+                        Label(answerIsEmpty ? "Suggest an answer" : "Suggest another", systemImage: "sparkles")
+                    }
+                }
+                .disabled(model.suggestingIndex != nil || model.busy != nil)
+                .help("The AI drafts an answer from your pitch and your other answers. Edit it, then press Next.")
+                Text("The AI drafts it from your pitch; edit anything.").font(.caption).foregroundStyle(.secondary)
+            }
         }
         .card(radius: Theme.radiusLarge, padding: Theme.s6)
         .animation(.easeOut(duration: 0.22), value: index)
@@ -325,6 +343,15 @@ private struct Interview: View {
             .controlSize(.large)
             .disabled(index == 0 || model.busy != nil)
             .keyboardShortcut(.leftArrow, modifiers: .command)
+
+            Button {
+                Task { await model.autocompleteAnswers(stackRoot: stackRoot) }
+            } label: {
+                Label("Let AI answer the rest", systemImage: "wand.and.stars")
+            }
+            .controlSize(.large)
+            .disabled(model.busy != nil || model.suggestingIndex != nil)
+            .help("The AI answers every blank question from your pitch (marked \"suggested by AI\"), then the agents start.")
 
             Menu("Skip all") {
                 Button("Skip the rest and start the agents now") { Task { await model.skipQuestions(stackRoot: stackRoot) } }

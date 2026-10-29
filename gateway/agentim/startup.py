@@ -652,6 +652,53 @@ Format, one per line, numbered 1 to {count}, nothing else. For example:
             self._launch(startup)
         return self.store.save(startup)
 
+    AI_MARK = " (suggested by AI)"
+
+    def suggest_answers(self, startup_id, indexes=None, answers=None):
+        """AI drafts answers to the interview questions from the pitch (and the founder's own answers so far).
+        Returns {index: answer} for the asked questions (default: every unanswered one)."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        questions = startup["questions"]
+        given = [str(a).strip() for a in (answers if answers is not None else startup["answers"])][:len(questions)]
+        wanted = [i for i in (indexes if indexes is not None else range(len(questions)))
+                  if 0 <= i < len(questions) and (indexes is not None or i >= len(given) or not given[i])]
+        if not wanted:
+            return {}
+        known = "\n".join(f"Q: {questions[i]}\nA: {a}" for i, a in enumerate(given) if a and i not in wanted)
+        asked = "\n".join(f"{i + 1}. {questions[i]}" for i in wanted)
+        reply = self._ask(f"""You are helping a founder fill in a startup interview. Startup: "{startup['name']}".
+Pitch: {startup['pitch']}
+{f"What the founder already answered:{chr(10)}{known}" if known else ""}
+
+Answer each question below as the founder would: specific, realistic and consistent with the pitch, 1–3 sentences, \
+with concrete guesses (a named customer type, a price, a number) rather than "it depends". Never contradict the founder.
+
+{asked}
+
+Reply with one line per question, starting with its number exactly as above, like "{wanted[0] + 1}. <answer>".""",
+                          f"Startup interview · {startup['name']} · AI answers") or ""
+        found = {}
+        for line in reply.splitlines():
+            match = re.match(r"^\s*\**(\d+)[.)]\**\s*(.+)$", line)
+            if match and int(match.group(1)) - 1 in wanted:
+                found[int(match.group(1)) - 1] = match.group(2).strip().strip("*").strip()
+        if not found:
+            raise ValueError("No model could suggest answers right now. Check that a model is running.")
+        return found
+
+    def autocomplete(self, startup_id, answers=None):
+        """AI answers every remaining question (marked as suggested by AI), then the team starts."""
+        startup = self.store.get(startup_id)
+        if not startup:
+            raise KeyError(startup_id)
+        given = [str(a).strip() for a in (answers if answers is not None else startup["answers"])][:len(startup["questions"])]
+        suggested = self.suggest_answers(startup_id, answers=given)
+        full = [given[i] if i < len(given) and given[i]
+                else (suggested[i] + self.AI_MARK if i in suggested else "") for i in range(len(startup["questions"]))]
+        return self.answer(startup_id, full)
+
     def skip_questions(self, startup_id):
         startup = self.store.get(startup_id)
         self._launch(startup)

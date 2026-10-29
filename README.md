@@ -38,7 +38,7 @@
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
 - 🚀 **Startup Mode**: pitch any number of startups; Tim interviews you (10 YC + co-founder questions), then a team of agent employees works on each one every 10–30 minutes
-- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics
+- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics, AWS DevOps
 - 👔 a full **C-suite of agents** (CTO, CPO, CMO, CRO, CFO, COO, CISO, CHRO, CDO, CCO, CLO, CAIO) that also sit in your startup meetings
 - 🐞 ships **agents with their own cartoon avatars** (made locally with LTX), including a **QA Engineer** that tests web apps, mobile apps and APIs and a **Data Analyst** that sets up your metrics
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
@@ -241,6 +241,7 @@ Skills are plain `SKILL.md` files in [`gateway/skills/`](gateway/skills). They'r
 | 📋 **Project Manager**: plans, critical path, risks, status updates | `/project-manager plan a launch in 6 weeks` |
 | 🎥 **Video Director**: idea → on-model shot prompts → LTX clips | `/video-director a 20 s teaser for my app` |
 | 🌐 **Web QA**: risk-based test plans, Playwright tests, accessibility, flaky-test hygiene, bug reports | `/web-qa test the checkout on staging.example.com` |
+| ☁️ **AWS DevOps**: reads a simple project and lays out at least 3 ways to deploy it to AWS (static, serverless, containers, managed platform…), each with architecture, monthly cost, effort, tradeoffs and exact commands; then recommends one and plans CI/CD (GitHub Actions + OIDC), security, monitoring and rollback. Also an agent: **AWS DevOps**. | `/aws-devops my Express API + React app with Postgres, 200 users a day` |
 | 📱 **Mobile QA**: device matrix, Maestro/XCUITest/Espresso flows, interruptions, offline, store readiness | `/mobile-qa test our iOS onboarding` |
 | 🔌 **API Testing**: contract, negative and OWASP API Top 10 checks, pytest + httpx suites, k6 load tests | `/api-testing here's our openapi.yaml` |
 | 🧠 **CTO** · 🧭 **CPO** · 📣 **CMO** · 💼 **CRO**: tech, product, marketing and revenue leadership playbooks | `/cro build our Q3 revenue plan` |
@@ -265,7 +266,7 @@ Group changes by user benefit, lead with the biggest one, keep it under 200 word
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 
 1. **Pitch it.** Write the pitch in the Mac app (Startups → New startup) or in any chat: `/startup new <your pitch>`.
-2. **Get interviewed.** Agent Tim asks **10 follow-up questions**: five as a 🟧 *YC partner* (who desperately needs it, how do you know, why now, what's the insight, how you make money) and five as a 🤝 *co-founder* (why you, commitment and runway, roles, the first 90 days, kill criteria). They come from the `yc-partner` and `co-founder` skills; swap in your own with `AGENTIM_STARTUP_SKILLS`. In the Mac app they come one at a time, with **Back**, **Skip** and **Next** (Return moves on), and a progress bar.
+2. **Get interviewed.** Agent Tim asks **10 follow-up questions**: five as a 🟧 *YC partner* (who desperately needs it, how do you know, why now, what's the insight, how you make money) and five as a 🤝 *co-founder* (why you, commitment and runway, roles, the first 90 days, kill criteria). They come from the `yc-partner` and `co-founder` skills; swap in your own with `AGENTIM_STARTUP_SKILLS`. In the Mac app they come one at a time, with **Back**, **Skip** and **Next** (Return moves on), and a progress bar. Not sure what to say? **✨ Suggest an answer** has the AI draft one from your pitch and your other answers (edit it, then Next), and **Let AI answer the rest** fills every blank question (marked *suggested by AI*, so the agents know it's a guess) and starts the team.
 3. **The agents get to work.** Every 10–30 minutes, at a random time, the team of agents meets. You can watch the meeting live in the **Agents room**: who's in it, who's typing, and each message as it lands. Their standing goals: **launch fast, measure, improve**; sales and marketing grow revenue and weekly active users; design ships one improvement every meeting; and Nina (Data Analyst) reports the numbers. The people who spoke least recently report what they did, propose next moves in their own area, and ask colleagues for help by name ("@Leo, can you mock the ROI page?"). Tim (CEO) updates the living plan and sends you a two-line summary in your chat.
 
 | | The team |

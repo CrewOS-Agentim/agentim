@@ -221,6 +221,18 @@ struct StartupClient {
         _ = try await raw("v1/startups/\(id)", method: "DELETE", body: nil)
     }
 
+    /// AI drafts an answer to interview question `index` (0-based), using the pitch and the answers so far.
+    func suggest(_ id: String, index: Int, answers: [String]) async throws -> String? {
+        struct Reply: Decodable { let suggestions: [String: String] }
+        let reply: Reply = try await send("v1/startups/\(id)/suggest", body: ["index": index, "answers": answers])
+        return reply.suggestions[String(index)]
+    }
+
+    /// AI answers every question left blank, then the team starts.
+    func autocomplete(_ id: String, answers: [String]) async throws -> StartupDetail {
+        try await send("v1/startups/\(id)/autocomplete", body: ["answers": answers])
+    }
+
     func sendDetail(_ path: String, body: [String: Any]) async throws -> StartupDetail {
         try await send(path, body: body)
     }
@@ -509,6 +521,36 @@ final class StartupModel {
         let answers = draftAnswers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         await act("Starting the agents…", stackRoot) { client in
             self.detail = try await client.answer(id, answers: answers)
+        }
+    }
+
+    /// The question the AI is drafting an answer for (shows a spinner on the Suggest button).
+    var suggestingIndex: Int?
+
+    /// ✨ Suggest: the AI writes an answer into the box; the founder can edit it before going on.
+    func suggestAnswer(stackRoot: URL?) async {
+        guard let id = detail?.id, questionIndex < draftAnswers.count else { return }
+        let index = questionIndex
+        suggestingIndex = index
+        defer { suggestingIndex = nil }
+        if isDemo {
+            draftAnswers[index] = "Office managers at 50–200 person companies, paying $290 a month per floor."
+            return
+        }
+        let answers = draftAnswers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        await act(nil, stackRoot) { client in
+            if let text = try await client.suggest(id, index: index, answers: answers), index < self.draftAnswers.count {
+                self.draftAnswers[index] = text
+            }
+        }
+    }
+
+    /// The AI answers every blank question (marked "suggested by AI"), then the agents start.
+    func autocompleteAnswers(stackRoot: URL?) async {
+        guard let id = detail?.id else { return }
+        let answers = draftAnswers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        await act("The AI is answering the rest…", stackRoot) { client in
+            self.detail = try await client.autocomplete(id, answers: answers)
         }
     }
 

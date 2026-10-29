@@ -181,6 +181,14 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "suggest":
+                    # AI drafts answers to interview questions (one, or every unanswered one).
+                    index = body.get("index")
+                    found = startup.suggest_answers(startup_id, [int(index)] if index is not None else None,
+                                                    body.get("answers"))
+                    return self.send_json(200, {"suggestions": {str(k): v for k, v in found.items()}})
+                elif action == "autocomplete":
+                    startup.autocomplete(startup_id, body.get("answers"))
                 elif action == "launch":
                     # One pipeline step: design, build, test, deploy or live (build/test/deploy confirmed in the app).
                     startup.launch.start(startup_id, body.get("stage", ""), confirmed=body.get("confirmed") is True)
