@@ -323,40 +323,114 @@ final class AppStore {
         }.joined(separator: "\n\n")
     }
 
-    /// Posts the message, then lets each addressed member answer in turn, each seeing the replies before it.
+    /// Posts the message, then the addressed members answer in turn; with more discussion rounds they keep talking to
+    /// each other (each seeing everything before it) until the rounds run out or everyone passes.
     func sendToMeeting(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
         conversations[index].messages.append(ChatMessage(role: .user, content: text, attachments: attachments.nilIfEmpty))
         let everyone = members(in: conversations[index])
         let speakers = Self.addressed(text, among: everyone)
+        let rounds = max(1, min(conversations[index].discussionRounds ?? 1, Self.maxRounds))
         streamingConversationIDs.insert(conversationID)
         Task {
             defer { streamingConversationIDs.remove(conversationID) }
-            for member in speakers {
-                await meetingReply(from: member, others: everyone.filter { $0.id != member.id }, in: conversationID)
+            for round in 1...rounds {
+                var spoke = false
+                for member in speakers {
+                    let passed = await meetingReply(from: member, others: everyone.filter { $0.id != member.id },
+                                                    in: conversationID, round: round)
+                    spoke = spoke || !passed
+                }
+                if round > 1 && !spoke { break }  // everyone agrees: the discussion is over
             }
         }
     }
 
-    private func meetingReply(from member: Member, others: [Member], in conversationID: UUID) async {
-        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return }
+    static let maxRounds = 5
+
+    /// The model a member thinks with in this group: the one set for them, else (auto-divide) a different available
+    /// model per member, else nil (the router picks).
+    func model(for member: Member, in conversation: Conversation) -> AIModel? {
+        if let id = conversation.memberModels?[member.id], let model = availableModels.first(where: { $0.id == id }) {
+            return model
+        }
+        guard conversation.autoDivideModels == true else { return nil }
+        let chat = availableModels.filter { !$0.isExplicitOnly }
+            .sorted { ($0.qualityTier, $1.displayName) > ($1.qualityTier, $0.displayName) }
+        guard !chat.isEmpty, let index = members(in: conversation).firstIndex(where: { $0.id == member.id }) else { return nil }
+        return chat[index % chat.count]
+    }
+
+    func setMemberModel(_ modelID: String?, for memberID: UUID, in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        var models = conversations[i].memberModels ?? [:]
+        models[memberID] = modelID
+        conversations[i].memberModels = models
+    }
+
+    func setAutoDivide(_ on: Bool, in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].autoDivideModels = on
+    }
+
+    func setDiscussionRounds(_ rounds: Int, in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].discussionRounds = max(1, min(rounds, Self.maxRounds))
+    }
+
+    /// A quick persona for group chats: a name and who they are, saved as an agent.
+    @discardableResult
+    func newPersona(name: String, description: String, in conversationID: UUID? = nil) -> Agent? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !description.isEmpty else { return nil }
+        let agent = Agent(name: name, emoji: "🎭", summary: String(description.prefix(120)),
+                          systemPrompt: "You are \(name). \(description)\nStay in character: your views, your voice, your way of writing.")
+        agents.append(agent)
+        if let conversationID { toggle(agent: agent.id, in: conversationID) }
+        return agent
+    }
+
+    nonisolated static func isPass(_ text: String) -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "*_.!"))
+        return t.uppercased() == "PASS" || t.uppercased().hasPrefix("PASS ") || t.uppercased().hasPrefix("PASS:")
+    }
+
+    /// One member's turn. Returns true when they passed (nothing to add): their empty turn is removed.
+    @discardableResult
+    private func meetingReply(from member: Member, others: [Member], in conversationID: UUID, round: Int = 1) async -> Bool {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return true }
         let names = others.map(\.name).joined(separator: ", ")
+        let turn = round == 1
+            ? """
+              Reply now as \(member.name), from your own expertise. Build on (or push back on) what others said, address them \
+              by name when you do, don't repeat their points, and keep it under 180 words. Start with "\(member.name):".
+              """
+            : """
+              The discussion continues (round \(round)). Reply as \(member.name) to what the others just said: build on it, \
+              push back, or improve the draft, addressing them by name. Work toward what the user asked for. Under 150 words, \
+              start with "\(member.name):". If you have nothing new to add and agree with where it landed, reply with exactly PASS.
+              """
         let ask = """
         You're in a group chat with the user\(names.isEmpty ? "" : " and \(names)"). Here's the conversation so far:
 
         \(transcript(conversation))
 
-        Reply now as \(member.name), from your own expertise. Build on (or push back on) what others said, address them \
-        by name when you do, don't repeat their points, and keep it under 180 words. Start with "\(member.name):".
+        \(turn)
         """
         let agent = member.agent
         let reply = ChatMessage(role: .assistant, content: "", agentID: member.agent?.id, skillID: member.skill?.id)
-        guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return true }
         conversations[c].messages.append(reply)
         do {
             let decision = try ModelRouter(available: availableModels, settings: router).route(
                 RoutingRequest(text: ask, history: [], agent: agent, conversationPin: conversation.pinnedModelID, isOnline: isOnline))
-            let targets = ([decision.model] + decision.fallbacks.prefix(1)).compactMap { model in client(for: model).map { (model, $0) } }
+            // The member's own model first (set for them, or divided automatically), then the router's picks.
+            let own = model(for: member, in: conversation)
+            let ranked = (own.map { [$0] } ?? []) + [decision.model] + decision.fallbacks
+            var seen = Set<String>()
+            let ordered = ranked.filter { seen.insert($0.id).inserted }
+            let targets = ordered.prefix(2).compactMap { model in client(for: model).map { (model, $0) } }
             guard !targets.isEmpty else { throw RoutingError.noModelsAvailable }
             let system = member.skill.map { "You are the \($0.name) specialist in this group chat.\n\n## Skill: \($0.name)\n\($0.instructions)" }
                 ?? systemPrompt(agent: agent, message: ask)
@@ -364,7 +438,7 @@ final class AppStore {
                 updateReply(reply.id, in: conversationID) {
                     $0.content = ""
                     $0.modelID = model.id
-                    $0.routingReason = "\(member.name) in the group chat"
+                    $0.routingReason = "\(member.name) in the group chat" + (round > 1 ? " · round \(round)" : "")
                 }
                 do {
                     let request = ChatRequest(model: model.modelName, system: system,
@@ -376,9 +450,13 @@ final class AppStore {
                     updateReply(reply.id, in: conversationID) {
                         $0.content = Self.withoutSpeakerPrefix($0.content, name: member.name)
                     }
-                    return
+                    if round > 1, Self.isPass(message(reply.id, in: conversationID)?.content ?? "") {
+                        removeMessage(reply.id, in: conversationID)  // nothing to add: no empty bubble
+                        return true
+                    }
+                    return false
                 } catch {
-                    if let content = message(reply.id, in: conversationID)?.content, !content.isEmpty { return }
+                    if let content = message(reply.id, in: conversationID)?.content, !content.isEmpty { return false }
                 }
             }
             throw RoutingError.noModelsAvailable
@@ -388,6 +466,12 @@ final class AppStore {
                 $0.content = "\(member.name) couldn't answer: \(error.localizedDescription)"
             }
         }
+        return false
+    }
+
+    private func removeMessage(_ id: UUID, in conversationID: UUID) {
+        guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[c].messages.removeAll { $0.id == id }
     }
 
     nonisolated static func withoutSpeakerPrefix(_ text: String, name: String) -> String {

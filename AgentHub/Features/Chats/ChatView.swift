@@ -518,6 +518,12 @@ struct StackedAvatars: View {
 private struct ParticipantsBar: View {
     @Environment(AppStore.self) private var store
     let conversation: Conversation
+    @State private var newPersona = false
+    @State private var personaName = ""
+    @State private var personaDescription = ""
+
+    private var chatModels: [AIModel] { store.availableModels.filter { !$0.isExplicitOnly } }
+    private var rounds: Int { conversation.discussionRounds ?? 1 }
 
     var body: some View {
         let members = store.members(in: conversation)
@@ -525,26 +531,19 @@ private struct ParticipantsBar: View {
             StackedAvatars(members: members)
             VStack(alignment: .leading, spacing: 0) {
                 Text("Group chat").font(.callout.weight(.semibold))
-                Text(members.isEmpty ? "No members yet" : "\(members.count) member\(members.count == 1 ? "" : "s") · you")
+                Text(members.isEmpty ? "No members yet"
+                     : "\(members.count) member\(members.count == 1 ? "" : "s") · " + (rounds == 1 ? "one answer each"
+                        : rounds >= AppStore.maxRounds ? "they talk until they agree" : "\(rounds) rounds of discussion"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(members) { member in
-                        HStack(spacing: 5) {
-                            MemberAvatar(member: member, size: 20)
-                            Text(member.name).font(.callout)
-                            Button { store.toggle(member, in: conversation.id) } label: { Image(systemName: "xmark.circle.fill") }
-                                .buttonStyle(.borderless).foregroundStyle(.secondary)
-                                .help("Remove \(member.name) from the group")
-                        }
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Theme.surface, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Theme.border))
-                    }
+                    ForEach(members) { member in chip(member) }
                 }
             }
+            discussionMenu
             Menu {
+                Button("New persona…", systemImage: "theatermasks") { newPersona = true }
                 Section("Agents") {
                     ForEach(store.agents.filter { agent in !members.contains { $0.id == agent.id } }) { agent in
                         Button("\(agent.emoji) \(agent.name)") { store.toggle(agent: agent.id, in: conversation.id) }
@@ -560,10 +559,101 @@ private struct ParticipantsBar: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .popover(isPresented: $newPersona, arrowEdge: .bottom) { personaForm }
         }
         .padding(.horizontal, Theme.s6)
         .padding(.vertical, Theme.s2)
         .background(.bar)
+    }
+
+    /// A member: their model (set for them, divided automatically, or picked by the router), and remove.
+    private func chip(_ member: AppStore.Member) -> some View {
+        let model = store.model(for: member, in: conversation)
+        let pinned = conversation.memberModels?[member.id] != nil
+        return Menu {
+            Section("\(member.name) thinks with") {
+                Button { store.setMemberModel(nil, for: member.id, in: conversation.id) } label: {
+                    Label(conversation.autoDivideModels == true ? "Divided automatically" : "Auto (the router picks)",
+                          systemImage: pinned ? "circle" : "checkmark.circle.fill")
+                }
+                ForEach(chatModels) { option in
+                    Button { store.setMemberModel(option.id, for: member.id, in: conversation.id) } label: {
+                        Label(option.displayName,
+                              systemImage: conversation.memberModels?[member.id] == option.id ? "checkmark.circle.fill" : "circle")
+                    }
+                }
+            }
+            Divider()
+            Button("Remove from the group", systemImage: "person.badge.minus", role: .destructive) {
+                store.toggle(member, in: conversation.id)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                MemberAvatar(member: member, size: 20)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(member.name).font(.callout)
+                    if let model {
+                        Text(model.displayName).font(.caption2).foregroundStyle(pinned ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                            .lineLimit(1)
+                    }
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Theme.surface, in: Capsule())
+            .overlay(Capsule().strokeBorder(Theme.border))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("\(member.name): choose their model, or remove them")
+    }
+
+    /// How the members talk: one answer each, a few rounds, or until they agree; and one model per member.
+    private var discussionMenu: some View {
+        Menu {
+            Picker("After your message", selection: Binding(get: { rounds },
+                                                          set: { store.setDiscussionRounds($0, in: conversation.id) })) {
+                Text("Each answers once").tag(1)
+                Text("2 rounds: they reply to each other").tag(2)
+                Text("3 rounds").tag(3)
+                Text("Until they agree (max \(AppStore.maxRounds))").tag(AppStore.maxRounds)
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Toggle("A different model for each member", isOn: Binding(
+                get: { conversation.autoDivideModels == true },
+                set: { store.setAutoDivide($0, in: conversation.id) }))
+        } label: {
+            Label("Discussion", systemImage: "bubble.left.and.bubble.right")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Let the members talk to each other after your message, and choose how models are divided")
+    }
+
+    private var personaForm: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            Text("New persona").font(.headline)
+            TextField("Name, e.g. Skeptical Editor", text: $personaName).textFieldStyle(.roundedBorder)
+            TextField("Who they are and how they write, e.g. \"A blunt NYT editor who cuts every extra word\"",
+                      text: $personaDescription, axis: .vertical)
+                .lineLimit(3...6).textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") { newPersona = false }
+                Button("Add to the group") {
+                    store.newPersona(name: personaName, description: personaDescription, in: conversation.id)
+                    personaName = ""
+                    personaDescription = ""
+                    newPersona = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(personaName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || personaDescription.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(Theme.s4)
+        .frame(width: 360)
     }
 }
 

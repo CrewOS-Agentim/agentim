@@ -72,6 +72,33 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertTrue(store.transcript(withReply).contains("Web QA: Found 2 bugs."))
     }
 
+    @MainActor
+    func testAgentsTalkToEachOtherWithTheirOwnModels() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        store.agents = [cto, cmo, qa]
+        let group = store.newMeeting(with: [cto, cmo, qa])
+        store.setDiscussionRounds(9, in: group.id)
+        XCTAssertEqual(store.conversations.first { $0.id == group.id }?.discussionRounds, AppStore.maxRounds, "capped")
+        let members = store.members(in: store.conversations.first { $0.id == group.id }!)
+        XCTAssertNil(store.model(for: members[0], in: store.conversations.first { $0.id == group.id }!),
+                     "no models on this test Mac: the router picks")
+        store.setMemberModel("some-model", for: cto.id, in: group.id)
+        XCTAssertEqual(store.conversations.first { $0.id == group.id }?.memberModels?[cto.id], "some-model")
+        store.setAutoDivide(true, in: group.id)
+        XCTAssertEqual(store.conversations.first { $0.id == group.id }?.autoDivideModels, true)
+
+        let persona = store.newPersona(name: "Skeptical Editor", description: "A blunt editor who cuts every extra word.",
+                                       in: group.id)
+        XCTAssertEqual(persona?.emoji, "🎭")
+        XCTAssertTrue(persona?.systemPrompt.contains("Stay in character") == true)
+        XCTAssertTrue(store.members(in: store.conversations.first { $0.id == group.id }!).contains { $0.name == "Skeptical Editor" })
+        XCTAssertNil(store.newPersona(name: " ", description: "x"))
+
+        XCTAssertTrue(AppStore.isPass("PASS"))
+        XCTAssertTrue(AppStore.isPass("**Pass.**"))
+        XCTAssertFalse(AppStore.isPass("Passing thought: let's ship Friday"))
+    }
+
     func testCloudKeysGoToTheGatewayEnv() {
         let env = "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=\n"
         XCTAssertEqual(HostController.withEnv("ANTHROPIC_API_KEY", "sk-ant-1", in: env), "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=sk-ant-1\n")
