@@ -233,6 +233,10 @@ struct StartupClient {
         try await send("v1/startups/\(id)/autocomplete", body: ["answers": answers])
     }
 
+    func sendDirectChat(_ path: String, body: [String: Any]?) async throws -> DirectChat {
+        try await send(path, body: body)
+    }
+
     func sendDetail(_ path: String, body: [String: Any]) async throws -> StartupDetail {
         try await send(path, body: body)
     }
@@ -281,6 +285,10 @@ final class StartupModel {
     var draftKind = "startup"
     var draftSources: [ProjectSource] = []
     var draftRepo = ""
+    /// The open 1:1 chat: who, the conversation, and the unsent message.
+    var dmKey: String?
+    var dmChat: DirectChat?
+    var dmDraft = ""
     /// The launch settings being edited (nil when not editing).
     var launchDraft: LaunchConfig?
     /// "build" or "deploy" while its confirmation dialog is open.
@@ -1067,6 +1075,9 @@ struct MeetingNotes: Decodable, Identifiable {
         let task: String
         let eta: String
         var proposed: Bool? = nil
+        /// When it's due (for "in 45 min" / "by 15:30"), or what it waits for ("after Leo's ROI page").
+        var due: Double? = nil
+        var after: String? = nil
     }
 
     /// The body of one "## Section" of the minutes.

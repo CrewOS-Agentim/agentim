@@ -802,7 +802,7 @@ private struct RoomOrNotes: View {
     let stackRoot: URL?
     @State private var tab = Tab.room
 
-    enum Tab: String, CaseIterable { case room = "Agents room", launch = "Launch", notes = "Meetings" }
+    enum Tab: String, CaseIterable { case room = "Agents room", oneOnOne = "1:1", launch = "Launch", notes = "Meetings" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -814,6 +814,7 @@ private struct RoomOrNotes: View {
             .padding(.horizontal, 20).padding(.top, 14)
             switch tab {
             case .room: TeamRoom(model: model, detail: detail, stackRoot: stackRoot)
+            case .oneOnOne: OneOnOnePanel(model: model, detail: detail, stackRoot: stackRoot)
             case .launch: LaunchPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .notes: MeetingNotesList(model: model, detail: detail, stackRoot: stackRoot)
             }
@@ -1013,7 +1014,17 @@ private struct ActionItemsTable: View {
                         Text(item.owner).font(.callout.weight(.semibold))
                         Text(LocalizedStringKey(item.task)).font(.callout).fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 4) {
-                            Text(item.eta).font(.callout)
+                            if let after = item.after {
+                                Label("after \(after)", systemImage: "arrow.turn.down.right").font(.callout)
+                            } else if let due = item.due {
+                                let late = due < Date().timeIntervalSince1970
+                                Text(item.eta).font(.callout)
+                                Text("· " + Date(timeIntervalSince1970: due).formatted(date: .omitted, time: .shortened))
+                                    .font(.callout.weight(.semibold)).foregroundStyle(late ? Color.red : Color.secondary)
+                                    .help(late ? "Overdue" : "Due")
+                            } else {
+                                Text(item.eta).font(.callout)
+                            }
                             if item.proposed == true {
                                 Text("proposed").font(.caption2).foregroundStyle(.orange)
                             }

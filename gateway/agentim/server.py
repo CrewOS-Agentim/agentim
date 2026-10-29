@@ -137,6 +137,13 @@ def make_handler(gateway, channels, catalog):
             parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) == 5 and parts[3] == "dm":  # a 1:1 chat with one employee
+                try:
+                    return self.send_json(200, gateway.startup.dm(parts[2], parts[4]))
+                except KeyError:
+                    return self.send_json(404, {"error": "no such startup"})
+                except ValueError as e:
+                    return self.send_json(404, {"error": str(e)})
             if len(parts) >= 4 and parts[3] == "meetings":
                 try:
                     if len(parts) == 4:
@@ -181,6 +188,8 @@ def make_handler(gateway, channels, catalog):
                 elif action in ("plan", "build"):
                     startup.start_work(startup_id, action, confirmed=body.get("confirmed") is True)
                     return self.send_json(202, {"started": action})
+                elif action == "dm" and len(parts) == 5:
+                    return self.send_json(202, startup.send_dm(startup_id, parts[4], body.get("text", "")))
                 elif action == "suggest":
                     # AI drafts answers to interview questions (one, or every unanswered one).
                     index = body.get("index")

@@ -188,5 +188,67 @@ class InterviewAutocompleteTests(unittest.TestCase):
             mode.autocomplete(startup["id"])
 
 
+class TimelineTests(unittest.TestCase):
+    def test_etas_are_times_or_dependencies(self):
+        import time as t
+        from agentim.startup import eta_due, open_items_text, parse_action_items
+        base = t.mktime((2026, 10, 29, 14, 0, 0, 0, 0, -1))
+        self.assertEqual(eta_due("in 45 min", base), (base + 45 * 60, None))
+        self.assertEqual(eta_due("in 2 h", base), (base + 7200, None))
+        self.assertEqual(eta_due("by 15:30", base), (base + 90 * 60, None))
+        self.assertEqual(eta_due("right after Leo's ROI page", base), (None, "Leo's ROI page"))
+        minutes = ("## Action items\n- **Zoe**: book 3 pilots — ETA: in 30 min\n"
+                   "- **Sam**: wire the email sequence — ETA: after Leo's ROI page\n## Metrics\n- None")
+        items = parse_action_items(minutes, base)
+        self.assertEqual([(i["due"], i["after"]) for i in items], [(base + 1800, None), (None, "Leo's ROI page")])
+        text = open_items_text(items, base + 40 * 60)
+        self.assertIn("Zoe: book 3 pilots (due 14:30, OVERDUE by 10 min)", text)
+        self.assertIn("Sam: wire the email sequence (after Leo's ROI page)", text)
+
+    def test_meetings_plan_in_minutes_and_review_open_items(self):
+        llm = TeamLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = mode.create(PITCH)
+        mode.skip_questions(startup["id"])
+        mode.run_round(startup["id"])
+        mode.store.save_minutes(startup["id"], 1, "## Action items\n- **Zoe**: book 3 pilots — ETA: in 30 min\n")
+        llm.prompts.clear()
+        mode.run_round(startup["id"])
+        update = next(p for p in llm.prompts if "Post your update" in p)
+        self.assertIn("never days", update)
+        self.assertIn("Open action items", update)
+        self.assertIn("Zoe: book 3 pilots (due", update)
+        self.assertTrue(any("never days" in p for p in llm.prompts if p.startswith("You are the note-taker")))
+
+
+class OneOnOneTests(unittest.TestCase):
+    def test_chat_with_one_employee_privately(self):
+        llm = TeamLLM()
+        _, mode = make_startup_mode(llm=llm)
+        startup = mode.create(PITCH)
+        mode.skip_questions(startup["id"])
+        key = mode.detail(startup["id"])["team"][0]["key"]
+        sent = mode.send_dm(startup["id"], key, "Can you price the pilot?")
+        self.assertEqual(sent["messages"][0]["content"], "Can you price the pilot?")
+        import time as t
+        end = t.time() + 5
+        while (startup["id"], key) in mode.dm_typing and t.time() < end:
+            t.sleep(0.01)
+        chat = mode.dm(startup["id"], key)
+        self.assertEqual([m["role"] for m in chat["messages"]], ["founder", key])
+        self.assertFalse(chat["typing"])
+        self.assertTrue(any("private 1:1 chat" in p for p in llm.prompts))
+        self.assertEqual(mode.store.messages(startup["id"]), [], "the agents room doesn't see it")
+
+        llm.prompts.clear()
+        mode.speakers_per_round = len(mode.detail(startup["id"])["team"])
+        mode.run_round(startup["id"])
+        self.assertTrue(any("Your private chat with the founder" in p and "price the pilot" in p for p in llm.prompts),
+                        "the employee brings the 1:1 into the next meeting")
+        with self.assertRaisesRegex(ValueError, "Pick someone"):
+            mode.send_dm(startup["id"], "nobody", "hi")
+        self.assertEqual(mode.dm(startup["id"], "ceo")["person"]["name"], "Agent Tim", "you can DM the CEO too")
+
+
 if __name__ == "__main__":
     unittest.main()

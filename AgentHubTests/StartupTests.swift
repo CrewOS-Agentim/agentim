@@ -389,6 +389,15 @@ final class StartupTests: XCTestCase {
         let notes = #"{"round":1,"started":0,"ended":1,"summary":null,"messages":[],"people":{},"action_items":[{"owner":"Zoe","task":"Book pilots","eta":"Fri, Oct 30","proposed":true}]}"#
         let decoded = try JSONDecoder().decode(MeetingNotes.self, from: Data(notes.utf8))
         XCTAssertEqual(decoded.action_items?.first?.owner, "Zoe")
+
+        let timed = #"{"round":2,"started":0,"ended":1,"summary":null,"messages":[],"people":{},"action_items":[{"owner":"Leo","task":"ROI page","eta":"in 45 min","due":1800000000},{"owner":"Sam","task":"Emails","eta":"after Leo's ROI page","after":"Leo's ROI page"}]}"#
+        let items = try JSONDecoder().decode(MeetingNotes.self, from: Data(timed.utf8)).action_items
+        XCTAssertEqual(items?.first?.due, 1_800_000_000)
+        XCTAssertEqual(items?.last?.after, "Leo's ROI page")
+
+        let chat = #"{"person":{"key":"sales","name":"Zoe Kim","title":"CRO","emoji":"💼"},"messages":[{"role":"founder","content":"Price?","ts":1},{"role":"sales","content":"$290/floor","ts":2}],"typing":false}"#
+        let dm = try JSONDecoder().decode(DirectChat.self, from: Data(chat.utf8))
+        XCTAssertEqual(dm.messages.map(\.fromFounder), [true, false])
     }
 
     func testDecodesIdeas() throws {
