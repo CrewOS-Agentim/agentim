@@ -105,6 +105,13 @@ struct ModelRouter {
             if let id = settings.fallbackModelID, let model = available.first(where: { $0.id == id }) {
                 return decide(model, "Fallback model")
             }
+            // No chat model is up: Claude Code (then Codex / ChatGPT) on this Mac answers instead of an error.
+            let agents = localAgents
+            if let agent = agents.first, !profile.primary.isMedia {
+                return RoutingDecision(model: agent, fallbacks: Array(agents.dropFirst()),
+                                       reason: "No local model is running, so \(agent.displayName) on your Mac answers",
+                                       cleanedText: cleaned, profile: profile)
+            }
             throw RoutingError.noModelsAvailable
         }
         return RoutingDecision(
@@ -149,6 +156,14 @@ struct ModelRouter {
     private func candidates(for profile: TaskProfile) -> [AIModel] {
         if profile.primary.isMedia { return available.filter { $0.capabilities.contains(profile.primary) } }
         return available.filter { !$0.isExplicitOnly }
+    }
+
+    /// Coding agents on this Mac (Claude Code first, then Codex for ChatGPT, then any other).
+    var localAgents: [AIModel] {
+        func rank(_ model: AIModel) -> Int {
+            model.modelName.hasSuffix("claude-code") ? 0 : model.modelName.hasSuffix("codex") ? 1 : 2
+        }
+        return available.filter { $0.capabilities.contains(.agent) }.sorted { rank($0) < rank($1) }
     }
 
     private func bestLocal(_ locals: [AIModel], _ profile: TaskProfile) -> AIModel? {

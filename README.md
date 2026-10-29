@@ -156,6 +156,8 @@ Before any download, the runner looks up the real file sizes from the Ollama reg
 
 ## 🖥 The Mac app
 
+**It starts everything for you.** When the app opens it makes sure agentim is ready: it starts Docker Desktop and any stopped agentim container, adds this Mac's runners, turns on the coding agents you have installed (**Claude Code**, and **Codex** for ChatGPT), connects agentim to Claude, waits for the models to answer and preloads your default chat model so the first reply is quick (the status bar shows *Starting your models…*). It keeps re-checking every 10 seconds while something is offline. If no local chat model is up, chats are answered by **Claude Code** on your Mac (then Codex) instead of failing with "No model is available". The ChatGPT web connector isn't opened automatically, because it makes agentim reachable from the internet: that stays a button in **This Mac**.
+
 <p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: a chat with Agent Tim, the big message box and the routing note under each reply" width="90%"></p>
 <p align="center"><b>Chats</b>: a roomy message box (Enter sends, Shift+Enter for a new line), drag in files, and every reply says which model answered and why</p>
 

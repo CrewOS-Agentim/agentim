@@ -403,7 +403,10 @@ final class AppStore {
         }
     }
 
-    func send(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID) {
+    /// True when at least one chat model (or a local coding agent) can answer.
+    var hasChatModel: Bool { availableModels.contains { !$0.isExplicitOnly || $0.capabilities.contains(.agent) } }
+
+    func send(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID, rechecked: Bool = false) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
         let conversation = conversations[index]
         let agent = agent(for: conversation)
@@ -425,6 +428,13 @@ final class AppStore {
                     client(for: model).map { ($0, model.modelName, model.id, model.id == decision.model.id ? decision.reason : "Fallback after error") }
                 }
                 prompt = decision.cleanedText
+            } catch RoutingError.noModelsAvailable where !rechecked {
+                // The models may still be starting: check the servers again, then try once more.
+                Task {
+                    await refreshServers()
+                    send(text, attachments: attachments, in: conversationID, rechecked: true)
+                }
+                return
             } catch {
                 conversations[index].messages.append(ChatMessage(role: .user, content: text, attachments: attachments.nilIfEmpty))
                 conversations[index].messages.append(

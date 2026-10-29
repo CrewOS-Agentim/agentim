@@ -72,6 +72,16 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertTrue(store.transcript(withReply).contains("Web QA: Found 2 bugs."))
     }
 
+    func testLocalAgentsAreAddedToTheStack() {
+        let env = "RUNNER_TOKEN=x\nAGENTIM_LOCAL_AGENTS=claude-code\n"
+        XCTAssertEqual(HostController.withLocalAgents(["claude-code", "codex"], in: env),
+                       "RUNNER_TOKEN=x\nAGENTIM_LOCAL_AGENTS=claude-code,codex\n")
+        XCTAssertEqual(HostController.withLocalAgents(["claude-code"], in: env), env, "nothing missing: unchanged")
+        XCTAssertEqual(HostController.withLocalAgents(["codex"], in: "RUNNER_TOKEN=x\n"),
+                       "RUNNER_TOKEN=x\nAGENTIM_LOCAL_AGENTS=codex\n")
+        XCTAssertEqual(HostController.withLocalAgents([], in: env), env)
+    }
+
     func testOldConversationsStillDecode() throws {
         let json = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","title":"Old","agentID":"6F9619FF-8B86-D011-B42D-00C04FC964FE","messages":[],"updatedAt":0}"#
         let conversation = try JSONDecoder().decode(Conversation.self, from: Data(json.utf8))

@@ -19,6 +19,16 @@ struct AgentimApp: App {
                     async let account: Void = store.refreshHuggingFaceAccount()
                     async let servers: Void = store.refreshServers()
                     _ = await (account, servers)
+                    // Start Docker, the models and the local agents if they aren't running, and connect Claude.
+                    await host.bringUp(store: store)
+                    // Keep the model list current: every 10 s while something's offline, else every minute.
+                    while !Task.isCancelled {
+                        let offline = store.servers.contains { server in
+                            if case .online? = store.serverStatus[server.id] { false } else { true }
+                        }
+                        try? await Task.sleep(for: .seconds(offline || !store.hasChatModel ? 10 : 60))
+                        await store.refreshServers()
+                    }
                 }
         }
         .defaultSize(width: 1180, height: 780)

@@ -8,6 +8,13 @@ struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: Theme.s3) {
+            if let note = host.startupNote {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.mini)
+                    Text(note)
+                }
+                .foregroundStyle(.secondary)
+            }
             if !host.dockerRunning && !host.containers.contains(where: \.isRunning) {
                 Label("Docker is off", systemImage: "shippingbox").foregroundStyle(.orange)
                 Button("Open Docker") { host.startDocker() }.controlSize(.small)
