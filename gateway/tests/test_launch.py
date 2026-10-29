@@ -388,35 +388,15 @@ class GroupChatTests(unittest.TestCase):
 
 
 class DailyMeetingTests(unittest.TestCase):
-    def test_rounds_fold_into_one_daily_meeting_with_one_summary(self):
-        llm = TeamLLM()
-        _, mode = make_startup_mode(llm=llm)
+    def test_no_daily_meeting_or_daily_message(self):
+        _, mode = make_startup_mode(llm=TeamLLM())
         sent = []
         mode.notify = lambda channel, chat, text: sent.append(text)
-        mode.daily_hour = 24  # not yet: the meetings themselves don't send today's summary
         startup = mode.create(PITCH, channel="telegram", chat_id="42")
-        sid = startup["id"]
-        mode.skip_questions(sid)
-        mode.run_round(sid)
-        mode.run_round(sid)
-        days = mode.days(sid)
-        self.assertEqual(len(days), 1, "one rolling meeting for the day")
-        self.assertEqual(days[0]["rounds"], [1, 2])
-        self.assertIn("## Summary", days[0]["minutes"])
-        self.assertTrue(all(i["owner"] and i["eta"] for i in days[0]["action_items"]))
-        self.assertEqual(mode.detail(sid)["today"]["rounds"], [1, 2])
-        full = mode.day(sid, days[0]["day"])
-        self.assertEqual({m["round"] for m in full["messages"]}, {1, 2}, "the whole day's conversation")
-
-        # One message a day, not one per meeting: nothing before the summary hour, then once.
-        self.assertEqual(mode.send_daily(mode.store.get(sid), hour=24), [])
-        self.assertEqual(mode.send_daily(mode.store.get(sid), hour=0), [days[0]["day"]])
-        self.assertEqual(mode.send_daily(mode.store.get(sid), hour=0), [], "sent once")
-        self.assertIn("meeting (2 rounds)", sent[-1])
-        mode.notify_mode = "meeting"
-        before = len(sent)
-        mode.run_round(sid)
-        self.assertEqual(len(sent), before + 1, "AGENTIM_STARTUP_NOTIFY=meeting: after every meeting")
+        mode.skip_questions(startup["id"])
+        mode.run_round(startup["id"])
+        self.assertEqual(mode.days(startup["id"]), [], "nothing is grouped by day")
+        self.assertEqual(sent, [], "no message per meeting or per day: Tim sends summaries every N minutes")
 
     def test_merge_without_a_model(self):
         from agentim.startup import merge_minutes
@@ -505,12 +485,12 @@ class EventWorkTests(unittest.TestCase):
         self.assertEqual(len(self.mode.work.seed(self.sid, 1, [])), 0)
 
     def test_budgets_and_pausing_stop_the_chain(self):
-        self.mode.work.max_per_day = 1
+        self.mode.work.max_per_window = 1
         self.mode.work.assign(self.sid, self.first[self.keys[0]], "Write the ROI page")
         self.wait()
         statuses = [t["status"] for t in self.mode.work.board(self.sid)["tasks"]]
         self.assertEqual(statuses, ["done", "todo"], "over the daily budget: the handoff waits")
-        self.mode.work.max_per_day = 40
+        self.mode.work.max_per_window = 40
         self.mode.set_enabled(self.sid, False)
         self.mode.work.kick(self.sid)
         self.wait()
@@ -619,7 +599,7 @@ class GraphTests(unittest.TestCase):
         result = self.mode.work.summarize(self.sid)
         self.assertIn("## Summary", result["summary"])
         self.assertIn("Price at $29/month", [m["text"] for m in self.mode.memory.all(self.sid)], "decisions go into memory")
-        self.assertEqual(self.mode.days(self.sid)[0]["day"], result["day"], "the summary is the day's meeting notes")
+        self.assertEqual(self.mode.store.summaries(self.sid)[0]["at"], result["at"], "summaries are kept, by time")
         self.assertIn("📋 **Summary**", self.mode.store.messages(self.sid)[-1]["content"])
 
     def test_graph_mode_has_no_scheduled_meetings(self):
@@ -786,6 +766,103 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(check["existing"][0], {"name": "Rover", "what": "dog walkers, 20% fee"})
         self.assertEqual(parse_worth("VERDICT: Build-on-top\nWHY: y")["verdict"], "build-on-top")
         self.assertEqual(parse_worth("garbage")["verdict"], "build", "unreadable: don't block the founder")
+
+
+class SupervisorTests(unittest.TestCase):
+    def setUp(self):
+        self.gateway, self.mode = make_startup_mode(llm=TeamLLM())
+        self.mode.default_rhythm = "graph"
+        startup = self.mode.create(PITCH, channel="telegram", chat_id="42")
+        self.sid = startup["id"]
+        self.mode.skip_questions(self.sid)
+        self.mode.store.save({**self.mode.store.get(self.sid), "next_run": None})
+        team = self.mode.detail(self.sid)["team"]
+        self.first = [p["name"].split()[0] for p in team]
+        self.sent = []
+        self.mode.notify = lambda channel, chat, text: self.sent.append(text)
+        self.asked = []
+
+        def ask(prompt, label="", **kw):
+            if "How many minutes until it's done" in prompt or "How many more minutes" in prompt:
+                self.asked.append(prompt)
+                return "about 25 minutes" if "more minutes" not in prompt else "10"
+            if "asked for a summary" in prompt:
+                return "## Summary\nGood progress.\n## Action items\n- **Ava**: post — ETA: in 30 min"
+            return "ok"
+
+        self.mode._ask = ask
+        self.mode.work.kick = lambda sid: False  # the supervisor's decisions, without running the work
+
+    def add(self, **fields):
+        task = self.mode.work.store.add(self.sid, self.mode.detail(self.sid)["team"][0]["key"], "Write the pricing page",
+                                        from_role="graph", **{k: v for k, v in fields.items() if k in ("eta_minutes", "deps")})
+        updates = {k: v for k, v in fields.items() if k not in ("eta_minutes", "deps")}
+        if updates:
+            self.mode.work.store.update(task["id"], **updates)
+        return task
+
+    def test_tim_asks_for_etas_in_minutes(self):
+        task = self.add()
+        did = self.mode.supervisor.check(self.sid)
+        self.assertEqual(did["etas"][0][1], 25)
+        self.assertEqual(self.mode.work.store.get(task["id"])["eta"], "in 25 min")
+        self.assertIn("never days", self.asked[0])
+        self.assertIn("⏱️ **ETAs**", self.mode.store.messages(self.sid)[-1]["content"])
+
+    def test_late_work_gets_a_new_eta_and_the_founder_hears_after_three_slips(self):
+        import time as t
+        now = t.time()
+        task = self.add(eta_minutes=10, status="doing", started=now - 30 * 60)
+        did = self.mode.supervisor.check(self.sid, now)
+        self.assertEqual(did["late"][0][:2], (task["owner"], 20), "20 minutes past a 10-minute ETA")
+        self.assertEqual(self.mode.work.store.get(task["id"])["eta_minutes"], 40, "30 elapsed + 10 more")
+        self.assertIn("⏰ **Behind schedule**", self.mode.store.messages(self.sid)[-1]["content"])
+        self.assertEqual(self.mode.supervisor.check(self.sid, now + 60)["late"], [], "no nagging every minute")
+        self.mode.work.store.update(task["id"], slips=2, pinged=None)
+        self.mode.supervisor.check(self.sid, now + 60 * 60)
+        self.assertIn("slipped 3 times", self.mode.store.messages(self.sid)[-1]["content"])
+
+    def test_ready_work_is_kicked_and_approvals_are_reminded(self):
+        kicked = []
+        self.mode.work.kick = lambda sid: kicked.append(sid) or True
+        self.add(eta_minutes=15)
+        did = self.mode.supervisor.check(self.sid)
+        self.assertTrue(did["kicked"])
+        import time as t
+        waiting = self.add(eta_minutes=15, status="approval", finished=t.time() - 20 * 60)
+        did = self.mode.supervisor.check(self.sid)
+        self.assertEqual(did["reminded"], [waiting["id"]])
+        self.assertEqual(self.mode.supervisor.check(self.sid)["reminded"], [], "once per reminder window")
+
+    def test_a_summary_every_n_minutes_when_something_happened(self):
+        import time as t
+        now = t.time()
+        self.add(eta_minutes=15, status="done", started=now - 60, finished=now)
+        self.mode.supervisor.last_summary[self.sid] = now - 3 * 60 * 60
+        did = self.mode.supervisor.check(self.sid, now + 1)
+        self.assertTrue(did["summary"])
+        self.assertTrue(self.sent and "Good progress" in self.sent[-1], "sent to Telegram/WhatsApp/Slack")
+        self.assertFalse(self.mode.supervisor.check(self.sid, now + 120)["summary"], "not again right away")
+
+    def test_gantt_in_minutes(self):
+        from agentim.supervisor import parse_minutes, schedule
+        base = 1_800_000_000
+        tasks = [{"id": "a", "status": "done", "created": base, "started": base, "finished": base + 20 * 60,
+                  "eta_minutes": 15, "eta_first": 15, "deps": []},
+                 {"id": "b", "status": "todo", "created": base, "eta_minutes": 30, "eta_first": 30, "deps": ["a"]}]
+        plan, origin = schedule(tasks, now=base + 25 * 60)
+        self.assertEqual(origin, base)
+        self.assertEqual((plan["a"]["planned_start"], plan["a"]["planned_end"]), (0, 15), "baseline from the first ETA")
+        self.assertEqual((plan["a"]["start"], plan["a"]["end"]), (0, 20), "actual: 5 minutes late")
+        self.assertEqual((plan["b"]["planned_start"], plan["b"]["planned_end"]), (15, 45))
+        self.assertEqual((plan["b"]["start"], plan["b"]["end"]), (25, 55), "starts now, after its dependency")
+        self.assertEqual(parse_minutes("~1.5 hours"), 90)
+        self.assertEqual(parse_minutes("nope", 15), 15)
+
+    def test_plans_carry_etas(self):
+        from agentim.graph import parse_plan
+        node = parse_plan("T1 | Ava | Write copy | done when: 3 headlines | after: - | gate: auto | eta: 25")[0]
+        self.assertEqual(node["eta"], 25)
 
 
 if __name__ == "__main__":

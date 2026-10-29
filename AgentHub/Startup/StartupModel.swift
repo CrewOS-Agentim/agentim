@@ -327,6 +327,8 @@ final class StartupModel {
     var taskDraft = ""
     /// The goal Agent Tim turns into a graph, and a rule for the team's memory.
     var goalDraft = ""
+    /// Agent Tim's summaries, newest first.
+    var summaries: [TimSummary] = []
     var ruleDraft = ""
     /// The launch-mode confirmation dialog is open.
     var confirmingSprint = false

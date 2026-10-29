@@ -18,7 +18,8 @@ from .graph import MAX_ATTEMPTS, check_prompt, deps_of, gate_for, layers, parse_
 
 log = logging.getLogger("agentim.work")
 
-MAX_TASKS_PER_DAY = 40      # per startup
+MAX_TASKS_PER_WINDOW = int(__import__("os").environ.get("AGENTIM_TASKS_PER_HOUR", "20"))  # per project
+WINDOW_MINUTES = 60         # the budget is per rolling 60 minutes (nothing here runs on days)
 MAX_DEPTH = 4               # a handoff chain stops after this many steps
 PARALLEL = 3                # agents working at the same time
 HANDOFF = re.compile(r"^\s*\**HANDOFF\**\s*:\s*(?P<rest>.+)$", re.IGNORECASE)
@@ -53,21 +54,23 @@ class WorkStore:
             # Graph, loop and gate columns (added in place on older databases).
             existing = {row[1] for row in self.db.execute("PRAGMA table_info(startup_tasks)")}
             for column, kind in (("deps", "TEXT"), ("done_when", "TEXT"), ("gate", "TEXT"), ("attempts", "INTEGER"),
-                                 ("feedback", "TEXT"), ("goal", "TEXT")):
+                                 ("feedback", "TEXT"), ("goal", "TEXT"), ("eta_minutes", "INTEGER"),
+                                 ("eta_first", "INTEGER"), ("slips", "INTEGER"), ("pinged", "REAL")):
                 if column not in existing:
                     self.db.execute(f"ALTER TABLE startup_tasks ADD COLUMN {column} {kind}")
 
     COLUMNS = ["id", "startup_id", "owner", "task", "eta", "status", "depends_on", "from_role", "input", "output",
                "depth", "round", "created", "started", "finished", "deps", "done_when", "gate", "attempts", "feedback",
-               "goal"]
+               "goal", "eta_minutes", "eta_first", "slips", "pinged"]
 
     def add(self, startup_id, owner, task, eta="", depends_on=None, from_role="meeting", input="", depth=0, round_no=0,
-            deps=None, done_when="", gate="auto", goal=""):
+            deps=None, done_when="", gate="auto", goal="", eta_minutes=None):
         row = {"id": uuid.uuid4().hex[:10], "startup_id": startup_id, "owner": owner, "task": task.strip()[:500],
                "eta": eta, "status": "todo", "depends_on": depends_on, "from_role": from_role, "input": input[-4000:],
                "output": "", "depth": depth, "round": round_no, "created": time.time(), "started": None, "finished": None,
                "deps": json.dumps(deps or []), "done_when": done_when, "gate": gate_for(task, gate) if gate != "auto" or
-               done_when else gate, "attempts": 0, "feedback": "", "goal": goal}
+               done_when else gate, "attempts": 0, "feedback": "", "goal": goal, "eta_minutes": eta_minutes,
+               "eta_first": eta_minutes, "slips": 0, "pinged": None}
         with self.lock, self.db:
             self.db.execute(f"INSERT INTO startup_tasks VALUES ({', '.join('?' * len(self.COLUMNS))})",
                             [row[c] for c in self.COLUMNS])
@@ -93,11 +96,11 @@ class WorkStore:
         with self.lock, self.db:
             self.db.execute("DELETE FROM startup_tasks WHERE startup_id = ?", (startup_id,))
 
-    def started_today(self, startup_id):
-        midnight = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+    def started_recently(self, startup_id, minutes=WINDOW_MINUTES):
+        """Tasks started in the last `minutes` (the budget is a rolling window, never a day)."""
         with self.lock:
             return self.db.execute("SELECT COUNT(*) FROM startup_tasks WHERE startup_id = ? AND started >= ?",
-                                   (startup_id, midnight)).fetchone()[0]
+                                   (startup_id, time.time() - minutes * 60)).fetchone()[0]
 
 
 class Work:
@@ -106,7 +109,8 @@ class Work:
         self.running = set()          # startups whose work loop is running
         self.working = {}             # startup id → {task id: owner key} being worked on now
         self.guard = threading.Lock()
-        self.max_per_day, self.max_depth, self.parallel = MAX_TASKS_PER_DAY, MAX_DEPTH, PARALLEL
+        self.max_per_window, self.max_depth, self.parallel = MAX_TASKS_PER_WINDOW, MAX_DEPTH, PARALLEL
+        self.budget_noted = {}  # startup id → when the "over budget" note was last posted
 
     # ---- the board
 
@@ -120,10 +124,14 @@ class Work:
             t["ready"] = t["status"] == "todo" and self.is_ready(t, by_id)
             t["attempts"] = t.get("attempts") or 0
         depth = layers(tasks)
+        from .supervisor import schedule
+        gantt, origin = schedule(tasks)
         for t in tasks:
             t["layer"] = depth.get(t["id"], 0)
+            t.update(gantt.get(t["id"], {}))  # minutes from the start: planned_start/end (first ETAs), start/end (now)
         return {"tasks": tasks, "working": sorted(set((self.working.get(startup_id) or {}).values())),
-                "started_today": self.store.started_today(startup_id), "budget": self.max_per_day}
+                "started_recently": self.store.started_recently(startup_id), "budget": self.max_per_window,
+                "window_minutes": WINDOW_MINUTES, "origin": origin, "now_minute": (time.time() - origin) / 60}
 
     @staticmethod
     def is_ready(task, by_id):
@@ -196,9 +204,13 @@ class Work:
                     startup = self.mode.store.get(startup_id)
                     if not startup or startup["status"] != "running":
                         break
-                    if self.store.started_today(startup_id) >= self.max_per_day:
-                        self.mode.store.add_message(startup_id, max(startup["rounds"], 1), "ceo",
-                                                    f"That's {self.max_per_day} tasks today: we'll pick the rest up tomorrow.")
+                    if self.store.started_recently(startup_id) >= self.max_per_window:
+                        if time.time() - self.budget_noted.get(startup_id, 0) > WINDOW_MINUTES * 60:
+                            self.budget_noted[startup_id] = time.time()
+                            self.mode.store.add_message(
+                                startup_id, max(startup["rounds"], 1), "ceo",
+                                f"That's {self.max_per_window} tasks in the last {WINDOW_MINUTES} minutes: the rest "
+                                "continues as the window frees up (I'll keep checking every minute).")
                         break
                     by_id = {t["id"]: t for t in self.store.all(startup_id)}
                     ready = [t for t in by_id.values() if t["status"] == "todo" and self.is_ready(t, by_id)]
@@ -421,13 +433,15 @@ Write "HANDOFF: none" if your result needs nothing more.""" if can_hand_off else
         ids, created = {}, []
         for n in nodes:
             owner = people[n["owner"].lower()]
-            task = self.store.add(startup_id, owner.key, n["task"], "", None, "graph", round_no=max(startup["rounds"], 1),
+            task = self.store.add(startup_id, owner.key, n["task"], f"in {n['eta']} min" if n.get("eta") else "", None,
+                                  "graph", round_no=max(startup["rounds"], 1),
                                   deps=[ids[r] for r in n["after"] if r in ids], done_when=n["done_when"],
-                                  gate=n["gate"], goal=goal)
+                                  gate=n["gate"], goal=goal, eta_minutes=n.get("eta"))
             ids[n["ref"]] = task["id"]
             created.append((n, owner, task))
         self.mode.memory.add(startup_id, "decision", f"Goal: {goal}")
-        lines = "\n".join(f"- **{n['ref']} {o.first}**: {n['task']}" + (f" _(after {', '.join(n['after'])})_" if n["after"] else "")
+        lines = "\n".join(f"- **{n['ref']} {o.first}**: {n['task']}" + (f" ~{n['eta']} min" if n.get("eta") else "")
+                          + (f" _(after {', '.join(n['after'])})_" if n["after"] else "")
                           + {"founder": " 🙋 needs you", "review": " 🔍 checked"}.get(t["gate"], "") for n, o, t in created)
         self.mode.store.add_message(startup_id, max(startup["rounds"], 1), "ceo",
                                     f"🗺️ **Plan**: {goal}\n\n{lines}\n\n_Tasks without arrows start now, in parallel._")
@@ -464,12 +478,11 @@ Write "HANDOFF: none" if your result needs nothing more.""" if can_hand_off else
         minutes = clean_minutes(text) or text
         speakers = [p.first for k, p in people.items() if k not in ("founder", "ceo", "claude-code")]
         minutes = with_owners_and_etas(minutes, [], time.time()) if "## Action items" in minutes else minutes
-        today = day_of(time.time())
-        row = self.mode.store.day_row(startup_id, today)
-        self.mode.store.save_day(startup_id, today, minutes, row["rounds"] if row else [])
+        at = time.time()
+        self.mode.store.save_summary(startup_id, at, minutes)
         self.mode.store.add_message(startup_id, max(startup["rounds"], 1), "ceo", f"📋 **Summary**\n\n{text}")
-        _ = (FOUNDER, speakers)
-        return {"summary": text, "day": today}
+        _ = (FOUNDER, speakers, day_of)
+        return {"summary": text, "at": at}
 
     def after_work(self, startup_id):
         """Nothing left to do: in the graph, the goal is done (or waits for you); with meetings, the team meets after

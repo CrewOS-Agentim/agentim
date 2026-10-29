@@ -137,6 +137,10 @@ def make_handler(gateway, channels, catalog):
             parts = path.strip("/").split("/")  # v1/startups[/id[/meetings[/n]]]
             if len(parts) == 2:
                 return self.send_json(200, gateway.startup.listing())
+            if len(parts) == 4 and parts[3] == "summaries":  # Agent Tim's summaries, newest first
+                if not gateway.startup.store.get(parts[2]):
+                    return self.send_json(404, {"error": "no such startup"})
+                return self.send_json(200, {"summaries": gateway.startup.store.summaries(parts[2])})
             if len(parts) == 4 and parts[3] == "memory":  # the team's memory (harness)
                 if not gateway.startup.store.get(parts[2]):
                     return self.send_json(404, {"error": "no such startup"})

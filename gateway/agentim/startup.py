@@ -180,10 +180,10 @@ FALLBACK_QUESTIONS = [
 
 # How every startup's agents work, whatever the idea.
 def time_rule(startup):
-    """The team meets every few minutes, so plans are in minutes and hours, never days."""
-    return (f"Timelines are in minutes or hours, never days: the team meets every {startup.get('min_minutes', 10)}–"
-            f"{startup.get('max_minutes', 30)} minutes and it's {time.strftime('%H:%M')} now. Give every ETA as "
-            "\"in 40 min\", \"in 2 h\", \"by 15:30\", or as a dependency: \"right after Leo's ROI page\".")
+    """The team works in minutes: plans and ETAs are in minutes, never days."""
+    return (f"Timelines are in minutes, never days: Agent Tim checks progress every minute and it's "
+            f"{time.strftime('%H:%M')} now. Give every ETA in minutes (\"in 40 min\", \"in 120 min\"), as a time "
+            "(\"by 15:30\"), or as a dependency: \"right after Leo's ROI page\".")
 
 
 # Launch mode: the one finished deliverable each role produces, in parallel, right now.
@@ -201,7 +201,7 @@ SPRINT_TASKS = {
     "operations": "the launch-day run sheet: who does what in the first 2 hours after going live, by the minute or hour, and how the team reports back",
 }
 
-MAX_GOALS_PER_DAY = int(os.environ.get("AGENTIM_AUTOPILOT_GOALS_PER_DAY", "8"))
+MAX_GOALS_PER_HOUR = int(os.environ.get("AGENTIM_AUTOPILOT_GOALS_PER_HOUR", "3"))
 VERDICTS = {"build": "✅ Worth building", "buy": "🛒 Better to buy or use what exists",
             "build-on-top": "🧩 Build on top of something that exists", "stop": "🛑 Not worth building"}
 
@@ -413,8 +413,8 @@ def minutes_prompt(startup, round_no, transcript, today=None):
     today = today or time.strftime("%A, %b %d, %Y, %H:%M")
     return f"""You are the note-taker for "{startup['name']}" (meeting {round_no}, today is {today}). Write the \
 meeting minutes from this transcript. Only what was actually said: never invent numbers or decisions.
-Every action item needs ONE owner (a first name from the meeting) and an ETA in time, never days: "in 30 min", \
-"in 2 h", "by 15:30", or a dependency: "after Leo's ROI page". Use what the meeting said; if it said nothing, \
+Every action item needs ONE owner (a first name from the meeting) and an ETA in minutes, never days: "in 30 min", \
+"in 120 min", "by 15:30", or a dependency: "after Leo's ROI page". Use what the meeting said; if it said nothing, \
 propose a realistic one and add "(proposed)".
 
 Transcript:
@@ -426,7 +426,7 @@ Reply in markdown with exactly these sections, short bullets:
 ## Decisions
 - <decision> (who decided or proposed it)
 ## Action items
-- **<Owner first name>**: <task> — ETA: <in N min | in N h | by HH:MM | after <Name>'s <task>> [(proposed)]
+- **<Owner first name>**: <task> — ETA: <in N min | by HH:MM | after <Name>'s <task>> [(proposed)]
 (at least one per person who committed to something; never leave the owner or the ETA out)
 ## Metrics
 - <metric: value or target, as mentioned> (or "- None mentioned")
@@ -518,9 +518,9 @@ def open_items_text(items, now):
     return "\n".join(lines)
 
 
-def with_owners_and_etas(minutes, speakers, now, default_eta="in 1 h"):
+def with_owners_and_etas(minutes, speakers, now, default_eta="in 60 min"):
     """Makes sure every action item has an owner and an ETA (and that the meeting has action items at all):
-    a missing owner becomes Tim (the CEO follows up), a missing ETA becomes a proposed "in 1 h"."""
+    a missing owner becomes Tim (the CEO follows up), a missing ETA becomes a proposed "in 60 min"."""
     items = parse_action_items(minutes) or [
         {"owner": name, "task": "follow up on what they committed to in this meeting", "eta": "", "proposed": True}
         for name in speakers] or [{"owner": "Tim", "task": "set next steps", "eta": "", "proposed": True}]
@@ -622,6 +622,8 @@ class StartupStore:
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_dms (
                 startup_id TEXT, person TEXT, role TEXT, content TEXT, ts REAL)""")
             self.db.execute("CREATE INDEX IF NOT EXISTS startup_dms_id ON startup_dms (startup_id, person, ts)")
+            self.db.execute("""CREATE TABLE IF NOT EXISTS startup_summaries (
+                startup_id TEXT, at REAL, text TEXT)""")
             self.db.execute("""CREATE TABLE IF NOT EXISTS startup_days (
                 startup_id TEXT, day TEXT, minutes TEXT, rounds TEXT, updated REAL, sent INTEGER DEFAULT 0,
                 PRIMARY KEY (startup_id, day))""")
@@ -679,6 +681,7 @@ class StartupStore:
             self.db.execute("DELETE FROM startup_dms WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_groups WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_days WHERE startup_id = ?", (startup_id,))
+            self.db.execute("DELETE FROM startup_summaries WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_team_messages WHERE startup_id = ?", (startup_id,))
             self.db.execute("DELETE FROM startup_meeting_minutes WHERE startup_id = ?", (startup_id,))
 
@@ -738,6 +741,16 @@ class StartupStore:
         minutes = self.all_minutes(startup_id)
         return [{"round": r, "started": start, "ended": end, "messages": count, "minutes": minutes.get(r),
                  "attendees": (roles or "").split(","), "summary": summaries.get(r)} for r, start, end, count, roles in rows]
+
+    def save_summary(self, startup_id, at, text):
+        with self.lock, self.db:
+            self.db.execute("INSERT INTO startup_summaries VALUES (?, ?, ?)", (startup_id, at, text))
+
+    def summaries(self, startup_id, limit=50):
+        with self.lock:
+            rows = self.db.execute("SELECT at, text FROM startup_summaries WHERE startup_id = ? ORDER BY at DESC LIMIT ?",
+                                   (startup_id, limit)).fetchall()
+        return [{"at": at, "text": text} for at, text in rows]
 
     def save_day(self, startup_id, day, minutes, rounds):
         with self.lock, self.db:
@@ -805,9 +818,12 @@ class StartupMode:
         self.default_rhythm = os.environ.get("AGENTIM_STARTUP_RHYTHM", "graph")
         self.checking = set()  # projects whose worth-building check is running
         self.auto_check = True  # every new project starts with the worth-building check
+        self.autopilot_waiting = set()  # autopilot projects waiting for the goal window to free up
+        from .supervisor import Supervisor
+        self.supervisor = Supervisor(self)  # Agent Tim runs the loop: ETAs, late work, approvals, summaries
         self.dm_typing = set()  # (startup id, thread key) while someone writes a 1:1 or group reply
         # Telegram/WhatsApp/Slack: one summary a day ("daily", default) or one after every meeting ("meeting").
-        self.notify_mode = os.environ.get("AGENTIM_STARTUP_NOTIFY", "daily")
+        self.notify_mode = os.environ.get("AGENTIM_STARTUP_NOTIFY", "summary")
         self.daily_hour = DAILY_SUMMARY_HOUR  # today's summary goes out after this hour
         self.dm_speaking = {}  # (startup id, group thread key) → who's typing in the group
 
@@ -1660,12 +1676,15 @@ RECOMMENDATION: <one line>""", f"Startup · {startup['name']} · worth building?
     def next_goal(self, startup_id):
         """Autopilot: Agent Tim sets the next goal toward the project's goal, or says it's developed."""
         startup = self.store.get(startup_id)
-        goals_today = [m for m in self.memory.all(startup_id) if m["kind"] == "decision" and m["text"].startswith("Goal:")
-                       and day_of(m["created"]) == day_of(time.time())]
-        if len(goals_today) >= MAX_GOALS_PER_DAY:
+        recent = [m for m in self.memory.all(startup_id) if m["kind"] == "decision" and m["text"].startswith("Goal:")
+                  and time.time() - m["created"] < 3600]
+        if len(recent) >= MAX_GOALS_PER_HOUR:
             self.store.add_message(startup_id, max(startup["rounds"], 1), CEO.key,
-                                   f"⏸️ That's {MAX_GOALS_PER_DAY} goals today: autopilot continues tomorrow.")
+                                   f"⏸️ That's {MAX_GOALS_PER_HOUR} goals in the last 60 minutes: autopilot picks up "
+                                   "the next one as soon as the window frees up.")
+            self.autopilot_waiting.add(startup_id)
             return None
+        self.autopilot_waiting.discard(startup_id)
         done = [t for t in self.work.store.all(startup_id) if t["status"] == "done"][-20:]
         history = "\n".join(f"- {t['task']}" for t in done) or "(nothing yet)"
         version = (startup.get("config") or {}).get("version")
@@ -1746,10 +1765,7 @@ project is fully developed and nothing important is left, reply "DONE: <why>".""
             except Exception:
                 log.exception("startup: couldn't write the meeting minutes")
             text = self.digest(startup, posted, summary, people, minutes)
-            try:
-                self.update_day(startup_id, round_no)  # the day's rolling meeting and summary
-            except Exception:
-                log.exception("startup: couldn't update the daily meeting")
+
             try:
                 self.begin_work(startup_id, round_no, minutes)
             except Exception:
@@ -1760,8 +1776,7 @@ project is fully developed and nothing important is left, reply "DONE: <why>".""
                         self.notify(startup["notify_channel"], startup["notify_chat"], text)
                     except Exception:
                         log.exception("startup: couldn't send the meeting summary")
-            else:
-                self.send_daily(startup)
+            # Otherwise Agent Tim sends a summary every N minutes (the supervisor), never once a day.
             return text
         finally:
             self.live.pop(startup_id, None)
@@ -1844,6 +1859,12 @@ project is fully developed and nothing important is left, reply "DONE: <why>".""
 
     def loop(self, tick=30, sleep=time.sleep):
         while True:
+            try:
+                self.supervisor.maybe_tick()  # every minute: Tim checks every project
+                for startup_id in list(self.autopilot_waiting):
+                    self.next_goal(startup_id)
+            except Exception:
+                log.exception("startup: the supervisor failed")
             for startup in self.due():
                 try:
                     log.info("startup: %s meeting", startup["name"])
@@ -1882,7 +1903,7 @@ project is fully developed and nothing important is left, reply "DONE: <why>".""
                 "meeting": self.live.get(startup_id),
                 "pipeline": pipeline_view(startup), "launch_running": startup_id in self.launch.running,
                 "sprint": (startup.get("pipeline") or {}).get("sprint"),
-                "today": self.store.day_row(startup_id, day_of(time.time())),
+                "last_summary": (self.store.summaries(startup_id, 1) or [None])[0],
                 "rhythm": self.rhythm(startup),
                 "model_choices": self.model_choices(),
                 "memory": self.memory.all(startup_id),

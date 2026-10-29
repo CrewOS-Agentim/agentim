@@ -22,13 +22,31 @@ struct WorkTask: Decodable, Equatable, Identifiable {
     var feedback: String? = nil
     var goal: String? = nil
     var layer: Int? = nil
+    /// Minutes: the ETA, and the Gantt (from the goal's start): planned (first ETAs) and actual/forecast.
+    var eta_minutes: Int? = nil
+    var slips: Int? = nil
+    var started: Double? = nil
+    var planned_start: Double? = nil
+    var planned_end: Double? = nil
+    var start: Double? = nil
+    var end: Double? = nil
 }
 
 struct WorkBoard: Decodable, Equatable {
     let tasks: [WorkTask]
     let working: [String]
-    var started_today: Int? = nil
+    var started_recently: Int? = nil
     var budget: Int? = nil
+    var window_minutes: Int? = nil
+    /// "Now" in minutes from the start of the work (for the Gantt chart).
+    var now_minute: Double? = nil
+}
+
+/// One of Agent Tim's summaries (every N minutes, or when you ask).
+struct TimSummary: Decodable, Equatable, Identifiable {
+    let at: Double
+    let text: String
+    var id: Double { at }
 }
 
 /// What the team knows, outside any one chat: the founder's rules, decisions, facts and lessons.
@@ -84,6 +102,12 @@ extension StartupClient {
 
     func summarize(_ id: String) async throws { try await post("v1/startups/\(id)/summary", body: [:]) }
 
+    func summaries(_ id: String) async throws -> [TimSummary] {
+        struct Reply: Decodable { let summaries: [TimSummary] }
+        let reply: Reply = try await getJSON("v1/startups/\(id)/summaries")
+        return reply.summaries
+    }
+
     func decide(_ id: String, _ decision: String) async throws -> StartupDetail {
         try await sendDetail("v1/startups/\(id)/decision", body: ["decision": decision])
     }
@@ -135,6 +159,12 @@ extension StartupModel {
         guard let id = detail?.id else { return }
         selectedThread = "room"
         await act("Agent Tim is summarizing…", stackRoot) { client in try await client.summarize(id) }
+        await loadSummaries(stackRoot: stackRoot)
+    }
+
+    func loadSummaries(stackRoot: URL?) async {
+        guard let id = detail?.id, !isDemo, let client = Self.client(stackRoot: stackRoot) else { return }
+        if let list = try? await client.summaries(id) { summaries = list }
     }
 
     func decide(_ decision: String, stackRoot: URL?) async {
@@ -248,6 +278,11 @@ struct WorkPanel: View {
                 if let goal = currentGoal {
                     Text("Goal: \(goal)").font(.headline)
                 }
+                if goalTasks.contains(where: { $0.end != nil }) {
+                    section("Timeline (minutes)", "chart.bar.xaxis", Theme.accent) {
+                        GanttChart(tasks: goalTasks, now: model.workBoard?.now_minute ?? 0, detail: detail)
+                    }
+                }
                 graph
                 memory
                 settings
@@ -312,6 +347,9 @@ struct WorkPanel: View {
                         Text(first).font(.caption.weight(.semibold))
                         Text(statusText(task)).font(.caption).foregroundStyle(statusColor(task))
                         if task.status == "doing" { ProgressView().controlSize(.mini) }
+                        if let eta = task.eta_minutes, task.status == "todo" || task.status == "doing" {
+                            Text("· ~\(eta) min").font(.caption).foregroundStyle((task.slips ?? 0) > 0 ? .orange : .secondary)
+                        }
                         if let gate = task.gate, gate != "auto" {
                             Text(gate == "founder" ? "🙋 you approve" : gate == "code" ? "💻 code" : "🔍 checked")
                                 .font(.caption2).foregroundStyle(.secondary)
@@ -420,8 +458,9 @@ struct WorkPanel: View {
                 Text("Meetings → handoffs").tag("events")
                 Text("Meet every \(detail.min_minutes)–\(detail.max_minutes) min").tag("timer")
             }
-            if let started = model.workBoard?.started_today, let budget = model.workBoard?.budget {
-                Text("\(started) of \(budget) tasks today").font(.caption).foregroundStyle(.secondary)
+            if let started = model.workBoard?.started_recently, let budget = model.workBoard?.budget {
+                Text("\(started) of \(budget) tasks in the last \(model.workBoard?.window_minutes ?? 60) min · Agent Tim checks progress every minute")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: Theme.s2) {
                 Picker("", selection: $model.taskOwner) {
@@ -450,4 +489,149 @@ struct WorkPanel: View {
         .padding(Theme.s3)
         .background(Theme.surfaceMuted, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
     }
+}
+
+/// A Gantt chart in minutes: each task's planned bar (outline, from the first ETAs) and its actual/forecast bar
+/// (filled), with a line at "now".
+struct GanttChart: View {
+    let tasks: [WorkTask]
+    let now: Double
+    let detail: StartupDetail
+
+    private var rows: [WorkTask] {
+        tasks.filter { $0.end != nil }.sorted { ($0.planned_start ?? 0, $0.start ?? 0) < ($1.planned_start ?? 0, $1.start ?? 0) }
+    }
+    private var total: Double {
+        max(rows.map { max($0.end ?? 0, $0.planned_end ?? 0) }.max() ?? 0, now) + 5
+    }
+    /// Points per minute: fits ~700 pt, never too cramped or too wide.
+    private var ppm: Double { min(12, max(2, 700 / total)) }
+    private var step: Double { total > 240 ? 60 : total > 90 ? 30 : total > 40 ? 15 : 5 }
+    private let label: CGFloat = 170
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            VStack(alignment: .leading, spacing: 4) {
+                axis
+                ForEach(rows) { task in row(task) }
+            }
+            .overlay(alignment: .topLeading) {
+                Rectangle().fill(Color.red.opacity(0.7)).frame(width: 1.5)
+                    .offset(x: label + CGFloat(now * ppm))
+                    .help("Now: minute \(Int(now))")
+            }
+            .padding(.vertical, 4)
+        }
+        HStack(spacing: Theme.s3) {
+            legend(filled: false, "Planned (first ETA)")
+            legend(filled: true, "Actual / forecast")
+            HStack(spacing: 4) { Rectangle().fill(Color.red.opacity(0.7)).frame(width: 1.5, height: 10); Text("Now") }
+        }
+        .font(.caption).foregroundStyle(.secondary)
+    }
+
+    private var axis: some View {
+        HStack(spacing: 0) {
+            Text("minutes").font(.caption2).foregroundStyle(.secondary).frame(width: label, alignment: .leading)
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(stride(from: 0.0, through: total, by: step)), id: \.self) { minute in
+                    Text("\(Int(minute))").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                        .offset(x: CGFloat(minute * ppm))
+                }
+            }
+            .frame(width: CGFloat(total * ppm), height: 14, alignment: .leading)
+        }
+    }
+
+    private func row(_ task: WorkTask) -> some View {
+        let person = detail.person(task.owner)
+        let first = person.name.split(separator: " ").first.map(String.init) ?? person.name
+        return HStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Text(person.emoji)
+                Text("\(first): \(task.task)").lineLimit(1).truncationMode(.tail)
+            }
+            .font(.caption)
+            .frame(width: label, alignment: .leading)
+            .help(task.task)
+            ZStack(alignment: .leading) {
+                if let ps = task.planned_start, let pe = task.planned_end {
+                    RoundedRectangle(cornerRadius: 3).strokeBorder(Color.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                        .frame(width: max(3, CGFloat((pe - ps) * ppm)), height: 16)
+                        .offset(x: CGFloat(ps * ppm))
+                }
+                if let s = task.start, let e = task.end {
+                    RoundedRectangle(cornerRadius: 3).fill(color(task).opacity(task.status == "todo" ? 0.35 : 0.85))
+                        .frame(width: max(3, CGFloat((e - s) * ppm)), height: 10)
+                        .offset(x: CGFloat(s * ppm))
+                        .help("\(Int(s))–\(Int(e)) min · \(task.status)" + ((task.slips ?? 0) > 0 ? " · slipped \(task.slips!)×" : ""))
+                }
+            }
+            .frame(width: CGFloat(total * ppm), height: 18, alignment: .leading)
+        }
+    }
+
+    private func color(_ task: WorkTask) -> Color {
+        switch task.status {
+        case "done": .green
+        case "doing": (task.slips ?? 0) > 0 ? .orange : Theme.accent
+        case "approval", "blocked": .orange
+        default: .secondary
+        }
+    }
+
+    private func legend(filled: Bool, _ text: String) -> some View {
+        HStack(spacing: 4) {
+            if filled {
+                RoundedRectangle(cornerRadius: 2).fill(Theme.accent.opacity(0.85)).frame(width: 18, height: 8)
+            } else {
+                RoundedRectangle(cornerRadius: 2).strokeBorder(Color.secondary, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                    .frame(width: 18, height: 10)
+            }
+            Text(text)
+        }
+    }
+}
+
+/// The Summaries tab: Agent Tim's summaries, newest first (every N minutes, or when you ask).
+struct SummariesList: View {
+    @Bindable var model: StartupModel
+    let detail: StartupDetail
+    let stackRoot: URL?
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Agent Tim summarizes every \(Self.every) minutes when something changed, or when you ask.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Summarize now") { Task { await model.summarize(stackRoot: stackRoot) } }
+                        .disabled(model.busy != nil)
+                }
+                if model.summaries.isEmpty {
+                    ContentUnavailableView("No summaries yet", systemImage: "text.badge.checkmark",
+                                           description: Text("Press Summarize now, or wait for Agent Tim's next one."))
+                }
+                ForEach(model.summaries) { summary in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label(Date(timeIntervalSince1970: summary.at).formatted(date: .abbreviated, time: .shortened),
+                              systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+                        PlanTextPublic(markdown: summary.text)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .card(radius: Theme.radius, padding: Theme.s3)
+                }
+            }
+            .padding(20)
+        }
+        .task(id: detail.id) {
+            while !Task.isCancelled {
+                await model.loadSummaries(stackRoot: stackRoot)
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
+    }
+
+    static let every = 120
 }

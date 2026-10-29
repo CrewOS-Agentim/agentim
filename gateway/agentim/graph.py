@@ -92,11 +92,13 @@ def parse_plan(text):
         done = re.search(r"done when:\s*([^|]+)", rest, re.I)
         after = re.search(r"after:\s*([^|]+)", rest, re.I)
         gate = re.search(r"gate:\s*(\w+)", rest, re.I)
+        eta = re.search(r"eta:\s*~?(\d+)", rest, re.I)
         refs = [r.strip().upper() for r in re.split(r"[,\s]+", after.group(1)) if re.match(r"^T\d+$", r.strip(), re.I)] if after else []
         task = match.group("task").strip().strip("*").strip()
         nodes.append({"ref": match.group("id").upper(), "owner": match.group("owner").strip().strip("@*").strip(),
                       "task": task, "done_when": done.group(1).strip() if done else "",
-                      "after": refs, "gate": gate_for(task, (gate.group(1).lower() if gate else "review"))})
+                      "after": refs, "gate": gate_for(task, (gate.group(1).lower() if gate else "review")),
+                      "eta": max(2, min(480, int(eta.group(1)))) if eta else None})
     return nodes
 
 
@@ -114,11 +116,12 @@ The current plan:
 {startup.get('plan') or '(none yet)'}
 {f"{chr(10)}{memory}{chr(10)}" if memory else ""}
 Break the goal into 3–8 tasks. One line per task, exactly in this format:
-T1 | <Owner first name> | <the task, concrete> | done when: <evidence in the result that can fail, e.g. "3 subject lines under 50 chars"> | after: - | gate: auto
+T1 | <Owner first name> | <the task, concrete> | done when: <evidence in the result that can fail, e.g. "3 subject lines under 50 chars"> | after: - | gate: auto | eta: 20
 Rules:
 - after: the T-ids this task needs first (comma-separated), or "-". Tasks that don't need each other must NOT be chained: they run in parallel.
 - gate: auto (cheap to redo), review (I check it), code (changes the product's code: Claude Code does it in the \
 project folder and the tests check it), founder (anything public, sent to customers, money, or a deploy).
+- eta: minutes the owner needs (the team works in minutes, never days).
 - Each task belongs to the person whose area it is. No other text."""
 
 

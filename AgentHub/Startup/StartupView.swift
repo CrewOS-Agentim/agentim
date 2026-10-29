@@ -860,7 +860,7 @@ private struct RoomOrNotes: View {
             case .messages: MessagesPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .work: WorkPanel(model: model, detail: detail, stackRoot: stackRoot)
             case .launch: LaunchPanel(model: model, detail: detail, stackRoot: stackRoot)
-            case .notes: MeetingNotesList(model: model, detail: detail, stackRoot: stackRoot)
+            case .notes: SummariesList(model: model, detail: detail, stackRoot: stackRoot)
             }
         }
         .sheet(item: $model.openMeeting) { notes in
@@ -882,7 +882,7 @@ private struct MeetingNotesList: View {
             LazyVStack(alignment: .leading, spacing: 10) {
                 if model.meetingList.isEmpty {
                     ContentUnavailableView("No meetings yet", systemImage: "calendar",
-                                           description: Text("The team holds one rolling meeting a day; its summary and action items update after every round."))
+                                           description: Text("Meeting notes show up here; Agent Tim also summarizes every few minutes."))
                         .padding(.top, 40)
                 }
                 ForEach(model.meetingList) { meeting in
@@ -1094,4 +1094,10 @@ struct RoomOrNotesRoom: View {
     var body: some View {
         TeamRoom(model: model, detail: detail, stackRoot: stackRoot)
     }
+}
+
+/// The plan's markdown renderer, for other files (summaries).
+struct PlanTextPublic: View {
+    let markdown: String
+    var body: some View { PlanText(markdown: markdown) }
 }
