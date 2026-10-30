@@ -8,7 +8,6 @@ struct ChatView: View {
     @State private var attachments: [ChatAttachment] = []
     @State private var attachError: String?
     @State private var dropTargeted = false
-    @State private var importing = false
     @State private var composerHeight: CGFloat = 38
 
     private var conversation: Conversation? { store.conversations.first { $0.id == conversationID } }
@@ -41,9 +40,6 @@ struct ChatView: View {
             }
             .overlay { if dropTargeted { DropHint() } }
             .animation(.easeOut(duration: 0.18), value: dropTargeted)
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-                if case .success(let urls) = result { addFiles(urls) }
-            }
             .navigationTitle(conversation.title)
             .navigationSubtitle(subtitle(conversation))
             .onAppear { store.markRead(conversation.id); store.visibleConversationID = conversation.id }
@@ -134,16 +130,25 @@ struct ChatView: View {
                 RoutePreview(text: draft, conversation: conversation).padding(.leading, 48)
             }
             HStack(alignment: .bottom, spacing: Theme.s2) {
-                Button { importing = true } label: {
+                Menu {
+                    Button("Files or images…", systemImage: "doc.badge.plus") { pick(folders: false) }
+                    Button("Folder or codebase…", systemImage: "folder.badge.plus") { pick(folders: true) }
+                    Divider()
+                    Button("Paste image", systemImage: "doc.on.clipboard") { _ = paste(.general) }
+                        .disabled(!ChatComposer.hasImage(.general))
+                } label: {
                     Image(systemName: "plus").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .frame(width: 34, height: 34)
                         .background(Theme.surface, in: Circle())
                         .overlay(Circle().strokeBorder(Theme.border))
                 }
+                .menuStyle(.button)
                 .buttonStyle(.plain)
-                .help("Attach files (or drag them into the chat)")
-                .accessibilityLabel("Attach files")
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Attach files, images or a folder (or drag them in, or paste a screenshot)")
+                .accessibilityLabel("Attach files, images or a folder")
                 HStack(alignment: .bottom, spacing: 4) {
                     ComposerTextView(text: $draft,
                                      placeholder: conversation.isMeeting ? "Message the group" : "Message \(store.agent(for: conversation)?.name ?? "Agent Tim")",
@@ -151,7 +156,8 @@ struct ChatView: View {
                                      mentions: conversation.isMeeting ? store.members(in: conversation).map(\.mention) : [],
                                      onSubmit: { submit(conversation) },
                                      height: $composerHeight,
-                                     onTab: { completeMention(in: conversation) })
+                                     onTab: { completeMention(in: conversation) },
+                                     onPaste: paste)
                         .frame(height: composerHeight)
                         .padding(.leading, Theme.s2)
                     Button { submit(conversation) } label: {
@@ -217,6 +223,29 @@ struct ChatView: View {
         let result = ChatComposer.add(urls, to: attachments)
         attachments = result.attachments
         attachError = result.error
+    }
+
+    /// The + menu: pick files and images, or a folder (a codebase is read as its tree plus its code).
+    private func pick(folders: Bool) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = !folders
+        panel.canChooseDirectories = folders
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Attach"
+        panel.message = folders ? "Choose a folder or codebase. Code and text files are read; dependencies, build output and secrets are skipped."
+                                : "Choose files or images to attach."
+        panel.begin { response in
+            if response == .OK { addFiles(panel.urls) }
+        }
+    }
+
+    /// ⌘V: copied files or a screenshot become attachments; text pastes as usual.
+    private func paste(_ board: NSPasteboard) -> Bool {
+        let result = ChatComposer.paste(board, to: attachments)
+        guard let result else { return false }
+        attachments = result.attachments
+        attachError = result.error
+        return true
     }
 
     /// Per-conversation override: Auto (router) or a pinned model.
@@ -391,8 +420,23 @@ struct MessageRow: View {
                 }
 
                 if let files = message.attachments, !files.isEmpty {
-                    HStack(spacing: Theme.s2) {
-                        ForEach(files) { AttachmentChip(file: $0) }
+                    let pictures = files.compactMap { file in file.imageURL.flatMap { url in NSImage(contentsOf: url).map { (file, url, $0) } } }
+                    if !pictures.isEmpty {
+                        HStack(spacing: Theme.s2) {
+                            ForEach(pictures, id: \.0.id) { file, url, image in
+                                Image(nsImage: image).resizable().scaledToFit()
+                                    .frame(maxWidth: pictures.count == 1 ? 280 : 140, maxHeight: pictures.count == 1 ? 220 : 120)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .onTapGesture { NSWorkspace.shared.open(url) }
+                                    .help("\(file.name): click to open")
+                            }
+                        }
+                    }
+                    let others = files.filter { $0.imageURL == nil }
+                    if !others.isEmpty {
+                        HStack(spacing: Theme.s2) {
+                            ForEach(others) { AttachmentChip(file: $0) }
+                        }
                     }
                 }
 
@@ -480,7 +524,7 @@ enum ChatComposer {
                 error = "Up to \(ChatAttachment.maxFiles) files per message."
                 break
             }
-            if attachments.contains(where: { $0.name == url.lastPathComponent }) { continue }
+            if attachments.contains(where: { $0.name == url.lastPathComponent || $0.name == url.lastPathComponent + "/" }) { continue }
             do {
                 attachments.append(try ChatAttachment.load(url))
             } catch let failure {
@@ -488,6 +532,23 @@ enum ChatComposer {
             }
         }
         return (attachments, error)
+    }
+
+    /// Copied files, or an image on the clipboard (a screenshot); nil when it's just text to paste.
+    static func paste(_ board: NSPasteboard, to current: [ChatAttachment]) -> (attachments: [ChatAttachment], error: String?)? {
+        if let urls = board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL], !urls.isEmpty {
+            return add(urls, to: current)
+        }
+        guard hasImage(board), let data = board.data(forType: .png) ?? board.data(forType: .tiff) else { return nil }
+        guard current.count < ChatAttachment.maxFiles else { return (current, "Up to \(ChatAttachment.maxFiles) files per message.") }
+        let number = current.filter { $0.name.hasPrefix("Pasted image") }.count + 1
+        guard let image = ChatAttachment.image(data, name: "Pasted image \(number).jpg") else { return (current, "Couldn't read the pasted image.") }
+        return (current + [image], nil)
+    }
+
+    /// An image, and not text that happens to carry one (copying from a document puts both on the clipboard).
+    static func hasImage(_ board: NSPasteboard) -> Bool {
+        board.string(forType: .string) == nil && board.availableType(from: [.png, .tiff]) != nil
     }
 }
 
@@ -497,12 +558,20 @@ private struct AttachmentChip: View {
 
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: file.symbol)
+            if let url = file.imageURL, let image = NSImage(contentsOf: url) {
+                Image(nsImage: image).resizable().scaledToFill()
+                    .frame(width: 18, height: 18).clipShape(RoundedRectangle(cornerRadius: 4))
+            } else {
+                Image(systemName: file.symbol)
+            }
             Text(file.name).lineLimit(1).truncationMode(.middle)
             Text(file.sizeLabel).foregroundStyle(.secondary)
             if !file.isReadable {
                 Image(systemName: "eye.slash").foregroundStyle(.secondary)
                     .help("The model gets the file name only: it can't read this kind of file.")
+            } else if file.kind == .folder, file.truncated {
+                Image(systemName: "scissors").foregroundStyle(.secondary)
+                    .help("Big folder: the model gets \(file.filesRead ?? 0) of \(file.filesTotal ?? 0) files (key files first) and the full file list.")
             } else if file.truncated {
                 Image(systemName: "scissors").foregroundStyle(.secondary)
                     .help("Long file: the model gets the first \(ChatAttachment.maxTextCharacters / 1000)k characters.")

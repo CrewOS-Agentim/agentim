@@ -175,7 +175,7 @@ Before any download, the runner looks up the real file sizes from the Ollama reg
 **It starts everything for you.** When the app opens it makes sure agentim is ready: it starts Docker Desktop and any stopped agentim container, adds this Mac's runners, turns on the coding agents you have installed (**Claude Code**, and **Codex** for ChatGPT), connects agentim to Claude, waits for the models to answer and preloads your default chat model so the first reply is quick (the status bar shows *Starting your models…*). It keeps re-checking every 10 seconds while something is offline. If no local chat model is up, chats are answered by **Claude Code** on your Mac (then Codex) instead of failing with "No model is available". The ChatGPT web connector isn't opened automatically, because it makes agentim reachable from the internet: that stays a button in **This Mac**.
 
 <p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: chats like Messages and Slack, with the chat options in the toolbar" width="90%"></p>
-<p align="center"><b>Chats</b>: a roomy message box (Enter sends, Shift+Enter for a new line), drag in files, and every reply says which model answered and why</p>
+<p align="center"><b>Chats</b>: a roomy message box (Enter sends, Shift+Enter for a new line), drag in or paste files, images and whole codebases, and every reply says which model answered and why</p>
 
 <table>
   <tr>
@@ -218,7 +218,19 @@ The app can also run Hugging Face **MLX** models directly on your Mac's GPU, aft
 
 **Status:** the **Status** page shows which models are running, your Mac's CPU and memory (with live charts), each container's CPU and memory (`docker stats`), and every model task: what's running now and a history with timings and results.
 
-**Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line). **Drag files** into a chat, or click 📎: text, code and PDFs are read into the prompt (up to 10 files, 20 MB and 100k characters each); images and other files are passed by name, since the chat models only read text.
+**Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line).
+
+**Files, images and codebases.** Drag them into a chat, paste them (**⌘V** takes a screenshot or copied files), or use **+** → *Files or images…* / *Folder or codebase…*. Up to 10 per message.
+
+| You attach | The model gets |
+|---|---|
+| Text, code, Markdown, CSV, JSON… | The contents (up to 100k characters a file) |
+| PDF, Word (.docx/.doc), RTF, OpenDocument, HTML | The text inside |
+| A folder or codebase | Its file tree plus the code: README and manifests first, up to 240k characters. `.git`, `node_modules`, build output, lock files, `.gitignore`d paths and secrets (`.env`, keys) are skipped |
+| Images and screenshots | The image itself, for models that see: Claude, GPT, Gemini, Qwen3.5, Gemma 3, Frontend Design Expert and other vision models. When the picked model can't see, agentim switches to one that can (unless you chose the model yourself); text-only models get the file name |
+| Audio, video, other binaries | The file name |
+
+Images are scaled to 1568 px and kept with agentim (`~/Library/Application Support/agentim/attachments`); deleting the chat deletes them. In group chats, members whose model can see get your latest images too.
 
 **Found a bug?** **Help → Report an Issue on GitHub…** (also in Settings and the menu bar) opens a new GitHub issue with your app version, macOS, chip and memory filled in. Nothing is sent until you submit it.
 

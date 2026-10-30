@@ -9,7 +9,32 @@ struct OpenAICompatibleClient: ChatClient {
     var isFullEndpoint = false
 
     private struct Body: Encodable {
-        struct Message: Encodable { let role: String; let content: String }
+        struct Message: Encodable {
+            let role: String
+            let text: String
+            var images: [String] = []
+
+            enum CodingKeys: String, CodingKey { case role, content }
+            struct Part: Encodable {
+                struct ImageURL: Encodable { let url: String }
+                let type: String
+                var text: String?
+                var image_url: ImageURL?
+            }
+
+            /// Plain text, or text + images as content parts (what vision models read).
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(role, forKey: .role)
+                if images.isEmpty {
+                    try container.encode(text, forKey: .content)
+                } else {
+                    let parts = [Part(type: "text", text: text)]
+                        + images.map { Part(type: "image_url", image_url: .init(url: "data:image/jpeg;base64,\($0)")) }
+                    try container.encode(parts, forKey: .content)
+                }
+            }
+        }
         let model: String
         let messages: [Message]
         let stream = true
@@ -33,10 +58,8 @@ struct OpenAICompatibleClient: ChatClient {
         }
 
         var messages: [Body.Message] = []
-        if !request.system.isEmpty { messages.append(.init(role: "system", content: request.system)) }
-        messages += request.messages
-            .filter { $0.role != .system && !$0.isError }
-            .map { Body.Message(role: $0.role.rawValue, content: $0.modelContent) }
+        if !request.system.isEmpty { messages.append(.init(role: "system", text: request.system)) }
+        messages += request.wireMessages().map { Body.Message(role: $0.role.rawValue, text: $0.text, images: $0.images) }
         urlRequest.httpBody = try? JSONEncoder().encode(Body(model: request.model, messages: messages))
 
         return SSE.stream(urlRequest) { data in

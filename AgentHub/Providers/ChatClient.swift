@@ -6,6 +6,27 @@ struct ChatRequest {
     var system: String
     var messages: [ChatMessage]
     var maxTokens = 4_096
+    /// The model can see images: attached images go as images, not just their names.
+    var sendImages = false
+
+    /// How many recent messages with images send them (older ones are named only, to keep requests small).
+    static let imageMessages = 3
+
+    /// The messages whose images are sent with this request.
+    var imageMessageIDs: Set<UUID> {
+        guard sendImages else { return [] }
+        return Set(messages.filter { !$0.images.isEmpty }.suffix(Self.imageMessages).map(\.id))
+    }
+
+    /// Wire messages for an API: the text, plus base64 JPEG images where they're sent.
+    func wireMessages() -> [(role: Role, text: String, images: [String])] {
+        let withImages = imageMessageIDs
+        return messages.filter { $0.role != .system && !$0.isError }.map { message in
+            let images = withImages.contains(message.id) ? message.images.compactMap { $0.imageBase64() } : []
+            // If a saved image went missing, the text names it instead of claiming it's attached.
+            return (message.role, message.modelContent(withImages: !images.isEmpty), images)
+        }
+    }
 }
 
 /// Anything that can stream a reply: cloud APIs, remote agents, on-device MLX.

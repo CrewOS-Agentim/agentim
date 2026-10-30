@@ -9,6 +9,7 @@ final class AttachmentTests: XCTestCase {
     override func setUpWithError() throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        ChatAttachment.storeDirectory = dir.appendingPathComponent("saved-images")
     }
 
     override func tearDownWithError() throws {
@@ -25,7 +26,7 @@ final class AttachmentTests: XCTestCase {
         let swift = try ChatAttachment.load(file("main.swift", Data("print(\"hi\")".utf8)))
         XCTAssertEqual(swift.kind, .text)
         XCTAssertEqual(swift.text, "print(\"hi\")")
-        XCTAssertEqual(swift.promptBlock, "<file name=\"main.swift\">\nprint(\"hi\")\n</file>")
+        XCTAssertEqual(swift.promptBlock(), "<file name=\"main.swift\">\nprint(\"hi\")\n</file>")
         let csv = try ChatAttachment.load(file("data.csv", Data("a,b\n1,2".utf8)))
         XCTAssertTrue(csv.isReadable)
     }
@@ -35,19 +36,24 @@ final class AttachmentTests: XCTestCase {
         let attachment = try ChatAttachment.load(file("big.txt", Data(long.utf8)))
         XCTAssertTrue(attachment.truncated)
         XCTAssertEqual(attachment.text?.count, ChatAttachment.maxTextCharacters)
-        XCTAssertTrue(attachment.promptBlock.contains("truncated=\"true\""))
+        XCTAssertTrue(attachment.promptBlock().contains("truncated=\"true\""))
     }
 
-    func testBinaryAndImagesAreNamedOnly() throws {
+    func testBinaryFilesAreNamedOnlyAndImagesAreSaved() throws {
         let binary = try ChatAttachment.load(file("blob.bin", Data([0x00, 0x01, 0xFF, 0x00])))
         XCTAssertFalse(binary.isReadable)
-        XCTAssertTrue(binary.promptBlock.contains("blob.bin"))
+        XCTAssertTrue(binary.promptBlock().contains("blob.bin"))
         let png = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4,
                                    hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
             .representation(using: .png, properties: [:])!
         let image = try ChatAttachment.load(file("cat.png", png))
         XCTAssertEqual(image.kind, .image)
-        XCTAssertTrue(image.promptBlock.contains("Attached image \"cat.png\""))
+        // Text-only models get the name; models that see get the image with a short note.
+        XCTAssertTrue(image.promptBlock().contains("Attached image \"cat.png\""))
+        XCTAssertEqual(image.promptBlock(withImage: true), "[Image \"cat.png\" attached.]")
+        XCTAssertTrue(image.isReadable)
+        XCTAssertNotNil(image.imageBase64())
+        XCTAssertEqual(image.imageURL?.pathExtension, "jpg")
     }
 
     func testPDFTextIsExtracted() throws {
@@ -66,8 +72,10 @@ final class AttachmentTests: XCTestCase {
         XCTAssertTrue(pdf.text?.contains("Quarterly revenue") ?? false)
     }
 
-    func testFoldersAndHugeFilesAreRejected() throws {
-        XCTAssertThrowsError(try ChatAttachment.load(dir))
+    func testEmptyFoldersAndHugeFilesAreRejected() throws {
+        XCTAssertThrowsError(try ChatAttachment.load(dir)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("no text or code files"))
+        }
         let big = dir.appendingPathComponent("huge.txt")
         FileManager.default.createFile(atPath: big.path, contents: nil)
         let handle = try FileHandle(forWritingTo: big)
@@ -105,6 +113,7 @@ final class AttachmentTests: XCTestCase {
         XCTAssertTrue(ChatComposer.canSend(draft: "", attachments: added.attachments), "files alone can be sent")
         let full = Array(repeating: ChatAttachment(name: "x", kind: .text, byteCount: 1), count: ChatAttachment.maxFiles)
         XCTAssertNotNil(ChatComposer.add([url], to: full).error)
-        XCTAssertNotNil(ChatComposer.add([dir], to: []).error, "folders explain themselves")
+        let folder = ChatComposer.add([dir, dir], to: [])
+        XCTAssertEqual(folder.attachments.map(\.kind), [.folder], "a folder attaches once, as a codebase")
     }
 }

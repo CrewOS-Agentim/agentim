@@ -6,7 +6,31 @@ struct AnthropicClient: ChatClient {
     var apiKey: String
 
     private struct Body: Encodable {
-        struct Message: Encodable { let role: String; let content: String }
+        struct Message: Encodable {
+            let role: String
+            let text: String
+            var images: [String] = []
+
+            enum CodingKeys: String, CodingKey { case role, content }
+            struct Part: Encodable {
+                struct Source: Encodable { var type = "base64"; var media_type = "image/jpeg"; let data: String }
+                let type: String
+                var text: String?
+                var source: Source?
+            }
+
+            /// Plain text, or image blocks followed by the text (Claude reads images best before the question).
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.container(keyedBy: CodingKeys.self)
+                try container.encode(role, forKey: .role)
+                if images.isEmpty {
+                    try container.encode(text, forKey: .content)
+                } else {
+                    let parts = images.map { Part(type: "image", source: .init(data: $0)) } + [Part(type: "text", text: text)]
+                    try container.encode(parts, forKey: .content)
+                }
+            }
+        }
         let model: String
         let system: String?
         let messages: [Message]
@@ -29,9 +53,7 @@ struct AnthropicClient: ChatClient {
         urlRequest.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
 
-        let messages = request.messages
-            .filter { $0.role != .system && !$0.isError }
-            .map { Body.Message(role: $0.role.rawValue, content: $0.modelContent) }
+        let messages = request.wireMessages().map { Body.Message(role: $0.role.rawValue, text: $0.text, images: $0.images) }
         urlRequest.httpBody = try? JSONEncoder().encode(
             Body(model: request.model, system: request.system.isEmpty ? nil : request.system,
                  messages: messages, max_tokens: request.maxTokens))

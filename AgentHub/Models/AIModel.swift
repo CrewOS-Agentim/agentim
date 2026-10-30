@@ -80,6 +80,31 @@ struct AIModel: Identifiable, Codable, Hashable {
         if case .cloud(let id) = location { return id }
         return nil
     }
+
+    /// Reads images sent with a message (vision). Known from the provider, else guessed from the model's name.
+    var canSeeImages: Bool {
+        if isMedia || capabilities.contains(.agent) { return false }
+        let name = modelName.lowercased()
+        switch location {
+        case .local:
+            return false  // the on-device MLX models are text-only
+        case .cloud(let provider) where provider == Provider.anthropic.id || provider == Provider.gemini.id:
+            return true
+        case .cloud(let provider) where provider == Provider.openAI.id:
+            return ["gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4"].contains { name.hasPrefix($0) }
+        default:
+            // Claude and ChatGPT through your login run as text prompts in a terminal.
+            if name.hasPrefix("claude/") || name.hasPrefix("chatgpt/") { return false }
+            if name.contains("gemma-3-1b") || name.contains("gemma3:1b") { return false }
+            return Self.visionNames.contains { name.contains($0) }
+        }
+    }
+
+    /// Open models that see images (Ollama, LM Studio, Hugging Face names).
+    static let visionNames = [
+        "-vl", "vl-", "_vl", "vision", "qwen3.5", "qwen3_5", "gemma-3", "gemma3", "llava", "pixtral", "minicpm-v",
+        "moondream", "frontend-design-expert", "llama-4", "llama4", "mistral-small-3", "internvl", "glm-4.5v", "kimi-vl",
+    ]
 }
 
 extension AIModel {

@@ -292,11 +292,18 @@ final class AppStore {
 
     func clearMessages(_ conversationID: UUID) {
         guard let i = conversations.firstIndex(where: { $0.id == conversationID }), !isStreaming(conversationID) else { return }
+        removeImages(of: conversations[i].messages)
         conversations[i].messages = []
     }
 
     func deleteConversation(_ conversationID: UUID) {
+        removeImages(of: conversations.first { $0.id == conversationID }?.messages ?? [])
         conversations.removeAll { $0.id == conversationID }
+    }
+
+    /// The saved copies of a chat's images go with the chat.
+    private func removeImages(of messages: [ChatMessage]) {
+        for url in messages.flatMap(\.images).compactMap(\.imageURL) { try? FileManager.default.removeItem(at: url) }
     }
 
     /// Talk to another agent in the same chat (the history stays).
@@ -375,6 +382,12 @@ final class AppStore {
             return mentions.contains(words.first ?? "") || mentions.contains(words.joined(separator: "-"))
         }
         return picked.isEmpty ? agents : picked
+    }
+
+    /// Images from your last few messages in a chat (what a group member that can see should look at).
+    func recentImages(_ conversationID: UUID) -> [ChatAttachment] {
+        let messages = conversations.first { $0.id == conversationID }?.messages ?? []
+        return Array(messages.filter { $0.role == .user && !$0.images.isEmpty }.suffix(ChatRequest.imageMessages).flatMap(\.images))
     }
 
     /// The meeting so far as a transcript, with the person each line is from.
@@ -506,8 +519,11 @@ final class AppStore {
                     $0.routingReason = "\(member.name) in the group chat" + (round > 1 ? " · round \(round)" : "")
                 }
                 do {
+                    // Members whose model can see get the images you shared lately along with the transcript.
+                    let images = model.canSeeImages ? recentImages(conversationID) : []
                     let request = ChatRequest(model: model.modelName, system: system,
-                                              messages: [ChatMessage(role: .user, content: ask)])
+                                              messages: [ChatMessage(role: .user, content: ask, attachments: images.nilIfEmpty)],
+                                              sendImages: !images.isEmpty)
                     for try await chunk in client.stream(request) {
                         updateReply(reply.id, in: conversationID) { $0.content += chunk }
                     }
@@ -567,21 +583,34 @@ final class AppStore {
         let conversation = conversations[index]
         let agent = agent(for: conversation)
 
-        let targets: [(client: ChatClient, model: String, modelID: String?, reason: String)]
+        let targets: [(client: ChatClient, model: String, modelID: String?, reason: String, images: Bool)]
         let prompt: String
 
         if let agent, case .remote(let endpoint, let model) = agent.kind {
             let client = OpenAICompatibleClient(
                 baseURL: endpoint, apiKey: Keychain.get(agent.keychainAccount), isFullEndpoint: true)
-            targets = [(client, model, nil, "Remote agent \(agent.name)")]
+            targets = [(client, model, nil, "Remote agent \(agent.name)", false)]
             prompt = text
         } else {
             do {
                 let decision = try ModelRouter(available: availableModels, settings: router).route(
                     RoutingRequest(text: text, history: conversation.messages, agent: agent,
                                    conversationPin: conversation.pinnedModelID, isOnline: isOnline))
-                targets = ([decision.model] + decision.fallbacks.prefix(2)).compactMap { model in
-                    client(for: model).map { ($0, model.modelName, model.id, model.id == decision.model.id ? decision.reason : "Fallback after error") }
+                var ranked = [decision.model] + decision.fallbacks
+                var reasons = [decision.model.id: decision.reason]
+                // Images attached: a model that can see them goes first, unless you picked the model yourself.
+                let picked = ModelRouter.extractOverride(text).alias != nil || conversation.pinnedModelID != nil
+                    || agent.map { $0.modelPreference != .auto } ?? false
+                if attachments.contains(where: { $0.imageFile != nil }), !picked, !decision.model.canSeeImages,
+                   let seer = imageModel(among: ranked + availableModels.sorted { $0.qualityTier > $1.qualityTier }) {
+                    ranked.removeAll { $0.id == seer.id }
+                    ranked.insert(seer, at: 0)
+                    reasons[seer.id] = "Can see your images"
+                }
+                targets = ranked.prefix(3).compactMap { model in
+                    client(for: model).map {
+                        ($0, model.modelName, model.id, reasons[model.id] ?? "Fallback after error", model.canSeeImages)
+                    }
                 }
                 prompt = decision.cleanedText
             } catch RoutingError.noModelsAvailable where !rechecked {
@@ -621,7 +650,7 @@ final class AppStore {
                     $0.isError = false
                 }
                 do {
-                    let request = ChatRequest(model: target.model, system: system, messages: history)
+                    let request = ChatRequest(model: target.model, system: system, messages: history, sendImages: target.images)
                     for try await chunk in target.client.stream(request) {
                         updateReply(reply.id, in: conversationID) { $0.content += chunk }
                     }
@@ -657,6 +686,11 @@ final class AppStore {
             message.lowercased().contains("/\(skill.slug)")
                 || (attached.contains(skill) && (skill.alwaysOn || skill.matches(message)))
         }
+    }
+
+    /// The first model that can see images and that agentim can reach (for messages with images).
+    func imageModel(among models: [AIModel]) -> AIModel? {
+        models.first { $0.canSeeImages && client(for: $0) != nil }
     }
 
     func client(for model: AIModel) -> ChatClient? {

@@ -17,6 +17,8 @@ struct ComposerTextView: NSViewRepresentable {
     @Binding var height: CGFloat
     /// Tab: return true when handled (e.g. a mention was completed); otherwise Tab behaves normally.
     var onTab: (() -> Bool)? = nil
+    /// Paste: return true when the clipboard was taken as attachments (a screenshot, copied files).
+    var onPaste: ((NSPasteboard) -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -31,6 +33,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.onSubmit = { context.coordinator.parent.onSubmit() }
         textView.onTab = { context.coordinator.parent.onTab?() ?? false }
+        textView.onPaste = { context.coordinator.parent.onPaste?($0) ?? false }
         textView.isRichText = false
         textView.allowsUndo = true
         textView.font = font
@@ -123,6 +126,12 @@ extension ComposerTextView {
 final class SubmitTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onTab: (() -> Bool)?
+    var onPaste: ((NSPasteboard) -> Bool)?
+
+    override func paste(_ sender: Any?) {
+        if onPaste?(.general) == true { return }
+        super.paste(sender)
+    }
 
     override func insertTab(_ sender: Any?) {
         if onTab?() == true { return }

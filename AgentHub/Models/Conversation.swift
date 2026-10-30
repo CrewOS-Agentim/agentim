@@ -20,11 +20,17 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var skillID: UUID?
 
     /// What the model reads: the text plus every attached file.
-    var modelContent: String {
+    var modelContent: String { modelContent(withImages: false) }
+
+    /// `withImages`: the message's images go along as images, so the text only names them.
+    func modelContent(withImages: Bool) -> String {
         guard let attachments, !attachments.isEmpty else { return content }
-        let files = attachments.map(\.promptBlock).joined(separator: "\n\n")
+        let files = attachments.map { $0.promptBlock(withImage: withImages) }.joined(separator: "\n\n")
         return content.isEmpty ? files : content + "\n\n" + files
     }
+
+    /// Images this message carries (saved copies that can be sent to a model that sees images).
+    var images: [ChatAttachment] { (attachments ?? []).filter { $0.kind == .image && $0.imageFile != nil } }
 }
 
 struct Conversation: Identifiable, Codable, Hashable {

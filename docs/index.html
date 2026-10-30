@@ -192,7 +192,8 @@
 
   /* ---------- always on ---------- */
   .features { display: grid; grid-template-columns: repeat(4, 1fr); gap: 30px; margin-top: 70px; text-align: center; }
-  @media (max-width: 860px) { .features { grid-template-columns: 1fr 1fr; } }
+  .features.five { grid-template-columns: repeat(5, 1fr); gap: 24px; }
+  @media (max-width: 860px) { .features, .features.five { grid-template-columns: 1fr 1fr; } }
   .features .icon { font-size: 44px; }
   .features h3 { font-size: 21px; margin: 12px 0 6px; }
   .features p { color: #a1a1a6; font-size: 15px; }
@@ -338,11 +339,12 @@
       <div class="screen"><img class="on" src="assets/screenshots/onboarding-models.png" alt="agentim onboarding: pick your chat, coding, voice and video models" loading="lazy"></div>
       <div class="base"></div>
     </div>
-    <div class="features" style="margin-top:80px">
+    <div class="features five" style="margin-top:80px">
       <div class="reveal"><div class="icon">💬</div><h3>Chat</h3><p>Qwen3, multimodal Qwen3.5, Llama 3.2 or Gemma 3, from 1.7B up to 30B, sized to your Mac. DeepSeek V4 via Hugging Face.</p></div>
       <div class="reveal"><div class="icon">🧑‍💻</div><h3>Coding</h3><p>Qwen2.5 Coder, Qwen3 Coder, STARK-WEB or Frontend Design Expert, used whenever a message looks like code. Skills suggest the right one.</p></div>
       <div class="reveal"><div class="icon">🎙️</div><h3>Voice</h3><p>Send a voice note; Whisper listens and Kokoro answers out loud, all on this Mac.</p></div>
       <div class="reveal"><div class="icon">🎬</div><h3>Video &amp; images</h3><p>LTX Desktop renders clips and pictures straight from chat.</p></div>
+      <div class="reveal"><div class="icon">📎</div><h3>Files, images &amp; code</h3><p>Drop in PDFs, Word docs, screenshots or a whole codebase. Images go to models that can see them.</p></div>
     </div>
   </div>
 </section>
