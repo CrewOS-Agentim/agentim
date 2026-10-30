@@ -103,7 +103,7 @@ extension AIModel {
         }
         return AIModel(
             id: "server-\(server.id.uuidString.prefix(8))/\(info.id)",
-            displayName: shortName, modelName: info.id,
+            displayName: info.name ?? shortName, modelName: info.id,
             location: .server(serverID: server.id), capabilities: caps,
             contextWindow: 32_768, costTier: 0, qualityTier: quality, alias: alias)
     }

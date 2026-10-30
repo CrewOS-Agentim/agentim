@@ -9,6 +9,7 @@ Runs natively (`python3 runner.py`) or in Docker. Standard library only.
 - Bridges LTX Desktop (video/image generation) into chat when run natively on the Mac.
 """
 
+import hashlib
 import json
 import os
 import platform
@@ -18,6 +19,7 @@ import shlex
 import shutil
 import socket
 import ssl
+import struct
 import subprocess
 import sys
 import threading
@@ -192,6 +194,395 @@ def gguf_size(files, quant):
     return sum(f.get("size", 0) for f in matches)
 
 
+# ---------------------------------------------------------------- LoRA adapters
+
+GGUF_SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?", 10: "<Q", 11: "<q", 12: "<d"}
+
+
+def gguf_metadata(data):
+    """Key/values from the start of a GGUF file. Stops quietly where `data` ends (big arrays come later)."""
+    if data[:4] != b"GGUF":
+        raise ValueError("not a GGUF file")
+    pos = 16  # magic, version, tensor count
+    meta = {}
+
+    def string():
+        nonlocal pos
+        (n,) = struct.unpack_from("<Q", data, pos)
+        if pos + 8 + n > len(data):
+            raise IndexError
+        pos += 8 + n
+        return data[pos - n:pos].decode("utf-8", "replace")
+
+    def value(kind):
+        nonlocal pos
+        if kind == 8:
+            return string()
+        if kind == 9:
+            inner, n = struct.unpack_from("<IQ", data, pos)
+            pos += 12
+            items = [value(inner) for _ in range(n)]
+            return items if n <= 16 else None
+        fmt = GGUF_SCALARS[kind]
+        (v,) = struct.unpack_from(fmt, data, pos)
+        pos += struct.calcsize(fmt)
+        return v
+
+    try:
+        (count,) = struct.unpack_from("<Q", data, pos)
+        pos += 8
+        for _ in range(count):
+            key = string()
+            (kind,) = struct.unpack_from("<I", data, pos)
+            pos += 4
+            meta[key] = value(kind)
+    except (IndexError, KeyError, struct.error):
+        pass
+    return meta
+
+
+def hf_headers(token):
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def hf_file_url(repo, path):
+    return f"https://huggingface.co/{repo}/resolve/main/{urllib.parse.quote(path)}"
+
+
+def hf_head_bytes(repo, path, token=None, length=1 << 20):
+    req = urllib.request.Request(hf_file_url(repo, path), headers={**hf_headers(token), "Range": f"bytes=0-{length - 1}"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read(length)
+
+
+def parse_adapter_ref(text):
+    """'owner/repo', 'owner/repo/file.gguf' or a huggingface.co link -> (repo, path or None)."""
+    text = re.sub(r"^(https?://)?(www\.)?(huggingface\.co|hf\.co)/", "", (text or "").strip())
+    text = re.sub(r"/(blob|resolve|tree)/[^/]+", "", text).split("?")[0]
+    parts = [p for p in text.split("/") if p]
+    if len(parts) < 2 or not all(re.fullmatch(r"[\w.\-]+", p) for p in parts) or ".." in parts:
+        raise ValueError("Use a Hugging Face repo like owner/name (or a link to one).")
+    return "/".join(parts[:2]), "/".join(parts[2:]) or None
+
+
+def base_repo(base, token=None):
+    """The original Hugging Face repo behind an installed model ('hf.co/unsloth/Qwen3.5-9B-GGUF' -> 'Qwen/Qwen3.5-9B')."""
+    registry, repo, _ = parse_ollama_ref(base)
+    if registry != "hf.co":
+        return None
+    card = (http_json(f"https://huggingface.co/api/models/{repo}", hf_headers(token)) or {}).get("cardData") or {}
+    declared = card.get("base_model")
+    if isinstance(declared, list):
+        declared = declared[0] if declared else None
+    return declared or repo
+
+
+def search_adapters(base, token=None, limit=20):
+    """LoRA adapters Hugging Face lists for the model behind `base`, most downloaded first."""
+    root = base_repo(base, token)
+    if not root:
+        return {"base_repo": None, "adapters": []}
+    url = (f"https://huggingface.co/api/models?filter=base_model:adapter:{urllib.parse.quote(root)}"
+           f"&sort=downloads&limit={limit}&full=true")
+    adapters = []
+    for m in http_json(url, hf_headers(token), timeout=30) or []:
+        files = [f["rfilename"] for f in m.get("siblings", [])]
+        # Many "adapter" repos are really merged GGUF models; a GGUF counts only when its file says it's a LoRA.
+        fmt = ("safetensors" if any(f.endswith("adapter_model.safetensors") for f in files)
+               else "gguf" if any(f.lower().endswith(".gguf") and re.search(r"lora|adapter", f, re.I) for f in files)
+               else None)
+        if fmt:
+            adapters.append({"repo": m["id"], "downloads": m.get("downloads", 0), "likes": m.get("likes", 0), "format": fmt})
+    return {"base_repo": root, "adapters": adapters}
+
+
+def resolve_adapter(ref, token=None):
+    """Which files in the repo are the adapter: a GGUF LoRA (checked in its header) or PEFT safetensors + config."""
+    repo, path = parse_adapter_ref(ref)
+    tree = http_json(f"https://huggingface.co/api/models/{repo}/tree/main?recursive=true", hf_headers(token), timeout=30) or []
+    sizes = {f["path"]: f.get("size", 0) for f in tree if f.get("type") == "file"}
+    if path and path not in sizes and not any(p.startswith(path.rstrip("/") + "/") for p in sizes):
+        raise ValueError(f"{path} isn't in {repo}.")
+    ggufs = [p for p in sizes if p.lower().endswith(".gguf") and (not path or p == path)]
+
+    def precision(p):  # full precision first: adapters are small and quantizing them costs quality
+        lower = p.lower()
+        return next((i for i, k in enumerate(("f16", "bf16", "q8_0", "f32")) if k in lower), 9), sizes[p]
+
+    for p in sorted(ggufs, key=precision)[:6]:
+        meta = gguf_metadata(hf_head_bytes(repo, p, token))
+        if meta.get("general.type") == "adapter":
+            return {"repo": repo, "format": "gguf", "files": {os.path.basename(p): p}, "size_bytes": sizes[p],
+                    "architecture": meta.get("general.architecture"),
+                    "base_model": meta.get("general.base_model.0.repo_url") or meta.get("general.base_model.0.name"),
+                    "lora_alpha": meta.get("adapter.lora.alpha")}
+
+    folder = path.rstrip("/") if path and not path.lower().endswith(".gguf") else ""
+    configs = sorted((p for p in sizes if p.endswith("adapter_config.json") and p.startswith(folder)), key=lambda p: p.count("/"))
+    for config in configs:
+        weights = os.path.join(os.path.dirname(config), "adapter_model.safetensors")
+        if weights in sizes:
+            cfg = http_json(hf_file_url(repo, config), hf_headers(token), timeout=30) or {}
+            return {"repo": repo, "format": "safetensors",
+                    "files": {"adapter_model.safetensors": weights, "adapter_config.json": config},
+                    "size_bytes": sizes[weights] + sizes[config], "architecture": None,
+                    "base_model": cfg.get("base_model_name_or_path"), "rank": cfg.get("r"), "lora_alpha": cfg.get("lora_alpha")}
+    if ggufs:
+        raise ValueError(f"The GGUF files in {repo} are full models (a LoRA merged into its base), not adapters. "
+                         "Pull it as a model instead.")
+    raise ValueError(f"No LoRA adapter in {repo}: it needs a GGUF adapter or adapter_model.safetensors + adapter_config.json.")
+
+
+def hf_base(base):
+    """An installed model's Hugging Face GGUF: 'ollama/hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M' -> ('unsloth/Qwen3.5-9B-GGUF', 'Q4_K_M')."""
+    registry, repo, quant = parse_ollama_ref((base or "").removeprefix("ollama/"))
+    if registry != "hf.co":
+        raise ValueError("LoRA adapters work on Hugging Face GGUF models (hf.co/…); this one is from the Ollama library.")
+    return repo, quant
+
+
+def base_gguf_info(repo, quant, token=None):
+    """Architecture and download size of the base GGUF, read from its header on Hugging Face."""
+    tree = http_json(f"https://huggingface.co/api/models/{repo}/tree/main?recursive=true", hf_headers(token), timeout=30) or []
+    files = sorted((f for f in tree if f.get("type") == "file" and f["path"].lower().endswith(".gguf")
+                    and quant.lower() in f["path"].lower() and "mmproj" not in f["path"].lower()), key=lambda f: f["path"])
+    if not files:
+        raise ValueError(f"No {quant} GGUF in {repo}.")
+    meta = gguf_metadata(hf_head_bytes(repo, files[0]["path"], token))
+    return {"architecture": meta.get("general.architecture"), "size_bytes": sum(f.get("size", 0) for f in files)}
+
+
+def short_name(name):
+    name = re.sub(r"[^a-z0-9._-]+", "-", (name or "").rstrip("/").split("/")[-1].lower()).strip("-.")
+    return re.sub(r"[-_.]?gguf$", "", name)
+
+
+def adapter_matches(adapter, base_info, root):
+    """True when the adapter names this base, False when it's another architecture or names another model, else None."""
+    def norm(text):
+        return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+    if adapter.get("architecture") and base_info.get("architecture") \
+            and norm(adapter["architecture"]) != norm(base_info["architecture"]):
+        return False
+    declared, root = norm(short_name(adapter.get("base_model"))), norm(short_name(root))
+    if declared and root:
+        return declared in root or root in declared
+    return None
+
+
+def adapter_model_name(repo, base):
+    """'acme/brand-voice-lora' on 'hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M' -> 'lora/brand-voice-lora:qwen3.5-9b'."""
+    return f"lora/{short_name(repo)[:60]}:{short_name(parse_ollama_ref(base)[1])[:60]}"
+
+
+def download_hf_file(repo, path, token, progress):
+    """Downloads into LORA_DIR (kept for reuse) and returns the local path."""
+    local = os.path.join(LORA_DIR, repo.replace("/", "__"), path)
+    os.makedirs(os.path.dirname(local), exist_ok=True)
+    req = urllib.request.Request(hf_file_url(repo, path), headers=hf_headers(token))
+    with urllib.request.urlopen(req, timeout=60) as resp, open(local + ".part", "wb") as out:
+        total, done = int(resp.headers.get("Content-Length") or 0), 0
+        while chunk := resp.read(1 << 20):
+            out.write(chunk)
+            done += len(chunk)
+            progress(done, total)
+    os.replace(local + ".part", local)
+    return local
+
+
+class LoRAServer:
+    """LoRA adapters on llama.cpp's llama-server, natively on the GPU (Metal). One process for the base model in use,
+    with every adapter for that base loaded and picked per request. It sleeps after 10 idle minutes."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.proc, self.base, self.paths = None, None, []
+
+    @staticmethod
+    def binary():
+        return shutil.which("llama-server", path=os.environ.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin")
+
+    @staticmethod
+    def registry():
+        return os.path.join(LORA_DIR, "adapters.json")
+
+    def adapters(self):
+        try:
+            with open(self.registry()) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return []
+
+    def save(self, items):
+        os.makedirs(LORA_DIR, exist_ok=True)
+        with open(self.registry() + ".tmp", "w") as f:
+            json.dump(items, f, indent=2)
+        os.replace(self.registry() + ".tmp", self.registry())
+
+    def find(self, name):
+        return next((a for a in self.adapters() if a["name"] == name), None)
+
+    def add(self, entry):
+        with self.lock:
+            self.save([a for a in self.adapters() if a["name"] != entry["name"]] + [entry])
+
+    def remove(self, name):
+        with self.lock:
+            entry = self.find(name)
+            if not entry:
+                return False
+            rest = [a for a in self.adapters() if a["name"] != name]
+            self.save(rest)
+            if self.base == entry["base"]:
+                self.stop()
+            if not any(a["path"] == entry["path"] for a in rest):
+                try:
+                    os.remove(entry["path"])
+                except OSError:
+                    pass
+            return True
+
+    @staticmethod
+    def pid_file():
+        return os.path.join(LORA_DIR, "llama-server.pid")
+
+    def stop(self):
+        with self.lock:
+            if self.proc and self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(10)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+            else:
+                self.stop_leftover()
+            self.proc, self.base, self.paths = None, None, []
+            try:
+                os.remove(self.pid_file())
+            except OSError:
+                pass
+
+    def stop_leftover(self):
+        """A llama-server started before the runner restarted still holds the port: stop it."""
+        try:
+            with open(self.pid_file()) as f:
+                pid = int(f.read().strip())
+            command = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).stdout
+            if "llama-server" in command:
+                os.kill(pid, 15)
+                time.sleep(1)
+        except (OSError, ValueError):
+            pass
+
+    def running(self):
+        return bool(self.proc and self.proc.poll() is None)
+
+    def ensure(self, base, token=None, timeout=3600, waiting=None):
+        """llama-server running for `base` with all its adapters; returns the adapter files in id order.
+        The first start downloads the base GGUF from Hugging Face (llama.cpp keeps it in its cache)."""
+        with self.lock:
+            paths = [a["path"] for a in self.adapters() if a["base"] == base]
+            if self.running() and self.base == base and self.paths == paths:
+                return paths
+            self.stop()
+            binary = self.binary()
+            if not binary:
+                raise RuntimeError("llama.cpp isn't installed on this Mac. Run: brew install llama.cpp")
+            repo, quant = hf_base(base)
+            os.makedirs(LORA_DIR, exist_ok=True)
+            cmd = [binary, "-hf", f"{repo}:{quant}", "--host", "127.0.0.1", "--port", str(LORA_PORT), "-ngl", "all",
+                   "-c", "16384", "--jinja", "--sleep-idle-seconds", "600", "--lora-init-without-apply"]
+            if paths:
+                cmd += ["--lora", ",".join(paths)]
+            env = {**os.environ, **({"HF_TOKEN": token} if token else {})}
+            log_path = os.path.join(LORA_DIR, "llama-server.log")
+            with open(log_path, "ab") as log:
+                self.proc = subprocess.Popen(cmd, stdout=log, stderr=log, env=env, start_new_session=True)
+            with open(self.pid_file(), "w") as f:
+                f.write(str(self.proc.pid))
+            self.base, self.paths = base, paths
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if self.proc.poll() is not None:
+                    with open(log_path, errors="replace") as f:
+                        tail = " ".join(line.strip() for line in f.readlines()[-6:])
+                    self.proc, self.base, self.paths = None, None, []
+                    raise RuntimeError(f"llama-server stopped: {tail[-400:]}")
+                try:
+                    if (http_json(f"http://127.0.0.1:{LORA_PORT}/health", timeout=2) or {}).get("status") == "ok":
+                        return paths
+                except Exception:
+                    pass
+                if waiting:
+                    waiting()
+                time.sleep(2)
+            self.stop()
+            raise RuntimeError("llama-server didn't start in time.")
+
+    def chat_body(self, name, body):
+        """The request for llama-server: this adapter at full strength, the others off."""
+        entry = self.find(name)
+        if not entry:
+            raise ValueError(f"No LoRA model '{name}'.")
+        paths = self.ensure(entry["base"])
+        index = paths.index(entry["path"])
+        # Thinking models (Qwen3.5) would spend the reply on hidden reasoning the chat never shows: answer directly.
+        template = {"enable_thinking": False, **(body.get("chat_template_kwargs") or {})}
+        return {**body, "model": name, "chat_template_kwargs": template,
+                "lora": [{"id": i, "scale": 1.0 if i == index else 0.0} for i in range(len(paths))]}
+
+    def converter(self, status):
+        """llama.cpp's convert_lora_to_gguf.py from the installed llama-server's own commit, in its own Python env."""
+        binary = self.binary()
+        if not binary:
+            raise RuntimeError("llama.cpp isn't installed on this Mac. Run: brew install llama.cpp")
+        out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=30)
+        match = re.search(r"commit ([0-9a-f]{7,40})", out.stdout + out.stderr)
+        if not match:
+            raise RuntimeError("Couldn't tell which llama.cpp version is installed.")
+        root = os.path.join(LORA_DIR, "convert", match.group(1))
+        python, script = os.path.join(root, "venv", "bin", "python"), os.path.join(root, "convert_lora_to_gguf.py")
+        if os.path.exists(os.path.join(root, ".ready-2")):
+            return python, script
+        status("Getting llama.cpp's converter (first time only)")
+        os.makedirs(root, exist_ok=True)
+        archive = os.path.join(root, "src.tar.gz")
+        urllib.request.urlretrieve(f"https://codeload.github.com/ggml-org/llama.cpp/tar.gz/{match.group(1)}", archive)
+        import tarfile
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                rel = member.name.split("/", 1)[-1]
+                # The scripts, plus the packages they import (newer llama.cpp splits the converter into conversion/).
+                if (rel.endswith(".py") and "/" not in rel) or rel.startswith(("gguf-py/", "conversion/")):
+                    member.name = rel
+                    tar.extract(member, root, filter="data")
+        os.remove(archive)
+        status("Setting up Python for the converter (first time only, a few minutes)")
+        subprocess.run([sys.executable, "-m", "venv", os.path.join(root, "venv")], check=True, timeout=300)
+        subprocess.run([python, "-m", "pip", "install", "-q", os.path.join(root, "gguf-py"), "numpy", "safetensors",
+                        "torch", "sentencepiece", "transformers", "huggingface_hub", "protobuf"],
+                       check=True, timeout=3600, capture_output=True)
+        open(os.path.join(root, ".ready-2"), "w").close()
+        return python, script
+
+    def convert(self, folder, root_repo, token, status):
+        """PEFT safetensors -> a GGUF adapter next to them."""
+        python, script = self.converter(status)
+        status("Converting the adapter to GGUF")
+        out = os.path.join(folder, "adapter-f16.gguf")
+        env = {**os.environ, **({"HF_TOKEN": token} if token else {})}
+        run = subprocess.run([python, script, folder, "--outfile", out, "--outtype", "f16", "--base-model-id", root_repo],
+                             capture_output=True, text=True, timeout=3600, env=env)
+        if run.returncode != 0 or not os.path.exists(out):
+            raise RuntimeError("Converting failed: " + (run.stderr or run.stdout).strip()[-400:])
+        return out
+
+
+LORA_DIR = os.path.join(STATE_DIR, "lora")
+LORA_PORT = int(os.environ.get("AGENTIM_LORA_PORT", "8791"))
+LORA = LoRAServer()
+
+
 # ---------------------------------------------------------------- backends
 
 def backend_status():
@@ -255,6 +646,10 @@ def list_models():
         for alias, label in CLAUDE_LOGIN_MODELS.items():
             models.append({"id": f"claude/{alias}", "object": "model", "owned_by": "claude-login", "backend": "claude",
                            "kind": "claude", "name": f"{label} (your Claude login)"})
+    if not IN_CONTAINER:
+        for a in LORA.adapters():
+            models.append({"id": a["name"], "object": "model", "owned_by": "lora", "backend": "lora", "kind": "chat",
+                           "name": a.get("display"), "parameter_size": a.get("parameter_size")})
     if LTX.available() or LTX.installed():
         models += [
             {"id": "ltx/video", "object": "model", "owned_by": "ltx", "backend": "ltx", "kind": "video"},
@@ -1299,12 +1694,21 @@ class Handler(BaseHTTPRequestHandler):
             return self.check(body)
         if path == "/v1/models/pull":
             return self.pull(body)
+        if path == "/v1/adapters/search":
+            return self.adapter_search(body)
+        if path == "/v1/adapters/check":
+            return self.adapter_check(body)
+        if path == "/v1/adapters/create":
+            return self.adapter_create(body)
         self.error(404, "Not found")
 
     def do_DELETE(self):
         path = urllib.parse.urlparse(self.path).path
         if not self.authorized():
             return
+        if path.startswith("/v1/models/lora/") and not IN_CONTAINER:
+            name = urllib.parse.unquote(path[len("/v1/models/"):])
+            return self.send_json(200, {"deleted": name}) if LORA.remove(name) else self.error(404, f"No LoRA model '{name}'.")
         prefix = "/v1/models/ollama/"
         if not path.startswith(prefix):
             return self.error(400, "Only Ollama models can be deleted from the app.")
@@ -1343,11 +1747,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.claude_login_chat(name, body)
         if backend == "chatgpt":
             return self.chatgpt_login_chat(name, body)
+        if backend == "lora" and not IN_CONTAINER:
+            try:
+                return self.relay(f"http://127.0.0.1:{LORA_PORT}/v1", "llama-server", LORA.chat_body(model, body))
+            except Exception as e:
+                return self.error(502, f"Couldn't start the LoRA model: {e}")
         if backend not in BACKENDS or not name:
             return self.error(400, f"Unknown model '{model}'. Use an id from GET /v1/models.")
         body["model"] = name
+        return self.relay(openai_base(backend), backend, body)
+
+    def relay(self, base_url, backend, body):
+        """Streams an OpenAI-compatible server's reply straight through."""
         req = urllib.request.Request(
-            f"{openai_base(backend)}/chat/completions", data=json.dumps(body).encode(), method="POST",
+            f"{base_url}/chat/completions", data=json.dumps(body).encode(), method="POST",
             headers={"Content-Type": "application/json"})
         try:
             upstream = urllib.request.urlopen(req, timeout=600)
@@ -1477,6 +1890,100 @@ class Handler(BaseHTTPRequestHandler):
                     self.sse(json.loads(line))
         self.wfile.write(b"data: [DONE]\n\n")
 
+    # ---- LoRA adapters: a Hugging Face adapter on top of a Hugging Face GGUF model becomes its own model (llama-server)
+
+    def adapter_search(self, body):
+        try:
+            hf_base(body.get("base"))
+            return self.send_json(200, search_adapters(body["base"].removeprefix("ollama/"), body.get("hf_token")))
+        except Exception as e:
+            return self.error(400, str(e))
+
+    def adapter_plan(self, body):
+        """What would be created: the adapter's files, whether it fits the base, the new model's name."""
+        if IN_CONTAINER:
+            raise ValueError("LoRA models run natively on the Mac: use the Mac's runner, not the Docker one.")
+        base, token = body.get("base", "").removeprefix("ollama/"), body.get("hf_token")
+        repo, quant = hf_base(base)
+        adapter = resolve_adapter(body.get("adapter"), token)
+        info = base_gguf_info(repo, quant, token)
+        root = None
+        try:
+            root = base_repo(base, token)
+        except Exception:
+            pass
+        name = body.get("name") or adapter_model_name(adapter["repo"], base)
+        free = shutil.disk_usage(STATE_DIR if os.path.exists(STATE_DIR) else "/").free
+        return {**adapter, "base": base, "base_repo": root, "base_architecture": info["architecture"],
+                "base_size_bytes": info["size_bytes"], "matches": adapter_matches(adapter, info, root), "name": name,
+                "model": name, "exists": LORA.find(name) is not None, "llama_cpp": LORA.binary() is not None,
+                "enough_disk": adapter["size_bytes"] * 3 + 512 * MB < free}
+
+    def adapter_check(self, body):
+        try:
+            return self.send_json(200, self.adapter_plan(body))
+        except urllib.error.HTTPError as e:
+            return self.error(404, f"Hugging Face said {e.code}: is the repo right (and public, or is your token set)?")
+        except Exception as e:
+            return self.error(400, str(e))
+
+    def adapter_create(self, body):
+        """Streams progress like a pull: download, convert if needed, load it with its base, then a one-token test."""
+        try:
+            plan = self.adapter_plan(body)
+        except Exception as e:
+            return self.error(400, str(e))
+        if not plan["llama_cpp"]:
+            return self.error(409, "llama.cpp isn't installed on this Mac. Run: brew install llama.cpp")
+        if plan["matches"] is False and not body.get("force"):
+            return self.error(409, f"This adapter looks made for {plan.get('base_model') or plan.get('architecture')}, "
+                                   f"not {plan['base_repo'] or plan['base']}.")
+        if not plan["enough_disk"]:
+            return self.error(409, "Not enough disk space for this adapter.")
+        token, name = body.get("hf_token"), plan["name"]
+        self.start_sse()
+
+        def status(text):
+            self.sse({"status": text})
+
+        try:
+            local = {}
+            for target, path in plan["files"].items():
+                def progress(done, total, target=target):
+                    if total and (done == total or done % (8 * MB) < MB):
+                        self.sse({"status": f"Downloading {target}", "completed": done, "total": total})
+                local[target] = download_hf_file(plan["repo"], path, token, progress)
+            if plan["format"] == "gguf":
+                adapter_path = next(iter(local.values()))
+            else:
+                adapter_path = LORA.convert(os.path.dirname(local["adapter_model.safetensors"]),
+                                            plan["base_repo"] or plan.get("base_model"), token, status)
+            LORA.add({"name": name, "repo": plan["repo"], "base": plan["base"], "path": adapter_path,
+                      "format": plan["format"], "created": int(time.time()),
+                      "display": f"{plan['repo'].split('/')[-1]} · LoRA on {short_name(plan['base_repo'] or plan['base'])}"})
+            waited = [time.time()]
+
+            def waiting():
+                if time.time() - waited[0] > 10:
+                    waited[0] = time.time()
+                    status(f"Loading {short_name(plan['base_repo'] or plan['base'])} with the adapter "
+                           f"(the first time downloads the base, {plan['base_size_bytes'] / 2**30:.1f} GB)")
+            status("Starting llama-server on the GPU")
+            try:
+                LORA.ensure(plan["base"], token, waiting=waiting)
+                status("Testing it")
+                http_json(f"http://127.0.0.1:{LORA_PORT}/v1/chat/completions", {"Content-Type": "application/json"},
+                          json.dumps(LORA.chat_body(name, {"messages": [{"role": "user", "content": "Hi"}],
+                                                           "max_tokens": 1})).encode(), method="POST", timeout=900)
+            except Exception:
+                LORA.remove(name)  # it doesn't load: don't leave a broken model in the list
+                raise
+            self.sse({"status": "success", "model": name})
+        except Exception as e:
+            message = e.read().decode(errors="replace")[:300] if isinstance(e, urllib.error.HTTPError) else str(e)
+            self.sse({"error": f"Couldn't add the adapter: {message}"})
+        self.wfile.write(b"data: [DONE]\n\n")
+
     def serve_file(self, name):
         if not re.fullmatch(r"[0-9a-f]{32}\.[a-z0-9]{2,5}", name):
             return self.error(404, "Not found")
@@ -1518,9 +2025,19 @@ def lan_addresses():
         return []
 
 
+def use_system_certificates():
+    """Homebrew's Python ships without CA certificates; macOS keeps them in /etc/ssl/cert.pem (Hugging Face, GitHub…)."""
+    paths = ssl.get_default_verify_paths()
+    if not (paths.cafile and os.path.exists(paths.cafile)) and os.path.exists("/etc/ssl/cert.pem"):
+        context = ssl.create_default_context(cafile="/etc/ssl/cert.pem")
+        urllib.request.install_opener(urllib.request.build_opener(urllib.request.HTTPSHandler(context=context)))
+        os.environ.setdefault("SSL_CERT_FILE", "/etc/ssl/cert.pem")
+
+
 def main():
     global TOKEN
     TOKEN = load_token()
+    use_system_certificates()
     port = int(os.environ.get("RUNNER_PORT", "8765"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     total, available, _ = host_memory()

@@ -58,6 +58,40 @@ struct RunnerClient {
         let total: Int64?
         let completed: Int64?
         let error: String?
+        /// Adapters: the new model's id, sent with the final "success".
+        var model: String? = nil
+    }
+
+    /// LoRA adapters Hugging Face lists for a base model.
+    struct AdapterSearch: Decodable {
+        struct Item: Decodable, Identifiable, Hashable {
+            let repo: String
+            let downloads: Int
+            let likes: Int
+            let format: String
+            var id: String { repo }
+        }
+        let base_repo: String?
+        let adapters: [Item]
+    }
+
+    /// What adding an adapter would do: its files, whether it fits the base, the new model's name.
+    struct AdapterPlan: Decodable, Equatable {
+        let repo: String
+        let format: String
+        let size_bytes: Int64
+        let architecture: String?
+        let base_model: String?
+        let base: String
+        let base_repo: String?
+        let base_architecture: String?
+        let base_size_bytes: Int64?
+        /// true: made for this model · false: made for another one · nil: can't tell.
+        let matches: Bool?
+        let name: String
+        let exists: Bool
+        let enough_disk: Bool
+        let llama_cpp: Bool?
     }
 
     private struct ModelList: Decodable { let data: [ServerModelInfo] }
@@ -87,6 +121,29 @@ struct RunnerClient {
     func pull(_ model: String, hfToken: String?) -> AsyncThrowingStream<PullProgress, Error> {
         var urlRequest = request("v1/models/pull", method: "POST")
         urlRequest.httpBody = try? JSONEncoder().encode(["model": model, "hf_token": hfToken ?? ""])
+        urlRequest.timeoutInterval = 3_600
+        return SSE.stream(urlRequest) { try JSONDecoder().decode(PullProgress.self, from: $0) }
+    }
+
+    // MARK: - LoRA adapters (the Mac's own runner: llama-server on the GPU)
+
+    func adapterSearch(base: String, hfToken: String?) async throws -> AdapterSearch {
+        try await send("v1/adapters/search", body: ["base": base, "hf_token": hfToken ?? ""], as: AdapterSearch.self)
+    }
+
+    func adapterCheck(base: String, adapter: String, hfToken: String?) async throws -> AdapterPlan {
+        var request = request("v1/adapters/check", method: "POST")
+        request.timeoutInterval = 60  // reads the adapter's header on Hugging Face
+        request.httpBody = try JSONEncoder().encode(["base": base, "adapter": adapter, "hf_token": hfToken ?? ""])
+        return try JSONDecoder().decode(AdapterPlan.self, from: try await data(request))
+    }
+
+    /// Streams progress: download, convert if needed, load with the base (the first time downloads it), test.
+    func adapterCreate(base: String, adapter: String, hfToken: String?, force: Bool) -> AsyncThrowingStream<PullProgress, Error> {
+        var urlRequest = request("v1/adapters/create", method: "POST")
+        var body = ["base": base, "adapter": adapter, "hf_token": hfToken ?? ""]
+        if force { body["force"] = "1" }
+        urlRequest.httpBody = try? JSONEncoder().encode(body)
         urlRequest.timeoutInterval = 3_600
         return SSE.stream(urlRequest) { try JSONDecoder().decode(PullProgress.self, from: $0) }
     }

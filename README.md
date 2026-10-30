@@ -312,6 +312,18 @@ Pick skills for an agent and its editor suggests models for them; a skill's edit
 | React, CSS and Tailwind logic, big refactors | [DeepSeek V4](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) Flash / Pro | Hugging Face Inference Providers (too big for a Mac) |
 | UI assets and visual style | [FLUX.2](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) klein 4B / dev | ComfyUI or diffusers (agentim makes images with LTX) |
 
+### LoRA adapters
+
+A LoRA adapter is a small add-on (usually 10–500 MB) that teaches a model a style, a domain or a task. In **Models**, right-click a downloaded Hugging Face model → **Add LoRA adapter…** (or use *Add a LoRA adapter* under your Docker server):
+
+1. Pick one of the adapters Hugging Face lists for that model, or paste any adapter repo or link.
+2. **Check** reads it first: is it really an adapter (many "LoRA GGUF" repos are full merged models), is it made for this model, how big is it.
+3. **Add** downloads it (PEFT safetensors adapters are converted to GGUF on your Mac with llama.cpp's own converter), loads it, and runs a one-token test; if it doesn't load, it's removed again.
+
+The result is its own model, e.g. *lokol-health · LoRA on qwen3.5-9b*: pick it in any chat, agent or group chat, or call it with `@alias`.
+
+They run with **llama.cpp's `llama-server` natively on the Mac's GPU** (Metal), not in Docker: Ollama dropped LoRA adapters, and Docker on a Mac has no GPU anyway. One `llama-server` serves the base model with all of its adapters and switches adapters per message; it sleeps after 10 idle minutes. The first adapter on a base downloads that base for llama.cpp (Qwen3.5 adapters can see images too). Needs `brew install llama.cpp`.
+
 ## 🚀 Projects
 
 > **In the Mac app, ideas now start in Chats.** Choose **New chat → Pitch an idea (group chat + 10 questions)**: describe the idea, answer Agent Tim's 10 questions one at a time (**Back / Skip / Next**, **✨ Suggest an answer**, **Let AI answer the rest**), and your leadership agents (CPO, CTO, CMO, CRO, CFO, whichever you have) discuss it with each other in rounds, with your answers as the group's brief. The project engine below (worth-building check, graphs, launch, hiring) still runs in the gateway and is used from Telegram/WhatsApp/Slack (`/startup`), the HTTP API and Claude/ChatGPT (MCP); it no longer has its own screen in the Mac app.

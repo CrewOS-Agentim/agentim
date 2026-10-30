@@ -126,6 +126,10 @@ struct ServerEditorView: View {
 struct ServerSection: View {
     @Environment(AppStore.self) private var store
     let server: LocalServer
+    /// The base model a LoRA adapter is being added to (opens the sheet).
+    @State private var loraBase: LoRABase?
+
+    struct LoRABase: Identifiable { let id: String }
 
     var body: some View {
         Section {
@@ -141,8 +145,13 @@ struct ServerSection: View {
             }
             ForEach(store.models(on: server)) { model in
                 ModelRow(model: model, available: isOnline)
+                    .contextMenu {
+                        if model.modelName.hasPrefix("ollama/hf.co/") {
+                            Button("Add LoRA adapter…", systemImage: "plus.square.on.square") { loraBase = LoRABase(id: model.modelName) }
+                        }
+                    }
                     .swipeActions {
-                        if server.kind == .runner, model.modelName.hasPrefix("ollama/") {
+                        if server.kind == .runner, model.modelName.hasPrefix("ollama/") || model.modelName.hasPrefix("lora/") {
                             Button("Delete", role: .destructive) {
                                 Task { try? await store.deleteServerModel(model) }
                             }
@@ -153,6 +162,13 @@ struct ServerSection: View {
                 NavigationLink { PullModelView(server: server) } label: {
                     Label("Pull a model", systemImage: "arrow.down.circle")
                 }
+                if let first = store.models(on: server).first(where: { $0.modelName.hasPrefix("ollama/hf.co/") }) {
+                    Button { loraBase = LoRABase(id: first.modelName) } label: {
+                        Label("Add a LoRA adapter", systemImage: "plus.square.on.square")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("A small add-on from Hugging Face that teaches a model a style or a domain; runs with llama.cpp on the GPU")
+                }
             }
         } header: {
             HStack {
@@ -161,11 +177,26 @@ struct ServerSection: View {
                 Text(isOnline ? "Online" : "Offline").foregroundStyle(isOnline ? .green : .secondary)
             }
         }
+        .sheet(item: $loraBase) { AddLoRASheet(base: $0.id) }
     }
 
     private var isOnline: Bool {
         if case .online? = store.serverStatus[server.id] { return true }
         return false
+    }
+}
+
+/// The Add LoRA sheet (its own navigation, a Done button).
+struct AddLoRASheet: View {
+    let base: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            AddLoRAView(base: base)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        }
+        .frame(minWidth: 560, minHeight: 600)
     }
 }
 
