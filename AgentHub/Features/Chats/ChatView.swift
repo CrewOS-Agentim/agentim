@@ -19,14 +19,18 @@ struct ChatView: View {
                 if conversation.isMeeting {
                     ParticipantsBar(conversation: conversation)
                 }
-                if conversation.isMeeting && conversation.messages.isEmpty {
+                if conversation.isMeeting, let brief = conversation.brief, brief.stage != "done" {
+                    IdeaInterview(conversation: conversation)
+                } else if conversation.isMeeting && conversation.messages.isEmpty {
                     PickRoom(conversation: conversation)
                 } else if conversation.messages.isEmpty {
                     EmptyChat { draft = $0 }
                 } else {
                     messages(conversation)
                 }
-                composer(conversation)
+                if !(conversation.brief.map { $0.stage != "done" } ?? false) {
+                    composer(conversation)
+                }
             }
             .background(Theme.surfaceMuted)
             .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in

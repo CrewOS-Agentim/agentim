@@ -99,6 +99,28 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertFalse(AppStore.isPass("Passing thought: let's ship Friday"))
     }
 
+    @MainActor
+    func testPitchAnIdeaInAGroupChat() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        let cpo = Agent(name: "CPO", emoji: "🧭", summary: "", systemPrompt: "")
+        store.agents = [cto, cmo, cpo, qa]
+        let group = store.newIdeaGroup()
+        XCTAssertEqual(store.participants(in: group).map(\.name), ["CPO", "CTO", "CMO"], "the leadership agents you have")
+        XCTAssertEqual(group.brief?.stage, "idea")
+        XCTAssertEqual(group.discussionRounds, 2, "they talk it through")
+        store.updateBrief(group.id) {
+            $0.idea = "A booking app for dog walkers"
+            $0.questions = ["Who needs it?", "Why now?"]
+            $0.answers = ["Busy owners", ""]
+            $0.stage = "done"
+        }
+        let done = store.conversations.first { $0.id == group.id }!
+        XCTAssertEqual(store.briefText(done), "The founder's idea: A booking app for dog walkers\nTheir answers:\n- Who needs it?\n  Busy owners")
+        XCTAssertEqual(AppStore.numberedLines("1. Who needs it?\n2) Why now?\nnoise\n**3.** How?"), ["Who needs it?", "Why now?", "How?"])
+        XCTAssertEqual(AppStore.fallbackQuestions.count, 10)
+        XCTAssertFalse(SidebarItem.visible.contains(.startup), "Projects moved into Chats")
+    }
+
     func testCloudKeysGoToTheGatewayEnv() {
         let env = "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=\n"
         XCTAssertEqual(HostController.withEnv("ANTHROPIC_API_KEY", "sk-ant-1", in: env), "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=sk-ant-1\n")

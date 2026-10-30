@@ -41,7 +41,7 @@
 - 💬 answers you on **Telegram, WhatsApp and Slack**, in text or 🎙️ **voice notes**
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
-- 🚀 **Projects**: tell it the goal (a new idea, a new project, or a feature for your code); the team checks it's worth building, Agent Tim turns it into a graph of checked tasks, runs the loop every minute (ETAs, Gantt in minutes) and, on autopilot, keeps building until it's developed
+- 💡 **Pitch an idea in a group chat**: Chats → New chat → *Pitch an idea*: Agent Tim asks 10 questions (5 YC partner, 5 co-founder, one at a time, with AI suggestions), then your leadership agents talk it through with each other, each on its own model
 - 🧲 **Recruiter**: finds engineers from their GitHub repos and commits and drafts a personal LinkedIn message you send yourself
 - 🤖 **Claude without an API key**: Opus, Sonnet and Haiku through your Claude login (`claude -p` in tmux)
 - 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics, AWS DevOps, Business Development, Product Designer, Brand Designer, Recruiter
@@ -283,6 +283,8 @@ Group changes by user benefit, lead with the biggest one, keep it under 200 word
 ```
 
 ## 🚀 Projects
+
+> **In the Mac app, ideas now start in Chats.** Choose **New chat → Pitch an idea (group chat + 10 questions)**: describe the idea, answer Agent Tim's 10 questions one at a time (**Back / Skip / Next**, **✨ Suggest an answer**, **Let AI answer the rest**), and your leadership agents (CPO, CTO, CMO, CRO, CFO, whichever you have) discuss it with each other in rounds, with your answers as the group's brief. The project engine below (worth-building check, graphs, launch, hiring) still runs in the gateway and is used from Telegram/WhatsApp/Slack (`/startup`), the HTTP API and Claude/ChatGPT (MCP); it no longer has its own screen in the Mac app.
 
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 

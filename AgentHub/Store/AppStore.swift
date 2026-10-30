@@ -412,7 +412,9 @@ final class AppStore {
               start with "\(member.name):". If you have nothing new to add and agree with where it landed, reply with exactly PASS.
               """
         let ask = """
-        You're in a group chat with the user\(names.isEmpty ? "" : " and \(names)"). Here's the conversation so far:
+        You're in a group chat with the user\(names.isEmpty ? "" : " and \(names)").\(briefText(conversation).map { "\n\n\($0)" } ?? "")
+
+        Here's the conversation so far:
 
         \(transcript(conversation))
 
@@ -593,7 +595,7 @@ final class AppStore {
         }
     }
 
-    private func client(for model: AIModel) -> ChatClient? {
+    func client(for model: AIModel) -> ChatClient? {
         switch model.location {
         case .local(let repo):
             return MLXChatClient(repo: repo)

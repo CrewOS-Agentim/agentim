@@ -43,6 +43,8 @@ struct Conversation: Identifiable, Codable, Hashable {
     var autoDivideModels: Bool?
     /// How many rounds the members talk to each other after a message (1 = each answers once; 5 = until they agree).
     var discussionRounds: Int?
+    /// A group chat that started from an idea: the idea, the 10 questions and the answers (the group's brief).
+    var brief: IdeaBrief?
 
     var isMeeting: Bool { participantIDs != nil }
     var updatedAt = Date()

@@ -67,6 +67,9 @@ enum SidebarItem: String, CaseIterable, Identifiable {
     case chats, startup, agents, skills, models, status, host, settings
     var id: String { rawValue }
 
+    /// What the sidebar shows: ideas now start in Chats (a group chat with the 10 questions), so Projects is hidden.
+    static var visible: [SidebarItem] { allCases.filter { $0 != .startup } }
+
     var title: String {
         switch self {
         case .chats: "Chats"
@@ -147,7 +150,7 @@ struct RootView: View {
     @ViewBuilder private var section: some View {
         switch selection ?? .chats {
         case .chats: ConversationListView()
-        case .startup: StartupView(model: startup)
+        case .startup: ConversationListView()  // Projects moved into Chats
         case .agents: AgentListView()
         case .skills: SkillListView()
         case .models: ModelsView()
@@ -213,7 +216,7 @@ struct NavRail: View {
             .accessibilityLabel(collapsed ? "Expand sidebar" : "Collapse sidebar")
             .padding(.leading, 6).padding(.bottom, 6)
 
-            ForEach(SidebarItem.allCases) { item in
+            ForEach(SidebarItem.visible) { item in
                 let isOn = (selection ?? .chats) == item
                 Button { selection = item } label: {
                     HStack(spacing: 10) {
