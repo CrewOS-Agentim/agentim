@@ -895,6 +895,21 @@ class SkillPlaybookTests(unittest.TestCase):
         self.assertNotIn("perdiem-business-development", slugs, "nothing company-specific in the public skills")
 
 
+class ChatGPTViaTests(unittest.TestCase):
+    def test_tmux_mode_never_lists_the_openai_api(self):
+        from agentim.config import from_env
+        from agentim.models import Catalog
+        from agentim.router import model_from_runner
+        tmux = from_env({"OPENAI_API_KEY": "sk-x", "RUNNER_TOKEN": "t"})
+        self.assertEqual(tmux.chatgpt_via, "tmux")
+        self.assertFalse(any(m.backend == "openai" for m in Catalog(tmux, api_factory=lambda u, t: None).cloud()))
+        api = from_env({"OPENAI_API_KEY": "sk-x", "RUNNER_TOKEN": "t", "AGENTIM_CHATGPT_VIA": "api"})
+        self.assertTrue(any(m.backend == "openai" for m in Catalog(api, api_factory=lambda u, t: None).cloud()))
+        login = model_from_runner({"id": "chatgpt/gpt-6-astra", "kind": "chatgpt"}, "http://mac:8766")
+        self.assertEqual((login.alias, login.explicit_only), ("gpt-6-astra", False), "a real chat model")
+        self.assertEqual(model_from_runner({"id": "chatgpt/default", "kind": "chatgpt"}, "u").alias, "chatgpt")
+
+
 class BackgroundLimitTests(unittest.TestCase):
     def test_background_work_shares_two_slots_and_the_founder_skips_the_line(self):
         import threading

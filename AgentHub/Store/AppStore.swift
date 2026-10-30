@@ -84,9 +84,18 @@ final class AppStore {
 
     var allModels: [AIModel] { AIModel.cloudCatalog + customModels + installedLocalModels + serverModels }
 
+    /// The chat on screen (notifications skip it while agentim is in front), and one a notification asked to open.
+    var visibleConversationID: UUID?
+    var requestedConversationID: UUID?
+
     /// How Claude is used: "tmux" (your Claude login, claude -p in a background terminal) or "api" (an API key).
     var claudeVia: String = UserDefaults.standard.string(forKey: "claudeVia") ?? "tmux" {
         didSet { UserDefaults.standard.set(claudeVia, forKey: "claudeVia") }
+    }
+
+    /// How ChatGPT is used: "tmux" (your ChatGPT login, codex exec in a background terminal) or "api" (an API key).
+    var chatgptVia: String = UserDefaults.standard.string(forKey: "chatgptVia") ?? "tmux" {
+        didSet { UserDefaults.standard.set(chatgptVia, forKey: "chatgptVia") }
     }
 
     /// What the router may choose from: connected providers + installed local weights.
@@ -95,6 +104,8 @@ final class AppStore {
             switch model.location {
             case .cloud(let id) where id == Provider.anthropic.id && claudeVia == "tmux":
                 false  // Claude goes through tmux (claude -p), never the API
+            case .cloud(let id) where id == Provider.openAI.id && chatgptVia == "tmux":
+                false  // ChatGPT goes through tmux (codex exec), never the API
             case .cloud(let id): provider(id: id).map(isConnected) ?? false
             case .local(let repo): LocalModelManager.isInstalled(repo)
             case .server(let id): if case .online? = serverStatus[id] { true } else { false }
@@ -394,6 +405,7 @@ final class AppStore {
                 }
                 if round > 1 && !spoke { break }  // everyone agrees: the discussion is over
             }
+            await discussionEnded(conversationID)  // a notification with the summary (or the question for you)
         }
     }
 
@@ -613,6 +625,7 @@ final class AppStore {
                     for try await chunk in target.client.stream(request) {
                         updateReply(reply.id, in: conversationID) { $0.content += chunk }
                     }
+                    replyFinished(conversationID, replyID: reply.id)  // notify if you're elsewhere
                     return
                 } catch {
                     lastError = error

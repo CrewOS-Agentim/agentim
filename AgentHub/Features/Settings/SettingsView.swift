@@ -48,6 +48,20 @@ struct SettingsView: View {
                 }
 
                 ClaudeSection()
+                ChatGPTSection()
+
+                Section {
+                    Toggle("When a conversation ends (with a summary)", isOn: Binding(
+                        get: { UserDefaults.standard.object(forKey: "notifyWhenDone") as? Bool ?? true },
+                        set: { UserDefaults.standard.set($0, forKey: "notifyWhenDone") }))
+                    Toggle("When an agent needs my answer", isOn: Binding(
+                        get: { UserDefaults.standard.object(forKey: "notifyWhenNeeded") as? Bool ?? true },
+                        set: { UserDefaults.standard.set($0, forKey: "notifyWhenNeeded") }))
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Only for chats you're not looking at. Click a notification to open the chat.")
+                }
 
                 Section("Cloud providers") {
                     ForEach(store.providers.filter { $0.id != Provider.huggingFace.id }) { provider in
@@ -222,6 +236,47 @@ struct ClaudeSection: View {
                 await host.refreshClaude()
                 try? await Task.sleep(for: .seconds(5))
             }
+        }
+    }
+}
+
+/// How ChatGPT is used: your ChatGPT login in a background terminal (tmux, via Codex), or an API key.
+struct ChatGPTSection: View {
+    @Environment(AppStore.self) private var store
+    @Environment(HostController.self) private var host
+
+    var body: some View {
+        Section {
+            Picker("Use ChatGPT through", selection: Binding(get: { store.chatgptVia },
+                                                             set: { via in Task { await host.setChatGPTVia(via, store: store) } })) {
+                Text("Your ChatGPT login, in a background terminal (tmux)").tag("tmux")
+                Text("An OpenAI API key").tag("api")
+            }
+            if store.chatgptVia == "tmux" {
+                LabeledContent("Codex") {
+                    if !host.claude.codexInstalled {
+                        Label("Not found (npm install -g @openai/codex)", systemImage: "xmark.circle").foregroundStyle(.orange)
+                    } else if !host.claude.codexLoggedIn {
+                        Label("Installed, not logged in (run codex login)", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                    } else {
+                        Label("Logged in with ChatGPT", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                }
+                LabeledContent("Running now") {
+                    HStack {
+                        Text(host.claude.codexSessions.isEmpty ? "No ChatGPT sessions"
+                             : "\(host.claude.codexSessions.count) session\(host.claude.codexSessions.count == 1 ? "" : "s")")
+                        Button("Watch in Terminal", systemImage: "terminal") { host.watchChatGPT() }
+                            .disabled(host.claude.codexSessions.isEmpty)
+                    }
+                }
+            }
+        } header: {
+            Text("ChatGPT")
+        } footer: {
+            Text(store.chatgptVia == "tmux"
+                 ? "ChatGPT runs with codex exec (read-only) in tmux sessions on this Mac, using your ChatGPT login: no API key, and the OpenAI API is never called. The model is the one in your Codex settings (or AGENTIM_CHATGPT_MODELS)."
+                 : "ChatGPT runs through the OpenAI API with the key under Cloud providers.")
         }
     }
 }

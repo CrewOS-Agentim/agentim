@@ -143,6 +143,17 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertTrue(store.conversations.isEmpty)
     }
 
+    func testNotificationText() {
+        let (summary, question) = AppStore.splitSummary("The team agreed on pilots in Austin.\nPricing at $29.\nQUESTION: Should we start with landlords?")
+        XCTAssertEqual(summary, "The team agreed on pilots in Austin. Pricing at $29.")
+        XCTAssertEqual(question, "Should we start with landlords?")
+        XCTAssertNil(AppStore.splitSummary("Done.\n**QUESTION:** none").1, "no question: a 'finished' notification")
+        XCTAssertTrue(AppStore.asksTheUser("Here's the plan.\n\nWhich city should we start in?"))
+        XCTAssertFalse(AppStore.asksTheUser("Here's the plan. Ship Friday."))
+        XCTAssertEqual(AppStore.lastQuestion("Plan.\nWhich city first?"), "Which city first?")
+        XCTAssertEqual(AppStore.plain("**Ship** `Friday`\nnow"), "Ship Friday now")
+    }
+
     func testChatTimelineDividersAndGrouping() {
         let calendar = Calendar.current
         let now = Date()

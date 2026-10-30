@@ -52,7 +52,9 @@ struct ConversationListView: View {
         .navigationTitle("Chats")
         .onAppear {
             if selection == nil, UserDefaults.standard.bool(forKey: "openChat") { selection = filtered.first?.id }
+            openRequested()
         }
+        .onChange(of: store.requestedConversationID) { openRequested() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -88,6 +90,13 @@ struct ConversationListView: View {
                 }
         }
         .onDelete { offsets in delete(offsets.map { conversations[$0].id }) }
+    }
+
+    /// A notification was clicked: open that chat.
+    private func openRequested() {
+        guard let id = store.requestedConversationID, store.conversations.contains(where: { $0.id == id }) else { return }
+        selection = id
+        store.requestedConversationID = nil
     }
 
     private func delete(_ ids: [UUID]) {

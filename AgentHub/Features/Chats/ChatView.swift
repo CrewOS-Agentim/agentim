@@ -46,7 +46,8 @@ struct ChatView: View {
             }
             .navigationTitle(conversation.title)
             .navigationSubtitle(subtitle(conversation))
-            .onAppear { store.markRead(conversation.id) }
+            .onAppear { store.markRead(conversation.id); store.visibleConversationID = conversation.id }
+            .onDisappear { if store.visibleConversationID == conversation.id { store.visibleConversationID = nil } }
             .onChange(of: conversation.messages.count) { store.markRead(conversation.id) }
             .onChange(of: store.isStreaming(conversation.id)) { store.markRead(conversation.id) }
             .toolbar {
