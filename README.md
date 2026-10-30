@@ -174,7 +174,7 @@ Before any download, the runner looks up the real file sizes from the Ollama reg
 
 **It starts everything for you.** When the app opens it makes sure agentim is ready: it starts Docker Desktop and any stopped agentim container, adds this Mac's runners, turns on the coding agents you have installed (**Claude Code**, and **Codex** for ChatGPT), connects agentim to Claude, waits for the models to answer and preloads your default chat model so the first reply is quick (the status bar shows *Starting your models…*). It keeps re-checking every 10 seconds while something is offline. If no local chat model is up, chats are answered by **Claude Code** on your Mac (then Codex) instead of failing with "No model is available". The ChatGPT web connector isn't opened automatically, because it makes agentim reachable from the internet: that stays a button in **This Mac**.
 
-<p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: a chat with Agent Tim, the big message box and the routing note under each reply" width="90%"></p>
+<p align="center"><img src="docs/assets/screenshots/chat.png" alt="agentim for macOS: chats like Messages and Slack, with the chat options in the toolbar" width="90%"></p>
 <p align="center"><b>Chats</b>: a roomy message box (Enter sends, Shift+Enter for a new line), drag in files, and every reply says which model answered and why</p>
 
 <table>
@@ -382,23 +382,10 @@ API: `POST /v1/startups/{id}/goal`, `/summary`, `/decision {"decision": "build"|
 /startup fire 2 Omar                                               ← let someone go
 ```
 
-<p align="center"><img src="docs/assets/screenshots/startup-team.png" alt="agentim Startup Mode: editing a startup's agents, each with an avatar" width="80%"></p>
 
 It runs in the always-on gateway, so the teams keep working with the app closed, and uses your local models (routed to the strongest reasoning model you have).
 
-<table>
-  <tr>
-    <td><img src="docs/assets/screenshots/startup-interview.png" alt="Startup interview: one question at a time with Back, Skip and Next"></td>
-    <td><img src="docs/assets/screenshots/startup-meeting.png" alt="A live meeting in the agents room: who's in the room and who's typing"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>The interview</b>: one question at a time, Back / Skip / Next</td>
-    <td align="center"><b>A live meeting</b>: watch the agents talk as it happens</td>
-  </tr>
-</table>
 
-<p align="center"><img src="docs/assets/screenshots/startup.png" alt="agentim Startup Mode: startups, the living plan and the agents room" width="85%"></p>
-<p align="center"><b>Your startups</b>: the living plan (priorities, metrics, owners) next to the agents room</p>
 
 ## 🎙️ Voice
 
