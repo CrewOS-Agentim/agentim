@@ -18,6 +18,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     /// In a group chat: which agent (or skill) wrote this reply.
     var agentID: UUID?
     var skillID: UUID?
+    /// A coding agent's work (what it changed, the pull request): shown as a result card.
+    var work: WorkResult?
 
     /// What the model reads: the text plus every attached file.
     var modelContent: String { modelContent(withImages: false) }
@@ -51,6 +53,8 @@ struct Conversation: Identifiable, Codable, Hashable {
     var discussionRounds: Int?
     /// A group chat that started from an idea: the idea, the 10 questions and the answers (the group's brief).
     var brief: IdeaBrief?
+    /// The code this chat works on (a folder or a GitHub repo): agents read it, Claude Code builds in it.
+    var codebase: Codebase?
 
     var isMeeting: Bool { participantIDs != nil }
     /// When you last saw this chat (replies after it show as unread in the list).

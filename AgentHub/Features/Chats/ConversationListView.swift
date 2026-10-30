@@ -51,7 +51,11 @@ struct ConversationListView: View {
         }
         .navigationTitle("Chats")
         .onAppear {
-            if selection == nil, UserDefaults.standard.bool(forKey: "openChat") { selection = filtered.first?.id }
+            if selection == nil, UserDefaults.standard.bool(forKey: "openChat") {
+                // `-openChatTitle "…"` opens that chat (screenshots); otherwise the newest.
+                let title = UserDefaults.standard.string(forKey: "openChatTitle")
+                selection = (title.flatMap { t in filtered.first { $0.title == t } } ?? filtered.first)?.id
+            }
             openRequested()
         }
         .onChange(of: store.requestedConversationID) { openRequested() }

@@ -301,6 +301,23 @@ triggers: release notes, changelog
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
 
+### Work on code: your folder or a GitHub repo
+
+<p align="center"><img src="docs/assets/screenshots/code-results.png" alt="Claude Code changed four files in acme/shop; the pull request is open, with links to each file" width="85%"></p>
+
+1. **Connect a codebase** to any chat: the **Codebase** button in the toolbar → *a folder on this Mac* or *a GitHub repo* (cloned with your `gh` login, private repos too). Agents in that chat read its README, manifests, file tree and recent commits.
+2. **Talk it through**, then press **Build it** above the message box: Claude Code makes the change in that codebase (only when you confirm; otherwise it's read-only).
+3. **See the result**: a card with every changed file and its `+/−` lines, each one a link (on this Mac until it's pushed, then on GitHub), and what Claude Code said.
+4. **Open pull request** (confirmed): agentim puts the change on a new `agentim/…` branch (never your main branch), commits, pushes (never forced) and opens it with `gh`. The card turns into *Pull request #42 is open* with **View pull request**, **Files changed** and **Copy link**.
+
+GitHub links in any reply (pull requests, issues, commits, files) also show as cards you can open.
+
+### Design previews
+
+<p align="center"><img src="docs/assets/screenshots/design-preview.png" alt="The Designer agent's checkout redesign, rendered live in the chat" width="85%"></p>
+
+Agents with a design skill (Designer, UI UX Designer, Product Designer, Brand Designer) end their designs with a complete HTML mockup, and the chat **renders it live**: switch between desktop, tablet and phone widths, show the code, or open it in your browser. SVGs render too. Previews are sandboxed (nothing is stored; links open in your browser). Code blocks in every reply get a language label, **Copy**, and scroll for long lines.
+
 ### Models that fit the skill
 
 Pick skills for an agent and its editor suggests models for them; a skill's editor does the same. **Use** pins a model that's ready, **Get** opens the memory check and downloads it into Docker.

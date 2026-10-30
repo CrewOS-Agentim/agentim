@@ -55,6 +55,7 @@ struct ChatView: View {
                     } else {
                         AgentMenu(conversation: conversation)
                     }
+                    CodebaseMenu(conversation: conversation)
                     modelMenu(conversation)
                     MoreMenu(conversation: conversation)
                 }
@@ -91,7 +92,9 @@ struct ChatView: View {
                                        speaker: speaker,
                                        groupedWithPrevious: grouped,
                                        onRetry: index == lastAssistant && !store.isStreaming(conversation.id)
-                                           ? { store.retryLast(in: conversation.id) } : nil)
+                                           ? { store.retryLast(in: conversation.id) } : nil,
+                                       codebase: conversation.codebase,
+                                       onOpenPullRequest: { store.openPullRequest(messageID: message.id, in: conversation.id) })
                                 .padding(.top, divider ? 0 : grouped ? 3 : Theme.s3)
                         }
                         .id(message.id)
@@ -113,6 +116,9 @@ struct ChatView: View {
 
     private func composer(_ conversation: Conversation) -> some View {
         VStack(alignment: .leading, spacing: Theme.s2) {
+            if let codebase = conversation.codebase {
+                CodebaseBar(conversation: conversation, codebase: codebase)
+            }
             queue(conversation)
             if !attachments.isEmpty || attachError != nil {
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -230,10 +236,11 @@ struct ChatView: View {
                     HStack(spacing: Theme.s2) {
                         Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 14)
                         Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
-                        Text(message.text.isEmpty ? message.attachments.map { "📎 \($0.name)" }.joined(separator: " ") : message.text)
+                        Text(message.text.isEmpty ? message.attachments.map(\.name).joined(separator: ", ") : message.text)
                             .lineLimit(1).truncationMode(.tail)
                         if !message.text.isEmpty && !message.attachments.isEmpty {
-                            Text("📎 \(message.attachments.count)").font(.caption).foregroundStyle(.secondary)
+                            Label("\(message.attachments.count)", systemImage: "paperclip").font(.caption).foregroundStyle(.secondary)
+                                .accessibilityLabel("\(message.attachments.count) attachments")
                         }
                         Spacer(minLength: 8)
                         Button("Edit") {
@@ -409,6 +416,9 @@ struct MessageRow: View {
     var groupedWithPrevious = false
     /// Shown on the last reply: ask again.
     var onRetry: (() -> Void)? = nil
+    /// A coding agent's result card: the chat's codebase and "Open pull request".
+    var codebase: Codebase? = nil
+    var onOpenPullRequest: (() -> Void)? = nil
     @State private var hovering = false
     @State private var copied = false
 
@@ -437,20 +447,16 @@ struct MessageRow: View {
                         }
                     }
                 }
-                if !(isUser && message.content.isEmpty) {
+                if let work = message.work {
+                    WorkResultCard(work: work, codebase: codebase, onOpenPullRequest: onOpenPullRequest)
+                } else if !(isUser && message.content.isEmpty) {
                     Group {
                         if message.content.isEmpty && message.role == .assistant {
                             TypingDots()
                                 .padding(.horizontal, 14).padding(.vertical, 12)
                                 .accessibilityLabel("\(speaker?.name ?? agent?.name ?? "The agent") is typing")
                         } else {
-                            Text(LocalizedStringKey(mentionNames.isEmpty ? message.content
-                                                    : StartupDetail.boldMentions(message.content, names: mentionNames)))
-                                .font(.system(size: 14))
-                                .lineSpacing(3)
-                                .textSelection(.enabled)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
+                            MessageContent(text: message.content, isUser: isUser, mentionNames: mentionNames)
                         }
                     }
                     .background(background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -458,6 +464,10 @@ struct MessageRow: View {
                     .overlay(alignment: isUser ? .topLeading : .topTrailing) {
                         if hovering && !message.content.isEmpty { actions.offset(x: isUser ? -8 : 8, y: -14) }
                     }
+                }
+
+                if !isUser, message.work == nil, !message.content.isEmpty {
+                    GitHubLinks(text: message.content)
                 }
 
                 if let files = message.attachments, !files.isEmpty {

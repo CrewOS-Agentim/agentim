@@ -1243,6 +1243,94 @@ class Projects:
             raise RuntimeError(f"git push failed: {err[-400:]}")
         return {"pushed": True}
 
+    # ---- results: what changed, and pull requests
+
+    @staticmethod
+    def github_repo(url):
+        """'git@github.com:acme/shop.git' or 'https://github.com/acme/shop' -> 'acme/shop' (None for other hosts)."""
+        match = re.match(r"^(?:git@github\.com:|(?:https|ssh)://(?:[^@/]+@)?github\.com/)([\w.-]+/[\w.-]+?)(?:\.git)?/?$", url or "")
+        return match.group(1) if match else None
+
+    def changes(self, folder, base=None):
+        """Changed files with lines added/removed: uncommitted work (plus new files), or everything since `base`."""
+        code, out, _ = self.git(folder, "diff", "--numstat", f"{base}...HEAD" if base else "HEAD")
+        files = []
+        for line in out.splitlines() if code == 0 else []:
+            added, removed, path = (line.split("\t") + ["", "", ""])[:3]
+            files.append({"path": path, "status": "modified", "added": int(added) if added.isdigit() else None,
+                          "removed": int(removed) if removed.isdigit() else None})
+        if not base:
+            code, out, _ = self.git(folder, "ls-files", "--others", "--exclude-standard")
+            for path in out.splitlines() if code == 0 else []:
+                try:
+                    with open(os.path.join(folder, path), "rb") as f:
+                        data = f.read(1 << 20)
+                    lines = None if b"\0" in data[:8192] else data.count(b"\n") + (0 if data.endswith(b"\n") or not data else 1)
+                except OSError:
+                    lines = None
+                files.append({"path": path, "status": "added", "added": lines, "removed": 0})
+        return files[:200]
+
+    def default_branch(self, folder):
+        code, out, _ = self.git(folder, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+        if code == 0 and "/" in out:
+            return out.split("/", 1)[1]
+        for name in ("main", "master"):
+            if self.git(folder, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{name}")[0] == 0:
+                return name
+        return "main"
+
+    @staticmethod
+    def branch_name(title):
+        slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")[:40].strip("-") or "change"
+        return f"agentim/{slug}-{time.strftime('%m%d-%H%M')}"
+
+    def pull_request(self, folder, title, body=""):
+        """Puts the agent's changes on a new branch (never the default one), pushes it (never forced) and opens a
+        pull request with the founder's gh login. Returns its link, branch and changed files."""
+        if not self.which("gh"):
+            raise RuntimeError("Install the GitHub CLI (brew install gh) and run gh auth login first.")
+        repo = self.github_repo(self.remote(folder))
+        if not repo:
+            raise RuntimeError("This folder has no GitHub remote (origin), so there's nowhere to open a pull request.")
+        title = (title or "").strip().splitlines()[0][:120] if (title or "").strip() else "Changes from agentim"
+        base = self.default_branch(folder)
+        code, branch, _ = self.git(folder, "rev-parse", "--abbrev-ref", "HEAD")
+        if code != 0 or branch in ("HEAD", base):
+            branch = self.branch_name(title)
+            code, _, err = self.git(folder, "switch", "--quiet", "-c", branch)
+            if code != 0:
+                raise RuntimeError(f"git switch failed: {err[-300:]}")
+        if self.git(folder, "status", "--porcelain")[1].strip():
+            identity = [] if self.git(folder, "config", "user.email")[0] == 0 else \
+                ["-c", "user.name=agentim", "-c", "user.email=agentim@localhost"]
+            self.git(folder, "add", "-A")
+            message = title + (f"\n\n{body.strip()}" if body.strip() else "") + "\n\nMade with agentim"
+            code, _, err = self.git(folder, *identity, "commit", "--quiet", "-m", message)
+            if code != 0:
+                raise RuntimeError(f"git commit failed: {err[-300:]}")
+        self.git(folder, "fetch", "--quiet", "origin", base, timeout=120)
+        ahead = self.git(folder, "rev-list", "--count", f"origin/{base}..HEAD")[1]
+        if ahead in ("", "0"):
+            raise RuntimeError(f"Nothing to put in a pull request: no changes on top of {base}.")
+        code, _, err = self.git(folder, "push", "--quiet", "-u", "origin", branch, timeout=180)
+        if code != 0:
+            raise RuntimeError(f"git push failed: {err[-400:]}")
+        result = self.run(["gh", "pr", "create", "--repo", repo, "--base", base, "--head", branch, "--title", title,
+                           "--body", (body.strip() or title) + "\n\n_Opened from agentim._"],
+                          cwd=folder, capture_output=True, text=True, timeout=120)
+        url = next((line for line in reversed((result.stdout or "").splitlines()) if "/pull/" in line), "")
+        if not url:  # already open for this branch: show that one
+            view = self.run(["gh", "pr", "view", branch, "--repo", repo, "--json", "url", "-q", ".url"],
+                            cwd=folder, capture_output=True, text=True, timeout=60)
+            url = (view.stdout or "").strip()
+        if not url:
+            raise RuntimeError(f"gh pr create failed: {(result.stderr or result.stdout).strip()[-400:]}")
+        number = re.search(r"/pull/(\d+)", url)
+        return {"url": url.strip(), "number": int(number.group(1)) if number else None, "repo": repo, "branch": branch,
+                "base": base, "sha": self.git(folder, "rev-parse", "HEAD")[1],
+                "files": self.changes(folder, base=f"origin/{base}")}
+
     @staticmethod
     def check(url, opener=urllib.request.urlopen):
         """Is the live URL answering? (http/https only)."""
@@ -1630,7 +1718,12 @@ class Handler(BaseHTTPRequestHandler):
                     added = [line[3:] for line in new.stdout.splitlines() if line.startswith("??")]
                     changed = (stat.stdout.strip() + (f"\nNew files ({len(added)}): " + ", ".join(added[:25])
                                                       if added else "")).strip()[-1500:]
-                return self.send_json(200, {"folder": cwd, "mode": mode, "output": output[-6000:], "changed": changed})
+                # Structured results for the app's result card: each file, the repo and branch (for links).
+                code, branch, _ = PROJECTS.git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+                return self.send_json(200, {"folder": cwd, "mode": mode, "output": output[-6000:], "changed": changed,
+                                            "files": PROJECTS.changes(cwd) if mode == "edit" else [],
+                                            "repo": PROJECTS.github_repo(PROJECTS.remote(cwd)),
+                                            "branch": branch if code == 0 else None})
             except subprocess.TimeoutExpired:
                 return self.error(504, "The coding agent took too long and was stopped.")
             except Exception as e:
@@ -1646,7 +1739,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"candidates": GITHUB.search(query, body.get("limit") or 10)})
             except Exception as e:
                 return self.error(400, str(e))
-        if path in ("/v1/projects/commit", "/v1/projects/history", "/v1/projects/github", "/v1/projects/push"):
+        if path in ("/v1/projects/commit", "/v1/projects/history", "/v1/projects/github", "/v1/projects/push",
+                    "/v1/projects/pr"):
             # Versions: commit + tag + changelog, the log, and (confirmed by the founder) GitHub.
             if IN_CONTAINER:
                 return self.error(404, "Projects are run by the runner on the Mac.")
@@ -1663,6 +1757,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/v1/projects/github":
                     return self.send_json(200, PROJECTS.create_github(folder, body.get("name", ""),
                                                                       body.get("private", True) is not False))
+                if path == "/v1/projects/pr":
+                    return self.send_json(200, PROJECTS.pull_request(folder, body.get("title", ""), body.get("body", "")))
                 return self.send_json(200, PROJECTS.push(folder))
             except Exception as e:
                 return self.error(400, str(e))

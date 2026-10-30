@@ -125,6 +125,54 @@ struct RunnerClient {
         return SSE.stream(urlRequest) { try JSONDecoder().decode(PullProgress.self, from: $0) }
     }
 
+    // MARK: - Codebases (the Mac's own runner: folders, GitHub clones, Claude Code, pull requests)
+
+    struct ProjectContext: Decodable { let context: String }
+
+    struct TaskResult: Decodable {
+        let folder: String
+        let mode: String
+        let output: String
+        let files: [FileChange]?
+        let repo: String?
+        let branch: String?
+    }
+
+    struct PullRequest: Decodable {
+        let url: String
+        let number: Int?
+        let repo: String
+        let branch: String
+        let base: String
+        let files: [FileChange]
+    }
+
+    /// What agents should know about a codebase: its README, manifests and file tree.
+    func projectContext(_ source: [String: String], maxCharacters: Int = 4_000) async throws -> String {
+        try await post("v1/projects/context", ["sources": [source], "max_chars": maxCharacters], timeout: 120,
+                       as: ProjectContext.self).context
+    }
+
+    /// A coding agent works in the codebase: read-only, or editing files when you confirmed "Build it".
+    func projectTask(_ source: [String: String], prompt: String, agent: String = "claude-code", edit: Bool) async throws -> TaskResult {
+        try await post("v1/projects/task", ["source": source, "prompt": prompt, "agent": agent,
+                                            "mode": edit ? "edit" : "read", "confirmed": edit, "timeout": 1_800],
+                       timeout: 1_900, as: TaskResult.self)
+    }
+
+    /// Branch, commit, push (never forced) and `gh pr create`: confirmed by you in the app.
+    func pullRequest(_ source: [String: String], title: String, body: String) async throws -> PullRequest {
+        try await post("v1/projects/pr", ["source": source, "title": title, "body": body, "confirmed": true],
+                       timeout: 300, as: PullRequest.self)
+    }
+
+    private func post<T: Decodable>(_ path: String, _ body: [String: Any], timeout: TimeInterval, as type: T.Type) async throws -> T {
+        var urlRequest = request(path, method: "POST")
+        urlRequest.timeoutInterval = timeout
+        urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
+        return try JSONDecoder().decode(T.self, from: try await data(urlRequest))
+    }
+
     // MARK: - LoRA adapters (the Mac's own runner: llama-server on the GPU)
 
     func adapterSearch(base: String, hfToken: String?) async throws -> AdapterSearch {

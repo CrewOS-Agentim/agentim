@@ -11,6 +11,8 @@ enum Theme {
     /// iMessage-style gray for the agents' bubbles (works on light and dark backgrounds).
     static let assistantBubble = Color.primary.opacity(0.07)
     static let warning = Color.orange
+    /// Code blocks: a quiet tint that reads as "code" in light and dark mode.
+    static let codeBackground = Color.primary.opacity(0.045)
 
     // Spacing (4/8 pt rhythm)
     static let s1: CGFloat = 4

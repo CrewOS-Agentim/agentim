@@ -51,6 +51,8 @@ final class AppStore {
     }
     /// Messages typed while a chat was still answering, sent in order as each reply finishes.
     private(set) var queuedMessages: [UUID: [QueuedMessage]] = [:]
+    /// Each chat's codebase summary (README, manifests, tree) and when it was read.
+    @ObservationIgnored private var codebaseContexts: [UUID: (at: Date, text: String)] = [:]
     var huggingFaceAccount: HuggingFaceClient.Account?
 
     let localModels = LocalModelManager()
@@ -575,6 +577,115 @@ final class AppStore {
 
     func isStreaming(_ id: UUID) -> Bool { streamingConversationIDs.contains(id) }
 
+    // MARK: - Codebase: a folder or GitHub repo per chat; Claude Code builds in it, results and pull requests show as cards
+
+    func setCodebase(_ codebase: Codebase?, in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].codebase = codebase
+        codebaseContexts[conversationID] = nil
+    }
+
+    /// The system prompt plus what agents should know about the chat's codebase (cached for 10 minutes).
+    func withCodebase(_ system: String, conversationID: UUID) async -> String {
+        guard let codebase = conversations.first(where: { $0.id == conversationID })?.codebase, let runner = macRunner else { return system }
+        var context = codebaseContexts[conversationID].flatMap { Date().timeIntervalSince($0.at) < 600 ? $0.text : nil }
+        if context == nil {
+            context = try? await runnerClient(runner).projectContext(codebase.source)
+            if let context { codebaseContexts[conversationID] = (Date(), context) }
+        }
+        guard let context, !context.isEmpty else { return system }
+        let note = """
+        ## Codebase: \(codebase.name)
+        This chat works on this codebase. Refer to its real files and structure. To change code, describe the plan; \
+        the user can press "Build it" to have Claude Code make the changes.
+
+        \(context)
+        """
+        return system.isEmpty ? note : system + "\n\n" + note
+    }
+
+    /// What Claude Code is asked to build: your last request, and the agent's plan if it answered one.
+    func buildRequest(in conversationID: UUID) -> String? {
+        guard let messages = conversations.first(where: { $0.id == conversationID })?.messages,
+              let ask = messages.last(where: { $0.role == .user && !$0.content.isEmpty }) else { return nil }
+        let plan = messages.last { $0.role == .assistant && !$0.isError && $0.work == nil && !$0.content.isEmpty && $0.createdAt >= ask.createdAt }
+        return ask.content + (plan.map { "\n\nThe plan agreed in the chat:\n\($0.content)" } ?? "")
+    }
+
+    /// Claude Code edits the chat's codebase (you confirmed "Build it"); the result shows as a card.
+    func buildIt(in conversationID: UUID) {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }), let codebase = conversation.codebase,
+              let request = buildRequest(in: conversationID), !isStreaming(conversationID),
+              let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        guard let runner = macRunner else {
+            conversations[index].messages.append(ChatMessage(role: .assistant, content: "Building needs this Mac's runner. Open This Mac and connect it.", isError: true))
+            return
+        }
+        let ask = conversation.messages.last { $0.role == .user }?.content ?? request
+        var work = WorkResult(state: .running, agentName: "Claude Code", request: String(ask.prefix(300)))
+        let message = ChatMessage(role: .assistant, content: work.summary, routingReason: "Claude Code in \(codebase.name)", work: work)
+        conversations[index].messages.append(message)
+        streamingConversationIDs.insert(conversationID)
+        Task {
+            defer { streamingConversationIDs.remove(conversationID) }
+            do {
+                let result = try await runnerClient(runner).projectTask(codebase.source, prompt: request, edit: true)
+                work.state = .done
+                work.folder = result.folder
+                work.repo = result.repo
+                work.branch = result.branch
+                work.files = result.files ?? []
+                work.output = result.output
+            } catch {
+                work.state = .failed
+                work.error = error.localizedDescription
+            }
+            updateWork(message.id, in: conversationID, work)
+            replyFinished(conversationID, replyID: message.id)
+        }
+    }
+
+    /// Opens a pull request with what Claude Code changed (you confirmed it): branch, commit, push, gh pr create.
+    func openPullRequest(messageID: UUID, in conversationID: UUID) {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }), let codebase = conversation.codebase,
+              var work = conversation.messages.first(where: { $0.id == messageID })?.work, let runner = macRunner else { return }
+        work.state = .openingPullRequest
+        work.error = nil
+        updateWork(messageID, in: conversationID, work)
+        let title = Self.pullRequestTitle(work.request)
+        let body = "\(work.request)\n\n" + work.files.prefix(30).map { "- `\($0.path)` (+\($0.added ?? 0) −\($0.removed ?? 0))" }.joined(separator: "\n")
+        Task {
+            do {
+                let pr = try await runnerClient(runner).pullRequest(codebase.source, title: title, body: body)
+                work.pullRequestURL = pr.url
+                work.pullRequestNumber = pr.number
+                work.repo = pr.repo
+                work.branch = pr.branch
+                work.base = pr.base
+                if !pr.files.isEmpty { work.files = pr.files }
+            } catch {
+                work.error = error.localizedDescription
+            }
+            work.state = .done
+            updateWork(messageID, in: conversationID, work)
+        }
+    }
+
+    /// The first line of the request, short enough for a pull request title.
+    nonisolated static func pullRequestTitle(_ request: String) -> String {
+        let line = request.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Changes from agentim"
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        return trimmed.count > 72 ? String(trimmed.prefix(71)).trimmingCharacters(in: .whitespaces) + "…" : trimmed
+    }
+
+    private func updateWork(_ messageID: UUID, in conversationID: UUID, _ work: WorkResult) {
+        updateReply(messageID, in: conversationID) {
+            $0.work = work
+            $0.content = work.summary
+            $0.isError = false
+        }
+    }
+
     // MARK: - Queue
 
     /// Sends now, or queues the message when the chat is still answering (or has others waiting).
@@ -689,6 +800,8 @@ final class AppStore {
 
         Task {
             defer { streamingConversationIDs.remove(conversationID) }
+            // A chat with a codebase: agents know its README, manifests and file tree.
+            let fullSystem = await withCodebase(system, conversationID: conversationID)
             var lastError: Error?
             for target in targets {
                 updateReply(reply.id, in: conversationID) {
@@ -698,7 +811,7 @@ final class AppStore {
                     $0.isError = false
                 }
                 do {
-                    let request = ChatRequest(model: target.model, system: system, messages: history, sendImages: target.images)
+                    let request = ChatRequest(model: target.model, system: fullSystem, messages: history, sendImages: target.images)
                     for try await chunk in target.client.stream(request) {
                         updateReply(reply.id, in: conversationID) { $0.content += chunk }
                     }
@@ -721,8 +834,14 @@ final class AppStore {
     func systemPrompt(agent: Agent?, message: String) -> String {
         var parts: [String] = []
         if let agent, !agent.systemPrompt.isEmpty { parts.append(agent.systemPrompt) }
-        for skill in activeSkills(agent: agent, message: message) {
+        let active = activeSkills(agent: agent, message: message)
+        for skill in active {
             parts.append("## Skill: \(skill.name)\n\(skill.instructions)")
+        }
+        // Designers show their work: an HTML mockup in the reply renders as a live preview in the chat.
+        let attached = skills.filter { agent?.skillIDs.contains($0.id) ?? false }
+        if (attached + active).contains(where: { $0.name.lowercased().contains("design") }) {
+            parts.append(DesignPreview.instruction)
         }
         return parts.joined(separator: "\n\n")
     }

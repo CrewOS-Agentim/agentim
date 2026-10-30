@@ -45,7 +45,53 @@ extension AppStore {
             return conversation
         }
 
+        // A designer's reply with a live mockup, and Claude Code's work on a repo with its pull request.
+        var redesign = chat("Checkout screen redesign", "Designer", minutesAgo: 1, [(
+            "Redesign our checkout screen: it feels cluttered and people drop off at payment.",
+            """
+            **Audit (worst first):** the total sits below the fold, 3 competing buttons, and no trust cues at payment.
+
+            **Quick wins:** one primary button, the total pinned at the top, Apple Pay first.
+
+            ```html
+            <html><head><style>
+            body{font-family:-apple-system,system-ui,sans-serif;background:#f6f7fb;margin:0;display:grid;place-items:center;min-height:100vh}
+            .card{background:#fff;border-radius:20px;box-shadow:0 10px 30px rgba(15,23,42,.08);padding:28px;width:min(420px,90vw)}
+            h1{font-size:20px;margin:0 0 4px;color:#0f172a}.muted{color:#64748b;font-size:14px;margin:0 0 20px}
+            .row{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eef0f4;font-size:15px;color:#334155}
+            .total{font-weight:700;color:#0f172a;font-size:18px;border:0;padding-top:16px}
+            .pay{margin-top:20px;width:100%;padding:14px;border:0;border-radius:12px;background:#000;color:#fff;font-size:16px;font-weight:600}
+            .alt{margin-top:10px;width:100%;padding:13px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;font-size:15px;color:#0f172a}
+            .trust{margin-top:14px;text-align:center;font-size:12px;color:#64748b}
+            </style></head><body><div class="card">
+            <h1>Checkout</h1><p class="muted">2 items · arrives Thursday</p>
+            <div class="row"><span>Oat latte ×2</span><span>$11.00</span></div>
+            <div class="row"><span>Almond croissant</span><span>$4.50</span></div>
+            <div class="row total"><span>Total</span><span>$15.50</span></div>
+            <button class="pay"> Pay</button><button class="alt">Pay with card</button>
+            <p class="trust">Secure payment · Cancel anytime before pickup</p>
+            </div></body></html>
+            ```
+            """, qwen, "Design task → Qwen3 4B · 🪄 UI UX Designer")])
+        redesign.messages[0].createdAt = Date().addingTimeInterval(-70)
+        var darkMode = chat("Dark mode for the shop", "Software Engineer", minutesAgo: 6, [(
+            "Add a dark mode toggle to the shop's settings page.",
+            "Plan: add a `theme` setting, read it in `ThemeProvider`, and add a toggle to `SettingsPage`. Press **Build it** to make the change.",
+            coder, "Coding task → qwen2.5-coder 14B · 🪄 Software Engineer")])
+        darkMode.codebase = Codebase(kind: .github, location: "acme/shop")
+        darkMode.messages.append(ChatMessage(role: .assistant, content: "", routingReason: "Claude Code in acme/shop", work: WorkResult(
+            state: .done, agentName: "Claude Code", request: "Add a dark mode toggle to the shop's settings page.",
+            folder: "/Users/you/.agenthub-runner/repos/acme/shop", repo: "acme/shop", branch: "agentim/add-a-dark-mode-toggle-1030-1412",
+            files: [FileChange(path: "src/settings/SettingsPage.tsx", status: "modified", added: 24, removed: 3),
+                    FileChange(path: "src/theme/ThemeProvider.tsx", status: "modified", added: 18, removed: 6),
+                    FileChange(path: "src/theme/useTheme.ts", status: "added", added: 31, removed: 0),
+                    FileChange(path: "src/settings/SettingsPage.test.tsx", status: "added", added: 42, removed: 0)],
+            output: "Added a theme setting (light, dark, system), a toggle in Settings and tests.",
+            pullRequestURL: "https://github.com/acme/shop/pull/42", pullRequestNumber: 42, base: "main")))
+
         conversations = [
+            redesign,
+            darkMode,
             chat("Office plant subscription?", "Startup Validator", minutesAgo: 2, [(
                 "Validate my startup idea: a monthly subscription that delivers and swaps office plants.",
                 """
