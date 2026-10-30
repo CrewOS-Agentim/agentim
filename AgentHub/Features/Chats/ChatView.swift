@@ -113,6 +113,7 @@ struct ChatView: View {
 
     private func composer(_ conversation: Conversation) -> some View {
         VStack(alignment: .leading, spacing: Theme.s2) {
+            queue(conversation)
             if !attachments.isEmpty || attachError != nil {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: Theme.s2) {
@@ -161,7 +162,7 @@ struct ChatView: View {
                         .frame(height: composerHeight)
                         .padding(.leading, Theme.s2)
                     Button { submit(conversation) } label: {
-                        Image(systemName: store.isStreaming(conversation.id) ? "ellipsis" : "arrow.up")
+                        Image(systemName: store.isStreaming(conversation.id) ? "text.badge.plus" : "arrow.up")
                             .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(.white)
                             .frame(width: 28, height: 28)
@@ -170,8 +171,9 @@ struct ChatView: View {
                     .buttonStyle(.plain)
                     .disabled(!canSend(conversation))
                     .padding(.trailing, 5).padding(.bottom, 5)
-                    .accessibilityLabel("Send")
-                    .help(conversation.isMeeting ? "Send (Return) · Shift-Return for a new line · @Name asks one member, Tab completes"
+                    .accessibilityLabel(store.isStreaming(conversation.id) ? "Queue" : "Send")
+                    .help(store.isStreaming(conversation.id) ? "Queue it (Return): it sends when the reply finishes"
+                          : conversation.isMeeting ? "Send (Return) · Shift-Return for a new line · @Name asks one member, Tab completes"
                                                  : "Send (Return) · Shift-Return for a new line · @model picks a model · /skill uses a skill")
                 }
                 .background(Theme.surface, in: RoundedRectangle(cornerRadius: 19, style: .continuous))
@@ -202,7 +204,7 @@ struct ChatView: View {
 
     private func canSend(_ conversation: Conversation) -> Bool {
         if conversation.isMeeting && store.members(in: conversation).isEmpty { return false }
-        return ChatComposer.canSend(draft: draft, attachments: attachments) && !store.isStreaming(conversation.id)
+        return ChatComposer.canSend(draft: draft, attachments: attachments)
     }
 
     private func submit(_ conversation: Conversation) {
@@ -212,10 +214,49 @@ struct ChatView: View {
         draft = ""
         attachments = []
         attachError = nil
-        if conversation.isMeeting {
-            store.sendToMeeting(text, attachments: files, in: conversation.id)
-        } else {
-            store.send(text, attachments: files, in: conversation.id)
+        // Still answering? It queues and goes out when the reply finishes.
+        store.submit(text, attachments: files, in: conversation.id)
+    }
+
+    /// Messages waiting for the current reply, with Edit (back into the box) and Remove.
+    @ViewBuilder
+    private func queue(_ conversation: Conversation) -> some View {
+        let queued = store.queuedMessages[conversation.id] ?? []
+        if !queued.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(queued.count == 1 ? "Queued: sends when the reply finishes" : "\(queued.count) queued: sent one by one as each reply finishes")
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(Array(queued.enumerated()), id: \.element.id) { index, message in
+                    HStack(spacing: Theme.s2) {
+                        Text("\(index + 1)").font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 14)
+                        Image(systemName: "clock").font(.caption).foregroundStyle(.secondary)
+                        Text(message.text.isEmpty ? message.attachments.map { "📎 \($0.name)" }.joined(separator: " ") : message.text)
+                            .lineLimit(1).truncationMode(.tail)
+                        if !message.text.isEmpty && !message.attachments.isEmpty {
+                            Text("📎 \(message.attachments.count)").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Button("Edit") {
+                            guard let taken = store.takeQueued(message.id, in: conversation.id) else { return }
+                            draft = draft.isEmpty ? taken.text : draft + "\n" + taken.text  // never overwrite what you're typing
+                            attachments += taken.attachments
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Take it back into the message box")
+                        Button { store.removeQueued(message.id, in: conversation.id) } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove from the queue")
+                        .accessibilityLabel("Remove queued message")
+                    }
+                    .font(.callout)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(Theme.surface, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.border))
+                }
+            }
+            .padding(.leading, 42)
         }
     }
 

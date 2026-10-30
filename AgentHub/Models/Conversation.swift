@@ -72,3 +72,10 @@ struct Conversation: Identifiable, Codable, Hashable {
             .trimmingCharacters(in: .whitespaces)
     }
 }
+
+/// A message typed while the chat was still answering; it goes out when the reply finishes.
+struct QueuedMessage: Identifiable, Hashable {
+    var id = UUID()
+    var text: String
+    var attachments: [ChatAttachment] = []
+}

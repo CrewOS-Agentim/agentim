@@ -41,7 +41,16 @@ final class AppStore {
     /// Bumped when a Keychain value changes so views re-read connection state.
     private(set) var credentialsVersion = 0
     private(set) var isOnline = true
-    private(set) var streamingConversationIDs: Set<UUID> = []
+    private(set) var streamingConversationIDs: Set<UUID> = [] {
+        didSet {
+            // A reply finished: the next queued message in that chat goes out.
+            for id in oldValue.subtracting(streamingConversationIDs) where !(queuedMessages[id] ?? []).isEmpty {
+                Task { @MainActor in self.sendNextQueued(id) }
+            }
+        }
+    }
+    /// Messages typed while a chat was still answering, sent in order as each reply finishes.
+    private(set) var queuedMessages: [UUID: [QueuedMessage]] = [:]
     var huggingFaceAccount: HuggingFaceClient.Account?
 
     let localModels = LocalModelManager()
@@ -298,6 +307,7 @@ final class AppStore {
 
     func deleteConversation(_ conversationID: UUID) {
         removeImages(of: conversations.first { $0.id == conversationID }?.messages ?? [])
+        queuedMessages[conversationID] = nil
         conversations.removeAll { $0.id == conversationID }
     }
 
@@ -564,6 +574,44 @@ final class AppStore {
     }
 
     func isStreaming(_ id: UUID) -> Bool { streamingConversationIDs.contains(id) }
+
+    // MARK: - Queue
+
+    /// Sends now, or queues the message when the chat is still answering (or has others waiting).
+    func submit(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID) {
+        if isStreaming(conversationID) || !(queuedMessages[conversationID] ?? []).isEmpty {
+            queuedMessages[conversationID, default: []].append(QueuedMessage(text: text, attachments: attachments))
+        } else {
+            dispatch(text, attachments: attachments, in: conversationID)
+        }
+    }
+
+    func removeQueued(_ id: UUID, in conversationID: UUID) {
+        queuedMessages[conversationID]?.removeAll { $0.id == id }
+    }
+
+    /// Takes a queued message back into the composer to change it.
+    func takeQueued(_ id: UUID, in conversationID: UUID) -> QueuedMessage? {
+        guard let message = queuedMessages[conversationID]?.first(where: { $0.id == id }) else { return nil }
+        removeQueued(id, in: conversationID)
+        return message
+    }
+
+    func sendNextQueued(_ conversationID: UUID) {
+        guard !isStreaming(conversationID), var queue = queuedMessages[conversationID], !queue.isEmpty else { return }
+        let next = queue.removeFirst()
+        queuedMessages[conversationID] = queue.isEmpty ? nil : queue
+        guard conversations.contains(where: { $0.id == conversationID }) else { return }
+        dispatch(next.text, attachments: next.attachments, in: conversationID)
+    }
+
+    private func dispatch(_ text: String, attachments: [ChatAttachment], in conversationID: UUID) {
+        if conversations.first(where: { $0.id == conversationID })?.isMeeting == true {
+            sendToMeeting(text, attachments: attachments, in: conversationID)
+        } else {
+            send(text, attachments: attachments, in: conversationID)
+        }
+    }
 
     /// Router preview for the composer ("will go to …").
     func previewRoute(_ text: String, in conversation: Conversation) -> Result<RoutingDecision, Error> {

@@ -218,7 +218,7 @@ The app can also run Hugging Face **MLX** models directly on your Mac's GPU, aft
 
 **Status:** the **Status** page shows which models are running, your Mac's CPU and memory (with live charts), each container's CPU and memory (`docker stats`), and every model task: what's running now and a history with timings and results.
 
-**Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line).
+**Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line). Keep typing while an agent answers: new messages **queue** above the box and go out in order as each reply finishes (Edit takes one back, ✕ removes it).
 
 **Files, images and codebases.** Drag them into a chat, paste them (**⌘V** takes a screenshot or copied files), or use **+** → *Files or images…* / *Folder or codebase…*. Up to 10 per message.
 
