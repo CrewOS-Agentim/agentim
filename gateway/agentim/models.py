@@ -59,7 +59,8 @@ class Catalog:
         # Claude through the API only when the founder chose it; otherwise Claude runs via tmux (claude -p).
         if self.config.anthropic_key and getattr(self.config, "claude_via", "tmux") == "api":
             models += CLOUD_MODELS["anthropic"]
-        if self.config.openai_key:
+        # ChatGPT through the API only when the founder chose it; otherwise ChatGPT runs via tmux (codex exec).
+        if self.config.openai_key and getattr(self.config, "chatgpt_via", "tmux") == "api":
             models += CLOUD_MODELS["openai"]
         return models
 

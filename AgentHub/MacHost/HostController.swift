@@ -285,6 +285,9 @@ final class HostController {
         var claudeInstalled = false
         var tmuxInstalled = false
         var sessions: [String] = []   // agentim's running Claude sessions (tmux)
+        var codexInstalled = false
+        var codexLoggedIn = false
+        var codexSessions: [String] = []  // agentim's running ChatGPT (Codex) sessions
     }
 
     private(set) var claude = ClaudeStatus()
@@ -294,12 +297,18 @@ final class HostController {
     func refreshClaude() async {
         let tmux = Self.tmuxPaths.first { FileManager.default.fileExists(atPath: $0) }
         let installed = await Shell.run(["/bin/zsh", "-lc", "command -v claude"]).ok
-        var sessions: [String] = []
+        var all: [String] = []
         if let tmux {
             let ls = await Shell.run([tmux, "ls", "-F", "#{session_name}"])
-            sessions = ls.output.split(separator: "\n").map(String.init).filter { $0.hasPrefix("agentim-claude") }
+            all = ls.output.split(separator: "\n").map(String.init)
         }
-        claude = ClaudeStatus(claudeInstalled: installed, tmuxInstalled: tmux != nil, sessions: sessions)
+        let codex = await Shell.run(["/bin/zsh", "-lc", "command -v codex"]).ok
+        let codexLogin = codex ? await Shell.run(["/bin/zsh", "-lc", "codex login status"]) : nil
+        claude = ClaudeStatus(claudeInstalled: installed, tmuxInstalled: tmux != nil,
+                              sessions: all.filter { $0.hasPrefix("agentim-claude") },
+                              codexInstalled: codex,
+                              codexLoggedIn: codexLogin.map { $0.ok && $0.output.localizedCaseInsensitiveContains("logged in") } ?? false,
+                              codexSessions: all.filter { $0.hasPrefix("agentim-codex") })
     }
 
     /// Claude via tmux (default) or the API: saved for the app and in the stack's .env for the gateway and runner.
@@ -312,6 +321,25 @@ final class HostController {
         try? updated.write(to: env, atomically: true, encoding: .utf8)
         _ = await Shell.run(["docker", "compose", "up", "-d", "--no-deps", "gateway"], in: root)
         if via == "tmux" { await installTmuxIfNeeded() }
+    }
+
+    /// ChatGPT via tmux (default) or the API: saved for the app and in the stack's .env for the gateway and runner.
+    func setChatGPTVia(_ via: String, store: AppStore) async {
+        store.chatgptVia = via
+        guard let env = stackRoot?.appendingPathComponent(".env"),
+              let text = try? String(contentsOf: env, encoding: .utf8), let root = stackRoot else { return }
+        let updated = Self.withEnv("AGENTIM_CHATGPT_VIA", via, in: text)
+        guard updated != text else { return }
+        try? updated.write(to: env, atomically: true, encoding: .utf8)
+        _ = await Shell.run(["docker", "compose", "up", "-d", "--no-deps", "gateway"], in: root)
+        if via == "tmux" { await installTmuxIfNeeded() }
+    }
+
+    /// Opens Terminal attached to agentim's latest ChatGPT session.
+    func watchChatGPT() {
+        guard let session = claude.codexSessions.last,
+              let tmux = Self.tmuxPaths.first(where: FileManager.default.fileExists(atPath:)) else { return }
+        Shell.runInTerminal("\(tmux) attach -t \(session)")
     }
 
     func installTmuxIfNeeded() async {

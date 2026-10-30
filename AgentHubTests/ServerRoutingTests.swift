@@ -45,6 +45,17 @@ final class ServerRoutingTests: XCTestCase {
                        "tmux mode: Claude never goes through the API, even with a key")
     }
 
+    func testChatGPTThroughTheLoginIsARealChatModel() throws {
+        let gpt = AIModel.server(ServerModelInfo(id: "chatgpt/gpt-6-astra", kind: "chatgpt", size_bytes: nil, parameter_size: nil,
+                                                 loaded: nil, name: "ChatGPT gpt-6-astra (your ChatGPT login)"), on: server)
+        XCTAssertFalse(gpt.isExplicitOnly)
+        XCTAssertEqual(gpt.alias, "gpt-6-astra")
+        XCTAssertEqual(try route("@gpt-6-astra summarize this", [llama8b, gpt]).model.id, gpt.id)
+        let fallback = AIModel.server(ServerModelInfo(id: "chatgpt/default", kind: "chatgpt", size_bytes: nil, parameter_size: nil,
+                                                      loaded: nil), on: server)
+        XCTAssertEqual(fallback.alias, "chatgpt")
+    }
+
     func testClaudeThroughTheLoginIsARealChatModel() throws {
         let sonnet = AIModel.server(ServerModelInfo(id: "claude/sonnet", kind: "claude", size_bytes: nil, parameter_size: nil,
                                                     loaded: nil, name: "Claude Sonnet (your Claude login)"), on: server)

@@ -107,6 +107,12 @@ def model_from_runner(info, runner_url):
     """Router metadata for a runner model, guessed from its name and size."""
     mid = info["id"]
     short = mid.split("/")[-1]
+    if info.get("kind") == "chatgpt":
+        # ChatGPT through the founder's ChatGPT login (codex exec on the Mac): a real chat model, no API key.
+        explicit = os.environ.get("AGENTIM_CHATGPT_VIA", "tmux").lower() == "api"  # the API models answer instead
+        return Model(id=mid, alias="chatgpt" if short == "default" else short, backend="runner", name=mid,
+                     caps=({"agent"} if explicit else set()) | {"coding", "reasoning", "creative", "longContext", "general"},
+                     context=200_000, cost=3, quality=5, local=False, runner_url=runner_url)
     if info.get("kind") == "claude":
         # Claude through the founder's Claude login (claude -p on the Mac): a real chat model, no API key.
         # AGENTIM_CLAUDE_LOGIN=explicit: only when picked (an agent's model, @sonnet), so background work stays local.

@@ -14,6 +14,9 @@ struct AgentimApp: App {
                 .environment(host)
                 .frame(minWidth: 900, minHeight: 600)
                 .task {
+                    // Notifications: a conversation ended, or an agent needs your answer; a click opens the chat.
+                    Notifier.shared.setUp()
+                    Notifier.shared.open = { id in store.requestedConversationID = id }
                     host.startPolling()
                     guard !AppStore.isDemo, !AppStore.isTesting else { return }
                     async let account: Void = store.refreshHuggingFaceAccount()
@@ -101,6 +104,7 @@ struct RootView: View {
     /// `-section models` on launch picks the starting section (used for screenshots).
     @State private var selection: SidebarItem? = SidebarItem(rawValue: UserDefaults.standard.string(forKey: "section") ?? "") ?? .chats
     @Environment(HostController.self) private var host
+    @Environment(AppStore.self) private var store
     @Environment(\.openWindow) private var openWindow
     /// First launch shows onboarding; "Run setup again" in This Mac resets this.
     /// `-onboarding YES` forces it (screenshots); demo mode otherwise skips it.
@@ -140,6 +144,11 @@ struct RootView: View {
     }
 
     private var split: some View {
+        splitContent
+            .onChange(of: store.requestedConversationID) { _, id in if id != nil { selection = .chats } }
+    }
+
+    private var splitContent: some View {
         HStack(spacing: 0) {
             NavRail(selection: $selection, collapsed: $navCollapsed)
             Divider()

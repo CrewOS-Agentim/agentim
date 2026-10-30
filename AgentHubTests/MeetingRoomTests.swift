@@ -121,6 +121,80 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertFalse(SidebarItem.visible.contains(.startup), "Projects moved into Chats")
     }
 
+    @MainActor
+    func testChatOptions() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        store.agents = [cto, cmo]
+        var chat = store.newConversation(agent: cto)
+        chat.messages = [ChatMessage(role: .user, content: "Hi"), ChatMessage(role: .assistant, content: "Hello")]
+        store.conversations[0] = chat
+        store.rename(chat.id, to: "  Launch plan  ")
+        XCTAssertEqual(store.conversations[0].title, "Launch plan")
+        store.rename(chat.id, to: " ")
+        XCTAssertEqual(store.conversations[0].title, "Launch plan", "blank names are ignored")
+        store.switchAgent(chat.id, to: cmo.id)
+        XCTAssertEqual(store.agent(for: store.conversations[0])?.name, "CMO")
+        let md = store.markdown(store.conversations[0])
+        XCTAssertTrue(md.hasPrefix("# Launch plan"))
+        XCTAssertTrue(md.contains("**You**") && md.contains("Hello"))
+        store.clearMessages(chat.id)
+        XCTAssertTrue(store.conversations[0].messages.isEmpty)
+        store.deleteConversation(chat.id)
+        XCTAssertTrue(store.conversations.isEmpty)
+    }
+
+    func testNotificationText() {
+        let (summary, question) = AppStore.splitSummary("The team agreed on pilots in Austin.\nPricing at $29.\nQUESTION: Should we start with landlords?")
+        XCTAssertEqual(summary, "The team agreed on pilots in Austin. Pricing at $29.")
+        XCTAssertEqual(question, "Should we start with landlords?")
+        XCTAssertNil(AppStore.splitSummary("Done.\n**QUESTION:** none").1, "no question: a 'finished' notification")
+        XCTAssertTrue(AppStore.asksTheUser("Here's the plan.\n\nWhich city should we start in?"))
+        XCTAssertFalse(AppStore.asksTheUser("Here's the plan. Ship Friday."))
+        XCTAssertEqual(AppStore.lastQuestion("Plan.\nWhich city first?"), "Which city first?")
+        XCTAssertEqual(AppStore.plain("**Ship** `Friday`\nnow"), "Ship Friday now")
+    }
+
+    func testChatTimelineDividersAndGrouping() {
+        let calendar = Calendar.current
+        let now = Date()
+        var a = ChatMessage(role: .assistant, content: "Hi")
+        a.createdAt = now.addingTimeInterval(-3600)
+        var b = ChatMessage(role: .assistant, content: "More")
+        b.createdAt = a.createdAt.addingTimeInterval(30)
+        var c = ChatMessage(role: .user, content: "Thanks")
+        c.createdAt = b.createdAt.addingTimeInterval(20 * 60)
+        XCTAssertTrue(ChatTimeline.showsDivider(a, after: nil), "the first message")
+        XCTAssertFalse(ChatTimeline.showsDivider(b, after: a))
+        XCTAssertTrue(ChatTimeline.showsDivider(c, after: b), "after a 15-minute gap")
+        XCTAssertTrue(ChatTimeline.groups(b, with: a, sameSpeaker: true))
+        XCTAssertFalse(ChatTimeline.groups(c, with: b, sameSpeaker: true), "another sender")
+        XCTAssertTrue(ChatTimeline.label(now, now: now, calendar: calendar).hasPrefix("Today"))
+        XCTAssertTrue(ChatTimeline.label(now.addingTimeInterval(-86_400), now: now, calendar: calendar).hasPrefix("Yesterday"))
+    }
+
+    @MainActor
+    func testUnreadAndRetry() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        store.agents = [cto]
+        var chat = store.newConversation(agent: cto)
+        XCTAssertFalse(chat.isUnread, "a new chat starts read")
+        var reply = ChatMessage(role: .assistant, content: "Hello")
+        reply.createdAt = Date().addingTimeInterval(5)
+        chat.messages = [ChatMessage(role: .user, content: "Hi"), reply]
+        store.conversations[0] = chat
+        XCTAssertTrue(store.conversations[0].isUnread)
+        store.markRead(chat.id)
+        XCTAssertFalse(store.conversations[0].isUnread)
+        store.retryLast(in: chat.id)
+        XCTAssertFalse(store.conversations[0].messages.contains { $0.content == "Hello" }, "the old reply is gone")
+        // With no models here, the resend re-checks the servers first (async), then posts "Hi" again.
+        let deadline = Date().addingTimeInterval(3)
+        while store.conversations[0].messages.first?.content != "Hi" && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(store.conversations[0].messages.first?.content, "Hi", "asks again with the same message")
+    }
+
     func testCloudKeysGoToTheGatewayEnv() {
         let env = "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=\n"
         XCTAssertEqual(HostController.withEnv("ANTHROPIC_API_KEY", "sk-ant-1", in: env), "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=sk-ant-1\n")

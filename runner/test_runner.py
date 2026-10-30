@@ -363,6 +363,39 @@ class ProjectsTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             runner.GitHubResearch(run=run, which=lambda n: None).search("x")
 
+    def test_chatgpt_through_the_login_in_tmux(self):
+        calls = []
+
+        class R:
+            returncode, stdout, stderr = 0, "codex progress log", ""
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[1] == "new-session":
+                script = cmd[-1]
+                log = script.split(" > ")[-2].split(" 2>&1")[0].strip("'") if script.count(" > ") > 1 else script.split(" > ")[1].split(" 2>&1")[0].strip("'")
+                answer = script.split(" -o ")[1].split(" ")[0].strip("'")
+                open(answer, "w").write("Hello from ChatGPT")
+                open(log, "w").write("codex progress log")
+                open(log + ".exit", "w").write("0")
+            return R()
+
+        agents = runner.LocalAgents(env={"AGENTIM_LOCAL_AGENTS": "codex"}, which=lambda n, path=None: f"/fake/{n}", run=run)
+        with mock.patch.object(runner.LocalAgents, "tmux", lambda self: "/opt/homebrew/bin/tmux"), \
+                mock.patch.object(runner, "FILES_DIR", self.tmp.name), \
+                mock.patch.object(runner, "CLAUDE_CHAT_DIR", os.path.join(self.tmp.name, "chat")):
+            self.assertEqual(agents.chatgpt("gpt-6-astra", "hi"), "Hello from ChatGPT", "the final message, not the log")
+            script = calls[-1][-1]
+            self.assertIn("exec --sandbox read-only", script)
+            self.assertIn("-m gpt-6-astra", script)
+            agents.chatgpt("default", "hi")
+            self.assertNotIn(" -m ", calls[-1][-1], "default: Codex's own configured model")
+        config = os.path.join(self.tmp.name, "config.toml")
+        open(config, "w").write('model = "gpt-6-astra"\nmodel_reasoning_effort = "medium"\n')
+        self.assertEqual(runner.chatgpt_login_models({}, config), ["gpt-6-astra"])
+        self.assertEqual(runner.chatgpt_login_models({"AGENTIM_CHATGPT_MODELS": "a, b"}, config), ["a", "b"])
+        self.assertEqual(runner.chatgpt_login_models({}, os.path.join(self.tmp.name, "missing")), ["default"])
+
     def test_claude_through_the_login_in_tmux(self):
         calls = []
 

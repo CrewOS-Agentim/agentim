@@ -245,6 +245,11 @@ def list_models():
     for name in LOCAL_AGENTS.available():
         models.append({"id": f"local/{name}", "object": "model", "owned_by": name, "backend": "local", "kind": "agent",
                        "name": LocalAgents.COMMANDS[name]["name"]})
+    if "codex" in LOCAL_AGENTS.available():
+        # ChatGPT through the founder's ChatGPT login (`codex exec`, in tmux): no OpenAI API key needed.
+        for model in chatgpt_login_models(LOCAL_AGENTS.env):
+            models.append({"id": f"chatgpt/{model}", "object": "model", "owned_by": "chatgpt-login", "backend": "chatgpt",
+                           "kind": "chatgpt", "name": f"ChatGPT {'' if model == 'default' else model + ' '}(your ChatGPT login)"})
     if "claude-code" in LOCAL_AGENTS.available():
         # Claude through the founder's Claude login (`claude -p`, in tmux): no API key needed.
         for alias, label in CLAUDE_LOGIN_MODELS.items():
@@ -607,6 +612,34 @@ class LocalAgents:
             raise RuntimeError(f"Claude exited with {result.returncode}: {output[-800:]}")
         return output
 
+    def chatgpt(self, model, prompt, timeout=600):
+        """ChatGPT through the founder's ChatGPT login: `codex exec`, read-only, in an empty folder, in a tmux
+        session when tmux is installed. Returns Codex's final message (not its progress log)."""
+        if "codex" not in self.available():
+            raise RuntimeError("Codex isn't installed or enabled on this Mac (AGENTIM_LOCAL_AGENTS).")
+        os.makedirs(CLAUDE_CHAT_DIR, exist_ok=True)
+        answer = os.path.join(FILES_DIR, f"chatgpt-{uuid.uuid4().hex[:8]}.txt")
+        os.makedirs(FILES_DIR, exist_ok=True)
+        cmd = [self.binary("codex"), "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--ephemeral",
+               "--color", "never", "-o", answer] + ([] if model == "default" else ["-m", model]) + [prompt]
+        try:
+            if self.use_tmux():
+                output = self.run_in_tmux("codex", cmd, CLAUDE_CHAT_DIR, timeout)[0]
+            elif (self.env.get("AGENTIM_LOCAL_AGENTS_TMUX") or "auto").lower() not in ("0", "false", "no", "off"):
+                raise RuntimeError("ChatGPT runs in a background terminal (tmux): install it with `brew install tmux` "
+                                   "(or set AGENTIM_LOCAL_AGENTS_TMUX=0 to run it directly).")
+            else:
+                result = self.run(cmd, cwd=CLAUDE_CHAT_DIR, capture_output=True, text=True, timeout=timeout,
+                                  stdin=subprocess.DEVNULL)
+                output = (result.stdout or "").strip() or (result.stderr or "").strip()
+                if result.returncode != 0:
+                    raise RuntimeError(f"Codex exited with {result.returncode}: {output[-800:]}")
+            final = open(answer).read().strip() if os.path.exists(answer) else ""
+            return final or output
+        finally:
+            if os.path.exists(answer):
+                os.remove(answer)
+
     def run_in_tmux(self, name, cmd, cwd, timeout):
         session = f"agentim-{name}-{uuid.uuid4().hex[:6]}"
         log_file = os.path.join(FILES_DIR, f"{session}.log")
@@ -630,6 +663,23 @@ class LocalAgents:
 LOCAL_AGENTS = LocalAgents()
 
 CLAUDE_LOGIN_MODELS = {"opus": "Claude Opus", "sonnet": "Claude Sonnet", "haiku": "Claude Haiku"}
+
+
+def chatgpt_login_models(env=None, config_path=os.path.expanduser("~/.codex/config.toml")):
+    """The ChatGPT models to offer through the ChatGPT login (Codex): AGENTIM_CHATGPT_MODELS, else the model in
+    Codex's own config, else Codex's default."""
+    env = env if env is not None else os.environ
+    listed = [m.strip() for m in (env.get("AGENTIM_CHATGPT_MODELS") or "").split(",") if m.strip()]
+    if listed:
+        return listed
+    try:
+        for line in open(config_path):
+            match = re.match(r'^\s*model\s*=\s*"([^"]+)"', line)
+            if match:
+                return [match.group(1)]
+    except OSError:
+        pass
+    return ["default"]
 CLAUDE_CHAT_DIR = os.path.join(STATE_DIR, "claude-chat")  # an empty folder: plain chats never read your code
 
 
@@ -1291,6 +1341,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.local_agent_chat(name, body)
         if backend == "claude":
             return self.claude_login_chat(name, body)
+        if backend == "chatgpt":
+            return self.chatgpt_login_chat(name, body)
         if backend not in BACKENDS or not name:
             return self.error(400, f"Unknown model '{model}'. Use an id from GET /v1/models.")
         body["model"] = name
@@ -1337,6 +1389,23 @@ class Handler(BaseHTTPRequestHandler):
             text = f"Couldn't run {name}: {e}"
         if not body.get("stream"):
             return self.send_json(200, {"object": "chat.completion", "model": f"local/{name}", "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
+        self.start_sse()
+        self.sse({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})
+        self.wfile.write(b"data: [DONE]\n\n")
+
+    def chatgpt_login_chat(self, model, body):
+        """A chat answered by ChatGPT through the founder's ChatGPT login (no OpenAI API key)."""
+        if IN_CONTAINER:
+            return self.error(404, "ChatGPT through your login runs on the Mac.")
+        try:
+            text = LOCAL_AGENTS.chatgpt(model, claude_chat_prompt(body.get("messages", [])))
+        except subprocess.TimeoutExpired:
+            return self.error(504, "ChatGPT took too long and was stopped.")
+        except Exception as e:
+            return self.error(502, str(e))
+        if not body.get("stream"):
+            return self.send_json(200, {"object": "chat.completion", "model": f"chatgpt/{model}", "choices": [
                 {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}]})
         self.start_sse()
         self.sse({"object": "chat.completion.chunk", "choices": [{"index": 0, "delta": {"content": text}}]})

@@ -8,7 +8,8 @@ enum Theme {
     static let surface = Color(nsColor: .textBackgroundColor)
     static let surfaceMuted = Color(nsColor: .windowBackgroundColor)
     static let border = Color(nsColor: .separatorColor)
-    static let assistantBubble = Color(nsColor: .textBackgroundColor)
+    /// iMessage-style gray for the agents' bubbles (works on light and dark backgrounds).
+    static let assistantBubble = Color.primary.opacity(0.07)
     static let warning = Color.orange
 
     // Spacing (4/8 pt rhythm)

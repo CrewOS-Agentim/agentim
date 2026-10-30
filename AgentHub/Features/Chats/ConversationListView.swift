@@ -20,15 +20,14 @@ struct ConversationListView: View {
     var body: some View {
         HSplitView {
             List(selection: $selection) {
-                ForEach(filtered) { conversation in
-                    ConversationRow(conversation: conversation, agent: store.agent(for: conversation),
-                                    members: store.members(in: conversation))
-                        .tag(conversation.id)
-                        .contextMenu {
-                            Button("Delete", role: .destructive) { delete([conversation.id]) }
-                        }
+                let groups = filtered.filter(\.isMeeting)
+                let direct = filtered.filter { !$0.isMeeting }
+                if !groups.isEmpty {
+                    Section("Group chats") { rows(groups) }
                 }
-                .onDelete { offsets in delete(offsets.map { filtered[$0].id }) }
+                if !direct.isEmpty {
+                    Section("Direct messages") { rows(direct) }
+                }
             }
             .searchable(text: $search, placement: .sidebar)
             .overlay {
@@ -53,7 +52,9 @@ struct ConversationListView: View {
         .navigationTitle("Chats")
         .onAppear {
             if selection == nil, UserDefaults.standard.bool(forKey: "openChat") { selection = filtered.first?.id }
+            openRequested()
         }
+        .onChange(of: store.requestedConversationID) { openRequested() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -77,6 +78,27 @@ struct ConversationListView: View {
         }
     }
 
+    private func rows(_ conversations: [Conversation]) -> some View {
+        ForEach(conversations) { conversation in
+            ConversationRow(conversation: conversation, agent: store.agent(for: conversation),
+                            members: store.members(in: conversation),
+                            unread: conversation.isUnread && conversation.id != selection)
+                .tag(conversation.id)
+                .contextMenu {
+                    Button("Mark as read") { store.markRead(conversation.id) }
+                    Button("Delete", role: .destructive) { delete([conversation.id]) }
+                }
+        }
+        .onDelete { offsets in delete(offsets.map { conversations[$0].id }) }
+    }
+
+    /// A notification was clicked: open that chat.
+    private func openRequested() {
+        guard let id = store.requestedConversationID, store.conversations.contains(where: { $0.id == id }) else { return }
+        selection = id
+        store.requestedConversationID = nil
+    }
+
     private func delete(_ ids: [UUID]) {
         if let selection, ids.contains(selection) { self.selection = nil }
         store.conversations.removeAll { ids.contains($0.id) }
@@ -87,6 +109,7 @@ private struct ConversationRow: View {
     let conversation: Conversation
     let agent: Agent?
     var members: [AppStore.Member] = []
+    var unread = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -101,18 +124,33 @@ private struct ConversationRow: View {
                 AvatarView(agent: agent, size: 40)
             }
             VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(conversation.title).font(.headline).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(conversation.title).font(.callout.weight(unread ? .bold : .semibold)).lineLimit(1)
                     Spacer()
-                    Text(conversation.updatedAt, style: .relative)
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text(Self.when(conversation.updatedAt))
+                        .font(.caption).foregroundStyle(unread ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    if unread {
+                        Circle().fill(Color.accentColor).frame(width: 8, height: 8).accessibilityLabel("Unread")
+                    }
                 }
                 Text(conversation.isMeeting ? (members.isEmpty ? "Group chat" : "Group · " + members.map(\.name).joined(separator: ", "))
                                             : agent?.name ?? "Unknown agent")
                     .font(.caption).foregroundStyle(.tint).lineLimit(1)
-                Text(conversation.preview).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                Text(conversation.preview).font(.subheadline).foregroundStyle(unread ? .primary : .secondary).lineLimit(2)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 3)
+    }
+
+    /// Messages-style: "10:42" today, "Yesterday", the weekday this week, else the date.
+    static func when(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        if calendar.isDate(date, inSameDayAs: now) { return date.formatted(date: .omitted, time: .shortened) }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return "Yesterday"
+        }
+        if let days = calendar.dateComponents([.day], from: date, to: now).day, days < 7 {
+            return date.formatted(.dateTime.weekday(.wide))
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day())
     }
 }

@@ -47,6 +47,12 @@ struct Conversation: Identifiable, Codable, Hashable {
     var brief: IdeaBrief?
 
     var isMeeting: Bool { participantIDs != nil }
+    /// When you last saw this chat (replies after it show as unread in the list).
+    var lastReadAt: Date?
+    var isUnread: Bool {
+        guard let last = messages.last(where: { $0.role == .assistant && !$0.content.isEmpty }) else { return false }
+        return last.createdAt > (lastReadAt ?? .distantPast)
+    }
     var updatedAt = Date()
 
     /// Last message as plain text (markdown markers removed) for list rows.

@@ -84,9 +84,18 @@ final class AppStore {
 
     var allModels: [AIModel] { AIModel.cloudCatalog + customModels + installedLocalModels + serverModels }
 
+    /// The chat on screen (notifications skip it while agentim is in front), and one a notification asked to open.
+    var visibleConversationID: UUID?
+    var requestedConversationID: UUID?
+
     /// How Claude is used: "tmux" (your Claude login, claude -p in a background terminal) or "api" (an API key).
     var claudeVia: String = UserDefaults.standard.string(forKey: "claudeVia") ?? "tmux" {
         didSet { UserDefaults.standard.set(claudeVia, forKey: "claudeVia") }
+    }
+
+    /// How ChatGPT is used: "tmux" (your ChatGPT login, codex exec in a background terminal) or "api" (an API key).
+    var chatgptVia: String = UserDefaults.standard.string(forKey: "chatgptVia") ?? "tmux" {
+        didSet { UserDefaults.standard.set(chatgptVia, forKey: "chatgptVia") }
     }
 
     /// What the router may choose from: connected providers + installed local weights.
@@ -95,6 +104,8 @@ final class AppStore {
             switch model.location {
             case .cloud(let id) where id == Provider.anthropic.id && claudeVia == "tmux":
                 false  // Claude goes through tmux (claude -p), never the API
+            case .cloud(let id) where id == Provider.openAI.id && chatgptVia == "tmux":
+                false  // ChatGPT goes through tmux (codex exec), never the API
             case .cloud(let id): provider(id: id).map(isConnected) ?? false
             case .local(let repo): LocalModelManager.isInstalled(repo)
             case .server(let id): if case .online? = serverStatus[id] { true } else { false }
@@ -193,7 +204,8 @@ final class AppStore {
 
     @discardableResult
     func newConversation(agent: Agent) -> Conversation {
-        let conversation = Conversation(title: "New chat", agentID: agent.id)
+        var conversation = Conversation(title: "New chat", agentID: agent.id)
+        conversation.lastReadAt = Date()
         conversations.insert(conversation, at: 0)
         return conversation
     }
@@ -226,6 +238,7 @@ final class AppStore {
     @discardableResult
     func newMeeting(with participants: [Agent], skills: [Skill] = []) -> Conversation {
         var conversation = Conversation(title: "Group chat", agentID: participants.first?.id ?? agents.first?.id ?? UUID())
+        conversation.lastReadAt = Date()
         conversation.participantIDs = participants.map(\.id)
         conversation.participantSkillIDs = skills.map(\.id)
         let names = participants.map(\.name) + skills.map(\.name)
@@ -269,6 +282,55 @@ final class AppStore {
         let names = members(in: conversations[i]).map(\.name)
         conversations[i].title = names.isEmpty ? "Group chat"
             : names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
+    }
+
+    func rename(_ conversationID: UUID, to title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].title = String(title.prefix(120))
+    }
+
+    func clearMessages(_ conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }), !isStreaming(conversationID) else { return }
+        conversations[i].messages = []
+    }
+
+    func deleteConversation(_ conversationID: UUID) {
+        conversations.removeAll { $0.id == conversationID }
+    }
+
+    /// Talk to another agent in the same chat (the history stays).
+    func switchAgent(_ conversationID: UUID, to agentID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].agentID = agentID
+    }
+
+    /// The chat as Markdown (for Copy and Export).
+    func markdown(_ conversation: Conversation) -> String {
+        let lines = conversation.messages.filter { !$0.content.isEmpty }.map { message -> String in
+            let who = message.role == .user ? "You" : speaker(of: message)?.name ?? agent(for: conversation)?.name ?? "Assistant"
+            return "**\(who)** · \(message.createdAt.formatted(date: .abbreviated, time: .shortened))\n\n\(message.content)"
+        }
+        return "# \(conversation.title)\n\n" + lines.joined(separator: "\n\n---\n\n") + "\n"
+    }
+
+    /// You've seen this chat (clears the unread dot).
+    func markRead(_ conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }), conversations[i].isUnread else { return }
+        conversations[i].lastReadAt = max(Date(), conversations[i].messages.last?.createdAt ?? .distantPast)
+    }
+
+    /// Asks again: drops the last exchange and resends your last message (direct chats).
+    func retryLast(in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }), !isStreaming(conversationID),
+              let lastUser = conversations[i].messages.lastIndex(where: { $0.role == .user }) else { return }
+        let message = conversations[i].messages[lastUser]
+        conversations[i].messages.removeSubrange(lastUser...)
+        if conversations[i].isMeeting {
+            sendToMeeting(message.content, attachments: message.attachments ?? [], in: conversationID)
+        } else {
+            send(message.content, attachments: message.attachments ?? [], in: conversationID)
+        }
     }
 
     func setSkillParticipants(_ ids: [UUID], in conversationID: UUID) {
@@ -343,6 +405,7 @@ final class AppStore {
                 }
                 if round > 1 && !spoke { break }  // everyone agrees: the discussion is over
             }
+            await discussionEnded(conversationID)  // a notification with the summary (or the question for you)
         }
     }
 
@@ -562,6 +625,7 @@ final class AppStore {
                     for try await chunk in target.client.stream(request) {
                         updateReply(reply.id, in: conversationID) { $0.content += chunk }
                     }
+                    replyFinished(conversationID, replyID: reply.id)  // notify if you're elsewhere
                     return
                 } catch {
                     lastError = error
@@ -632,7 +696,12 @@ final class AppStore {
         isLoading = true
         agents = snapshot.agents
         skills = snapshot.skills
-        conversations = snapshot.conversations
+        // Chats saved before unread tracking start out read (no wall of dots after an update).
+        conversations = snapshot.conversations.map { conversation in
+            var conversation = conversation
+            if conversation.lastReadAt == nil { conversation.lastReadAt = Date() }
+            return conversation
+        }
         customModels = snapshot.customModels
         // Drop entries whose weights were removed (e.g. storage cleanup).
         installedLocalModels = snapshot.installedLocalModels.filter { LocalModelManager.isInstalled($0.modelName) }

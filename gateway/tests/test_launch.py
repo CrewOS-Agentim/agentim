@@ -882,16 +882,32 @@ class SkillPlaybookTests(unittest.TestCase):
     def test_designers_and_business_development_get_their_playbooks(self):
         from agentim.skills import load_dirs
         from agentim.startup import playbook_slug
-        self.assertEqual(playbook_slug("Designer"), "product-designer")
-        self.assertEqual(playbook_slug("UX Lead"), "product-designer")
+        self.assertEqual(playbook_slug("Designer"), "ui-ux-designer")
+        self.assertEqual(playbook_slug("UX Lead"), "ui-ux-designer")
+        self.assertEqual(playbook_slug("Product Designer"), "product-designer")
         self.assertEqual(playbook_slug("Brand Designer"), "brand-designer")
         self.assertEqual(playbook_slug("Visual Designer"), "brand-designer")
         self.assertEqual(playbook_slug("Business Development"), "business-development")
         self.assertEqual(playbook_slug("Head of Partnerships"), "business-development")
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         slugs = {s.slug for s in load_dirs(os.path.join(here, "skills"))}
-        self.assertTrue({"product-designer", "brand-designer", "business-development"} <= slugs)
+        self.assertTrue({"product-designer", "brand-designer", "business-development", "ui-ux-designer"} <= slugs)
         self.assertNotIn("perdiem-business-development", slugs, "nothing company-specific in the public skills")
+
+
+class ChatGPTViaTests(unittest.TestCase):
+    def test_tmux_mode_never_lists_the_openai_api(self):
+        from agentim.config import from_env
+        from agentim.models import Catalog
+        from agentim.router import model_from_runner
+        tmux = from_env({"OPENAI_API_KEY": "sk-x", "RUNNER_TOKEN": "t"})
+        self.assertEqual(tmux.chatgpt_via, "tmux")
+        self.assertFalse(any(m.backend == "openai" for m in Catalog(tmux, api_factory=lambda u, t: None).cloud()))
+        api = from_env({"OPENAI_API_KEY": "sk-x", "RUNNER_TOKEN": "t", "AGENTIM_CHATGPT_VIA": "api"})
+        self.assertTrue(any(m.backend == "openai" for m in Catalog(api, api_factory=lambda u, t: None).cloud()))
+        login = model_from_runner({"id": "chatgpt/gpt-6-astra", "kind": "chatgpt"}, "http://mac:8766")
+        self.assertEqual((login.alias, login.explicit_only), ("gpt-6-astra", False), "a real chat model")
+        self.assertEqual(model_from_runner({"id": "chatgpt/default", "kind": "chatgpt"}, "u").alias, "chatgpt")
 
 
 class BackgroundLimitTests(unittest.TestCase):

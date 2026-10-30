@@ -55,6 +55,15 @@ extension AIModel {
                 location: .server(serverID: server.id), capabilities: [.agent],
                 contextWindow: 10_000_000, costTier: 0, qualityTier: 5, alias: alias)
         }
+        if info.kind == "chatgpt" {
+            // ChatGPT through the ChatGPT login on the Mac (codex exec in tmux): a real chat model, no API key.
+            let model = String(info.id.split(separator: "/").last ?? Substring(info.id))
+            return AIModel(
+                id: "server-\(server.id.uuidString.prefix(8))/\(info.id)",
+                displayName: info.name ?? "ChatGPT (your ChatGPT login)", modelName: info.id,
+                location: .server(serverID: server.id), capabilities: [.general, .coding, .reasoning, .creative, .longContext],
+                contextWindow: 200_000, costTier: 3, qualityTier: 5, alias: model == "default" ? "chatgpt" : model)
+        }
         if info.kind == "claude" {
             // Claude through the Claude login on the Mac (claude -p in tmux): a real chat model, no API key.
             let alias = String(info.id.split(separator: "/").last ?? Substring(info.id))

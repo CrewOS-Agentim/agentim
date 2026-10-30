@@ -92,6 +92,10 @@ extension AppStore {
             $0.answers = Array(repeating: "", count: $0.questions.count)
             $0.stage = "interview"
         }
+        if !isWatching(conversationID) {
+            Notifier.shared.post(title: "Your 10 questions are ready", body: questions.first ?? "Agent Tim has questions about your idea.",
+                                 conversationID: conversationID, needsInput: true)
+        }
     }
 
     /// "1. Who …" lines → the questions.
