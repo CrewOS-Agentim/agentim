@@ -196,6 +196,8 @@ private struct HostMemoryRow: View {
 struct PullModelView: View {
     @Environment(AppStore.self) private var store
     let server: LocalServer
+    /// Prefilled (and checked) when opened from a skill's model suggestions.
+    var initialReference = ""
     @State private var reference = ""
     @State private var check: RunnerClient.Check?
     @State private var error: String?
@@ -251,8 +253,24 @@ struct PullModelView: View {
                     }
                 }
             }
+
+            Section("For design, frontend and screenshots") {
+                ForEach(SkillModels.all.filter { $0.ollamaRef != nil }) { model in
+                    Button {
+                        reference = model.ollamaRef!
+                        Task { await runCheck() }
+                    } label: {
+                        LabeledContent(model.name, value: ByteCountFormatter.string(fromByteCount: model.sizeBytes, countStyle: .memory))
+                    }
+                }
+            }
         }
         .navigationTitle("Pull Model")
+        .task {
+            guard !initialReference.isEmpty, reference.isEmpty else { return }
+            reference = initialReference
+            await runCheck()
+        }
     }
 
     private func runCheck() async {

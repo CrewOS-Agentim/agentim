@@ -83,6 +83,10 @@ enum ModelCatalog {
               sizeBytes: gigabytes(6.80), kind: .ollama("hf.co/unsloth/gemma-3-12b-it-GGUF:Q4_K_M")),
         .init(id: "chat-qwen3-14b", category: .chat, name: "Qwen3 14B", detail: "Strong reasoning for planning and analysis.",
               sizeBytes: gigabytes(8.38), kind: .ollama("hf.co/unsloth/Qwen3-14B-GGUF:Q4_K_M")),
+        .init(id: "chat-qwen3.5-9b", category: .chat, name: "Qwen3.5 9B", detail: "Multimodal: reads screenshots and wireframes too.",
+              sizeBytes: gigabytes(5.29), kind: .ollama("hf.co/unsloth/Qwen3.5-9B-GGUF:Q4_K_M")),
+        .init(id: "chat-qwen3.5-27b", category: .chat, name: "Qwen3.5 27B", detail: "Multimodal, strong layouts to code. Needs 32 GB+.",
+              sizeBytes: gigabytes(15.59), kind: .ollama("hf.co/unsloth/Qwen3.5-27B-GGUF:Q4_K_M")),
         .init(id: "chat-qwen3-30b", category: .chat, name: "Qwen3 30B (MoE)", detail: "Near-frontier answers. Needs 32 GB+.",
               sizeBytes: gigabytes(17.28), kind: .ollama("hf.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF:Q4_K_M")),
         // Coding
@@ -94,6 +98,11 @@ enum ModelCatalog {
               sizeBytes: gigabytes(4.36), kind: .ollama("hf.co/bartowski/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M")),
         .init(id: "code-qwen2.5-14b", category: .coding, name: "Qwen2.5 Coder 14B", detail: "Better at bigger refactors and reviews.",
               sizeBytes: gigabytes(8.37), kind: .ollama("hf.co/bartowski/Qwen2.5-Coder-14B-Instruct-GGUF:Q4_K_M")),
+        .init(id: "code-frontend-design-8b", category: .coding, name: "Frontend Design Expert 8B",
+              detail: "UI designs and screenshots into frontend markup.",
+              sizeBytes: gigabytes(4.68), kind: .ollama("hf.co/stefans71/frontend-design-expert-8b:Q4_K_M")),
+        .init(id: "code-stark-web-12b", category: .coding, name: "STARK-WEB 12B", detail: "Web design, UI/UX code and components.",
+              sizeBytes: gigabytes(6.87), kind: .ollama("hf.co/Situus/STARK-WEB-12B-v1.7-gguf:Q4_K_M")),
         .init(id: "code-qwen3-coder-30b", category: .coding, name: "Qwen3 Coder 30B (MoE)", detail: "Agent-grade coding. Needs 32 GB+.",
               sizeBytes: gigabytes(17.28), kind: .ollama("hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M")),
         // Voice (sizes are approximate: Whisper weights + Kokoro 82M)

@@ -66,8 +66,8 @@ Open the Mac app and the onboarding does the rest:
 
    | | Options |
    |---|---|
-   | 💬 **Chat** | Qwen3 1.7B · Llama 3.2 3B · **Qwen3 4B** · Gemma 3 12B · Qwen3 14B · Qwen3 30B |
-   | 🧑‍💻 **Coding** | use the chat model · Qwen2.5 Coder 1.5B / **7B** / 14B · Qwen3 Coder 30B |
+   | 💬 **Chat** | Qwen3 1.7B · Llama 3.2 3B · **Qwen3 4B** · Qwen3.5 9B · Gemma 3 12B · Qwen3 14B · Qwen3.5 27B · Qwen3 30B |
+   | 🧑‍💻 **Coding** | use the chat model · Qwen2.5 Coder 1.5B / **7B** / 14B · Frontend Design Expert 8B · STARK-WEB 12B · Qwen3 Coder 30B |
    | 🎙️ **Voice** | off · Whisper Base / **Small** / Large v3 Turbo, each + Kokoro |
    | 🎬 **Video & images** | **LTX Desktop** · skip |
 
@@ -288,6 +288,17 @@ triggers: release notes, changelog
 ---
 Group changes by user benefit, lead with the biggest one, keep it under 200 words.
 ```
+
+### Models that fit the skill
+
+Pick skills for an agent and its editor suggests models for them; a skill's editor does the same. **Use** pins a model that's ready, **Get** opens the memory check and downloads it into Docker.
+
+| For | Suggested models | Runs |
+|---|---|---|
+| UI/UX design, screenshots and wireframes to code | [Qwen3.5](https://huggingface.co/Qwen/Qwen3.5-9B) 9B / 27B (natively multimodal) · [Frontend Design Expert 8B](https://huggingface.co/stefans71/frontend-design-expert-8b) | Docker (GGUF), or Qwen3.5 27B on Hugging Face |
+| Web design and components | [STARK-WEB 12B](https://huggingface.co/Situus/STARK-WEB-12B-v1.7) | Docker (GGUF) |
+| React, CSS and Tailwind logic, big refactors | [DeepSeek V4](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) Flash / Pro | Hugging Face Inference Providers (too big for a Mac) |
+| UI assets and visual style | [FLUX.2](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) klein 4B / dev | ComfyUI or diffusers (agentim makes images with LTX) |
 
 ## 🚀 Projects
 

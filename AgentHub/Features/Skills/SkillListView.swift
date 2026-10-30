@@ -89,6 +89,7 @@ struct SkillEditorView: View {
                 } footer: {
                     Text("Attached skills activate when a message contains a trigger word.")
                 }
+                SkillModelSuggestions(skills: [skill], limit: 4)
             }
             .navigationTitle(skill.name.isEmpty ? "New Skill" : skill.name)
             .toolbar {

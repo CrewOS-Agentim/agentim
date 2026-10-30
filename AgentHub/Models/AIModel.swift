@@ -121,6 +121,12 @@ extension AIModel {
                caps: [.coding], context: 256_000, cost: 2, quality: 4),
         .cloud(.huggingFace, "meta-llama/Llama-3.3-70B-Instruct", display: "Llama 3.3 70B (HF)", alias: "llama70",
                caps: [.general, .creative], context: 128_000, cost: 1, quality: 3),
+        .cloud(.huggingFace, "deepseek-ai/DeepSeek-V4-Flash", display: "DeepSeek V4 Flash (HF)", alias: "deepseek",
+               caps: [.coding, .reasoning, .general], context: 128_000, cost: 1, quality: 4),
+        .cloud(.huggingFace, "deepseek-ai/DeepSeek-V4-Pro", display: "DeepSeek V4 Pro (HF)", alias: "deepseekpro",
+               caps: [.coding, .reasoning, .longContext], context: 128_000, cost: 2, quality: 5),
+        .cloud(.huggingFace, "Qwen/Qwen3.5-27B", display: "Qwen3.5 27B (HF)", alias: "qwen35",
+               caps: [.general, .coding], context: 128_000, cost: 1, quality: 4),
     ]
 
     /// Small MLX builds that fit on recent iPhones. Sizes are fetched live from HF before download.

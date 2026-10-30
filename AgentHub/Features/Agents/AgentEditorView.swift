@@ -83,6 +83,10 @@ struct AgentEditorView: View {
                             }
                         }
                     }
+                    // Models that fit this agent's skills (design, frontend, coding, images); Use pins one.
+                    SkillModelSuggestions(skills: store.skills.filter { agent.skillIDs.contains($0.id) }) { id in
+                        agent.modelPreference = .pinned(id)
+                    }
                 }
             }
             .formStyle(.grouped)
