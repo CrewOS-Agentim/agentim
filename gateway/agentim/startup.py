@@ -106,8 +106,8 @@ MAX_PERSONA = 600
 
 # Agents whose title matches a C-level skill follow that skill's playbook in meetings.
 ROLE_PLAYBOOKS = {"brand designer": "brand-designer", "visual designer": "brand-designer", "brand": "brand-designer",
-                  "graphic designer": "brand-designer", "designer": "product-designer", "ux": "product-designer",
-                  "ui": "product-designer", "cto": "cto", "chief technology": "cto", "cmo": "cmo", "chief marketing": "cmo",
+                  "graphic designer": "brand-designer", "product designer": "product-designer",
+                  "designer": "ui-ux-designer", "ux": "ui-ux-designer", "ui": "ui-ux-designer", "cto": "cto", "chief technology": "cto", "cmo": "cmo", "chief marketing": "cmo",
                   "cro": "cro", "chief revenue": "cro", "cfo": "cfo", "chief financial": "cfo",
                   "coo": "coo", "chief operating": "coo",
                   "chro": "chro", "chief human": "chro", "chief people": "chro", "cdo": "cdo", "chief data": "cdo",

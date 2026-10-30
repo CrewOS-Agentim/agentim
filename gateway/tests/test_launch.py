@@ -882,15 +882,16 @@ class SkillPlaybookTests(unittest.TestCase):
     def test_designers_and_business_development_get_their_playbooks(self):
         from agentim.skills import load_dirs
         from agentim.startup import playbook_slug
-        self.assertEqual(playbook_slug("Designer"), "product-designer")
-        self.assertEqual(playbook_slug("UX Lead"), "product-designer")
+        self.assertEqual(playbook_slug("Designer"), "ui-ux-designer")
+        self.assertEqual(playbook_slug("UX Lead"), "ui-ux-designer")
+        self.assertEqual(playbook_slug("Product Designer"), "product-designer")
         self.assertEqual(playbook_slug("Brand Designer"), "brand-designer")
         self.assertEqual(playbook_slug("Visual Designer"), "brand-designer")
         self.assertEqual(playbook_slug("Business Development"), "business-development")
         self.assertEqual(playbook_slug("Head of Partnerships"), "business-development")
         here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         slugs = {s.slug for s in load_dirs(os.path.join(here, "skills"))}
-        self.assertTrue({"product-designer", "brand-designer", "business-development"} <= slugs)
+        self.assertTrue({"product-designer", "brand-designer", "business-development", "ui-ux-designer"} <= slugs)
         self.assertNotIn("perdiem-business-development", slugs, "nothing company-specific in the public skills")
 
 
