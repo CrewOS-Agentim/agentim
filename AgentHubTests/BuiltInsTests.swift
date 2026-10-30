@@ -64,4 +64,19 @@ final class BuiltInsTests: XCTestCase {
         XCTAssertEqual(Avatars.slug("QA Engineer"), "qa-engineer")
         XCTAssertEqual(Avatars.slug("YouTube Creator"), "youtube-creator")
     }
+
+    @MainActor
+    func testRetiredBuiltInsAreRemovedButYourOwnStay() throws {
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "retired-\(UUID().uuidString)"))
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        store.addNewBuiltIns(defaults: defaults)
+        let old = Agent(name: "Old Built-in", emoji: "🧳", summary: "", systemPrompt: "")
+        let mine = Agent(name: "My Own Agent", emoji: "🙂", summary: "", systemPrompt: "")
+        store.agents += [old, mine]
+        defaults.set((defaults.stringArray(forKey: "seenBuiltIns") ?? []) + ["agent:Old Built-in"], forKey: "seenBuiltIns")
+        store.addNewBuiltIns(defaults: defaults)
+        XCTAssertFalse(store.agents.contains { $0.name == "Old Built-in" }, "its source is gone: removed")
+        XCTAssertTrue(store.agents.contains { $0.name == "My Own Agent" }, "never touches agents you made")
+        XCTAssertTrue(store.agents.contains { $0.name == "Business Development" }, "the generic one is built in")
+    }
 }

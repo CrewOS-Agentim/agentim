@@ -41,10 +41,10 @@
 - 💬 answers you on **Telegram, WhatsApp and Slack**, in text or 🎙️ **voice notes**
 - 🤗 runs **Hugging Face models in Docker** on your own Mac, after checking they fit in memory
 - 🧭 **routes every message**: quick question → small fast model; code → coder model; secrets → never leave your Mac; "make a video" → LTX
-- 🚀 **Projects**: tell it the goal (a new idea, a new project, or a feature for your code); the team checks it's worth building, Agent Tim turns it into a graph of checked tasks, runs the loop every minute (ETAs, Gantt in minutes) and, on autopilot, keeps building until it's developed
+- 💡 **Pitch an idea in a group chat**: Chats → New chat → *Pitch an idea*: Agent Tim asks 10 questions (5 YC partner, 5 co-founder, one at a time, with AI suggestions), then your leadership agents talk it through with each other, each on its own model
 - 🧲 **Recruiter**: finds engineers from their GitHub repos and commits and drafts a personal LinkedIn message you send yourself
 - 🤖 **Claude without an API key**: Opus, Sonnet and Haiku through your Claude login (`claude -p` in tmux)
-- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics, AWS DevOps
+- 🪄 comes with **built-in skills**: Validate Your Startup, YouTube Channel Creator, Software Engineer, Product Manager, Project Manager, Video Director, Web QA, Mobile QA, API Testing, Data Analytics, AWS DevOps, Business Development, Product Designer, Brand Designer, Recruiter
 - 👔 a full **C-suite of agents** (CTO, CPO, CMO, CRO, CFO, COO, CISO, CHRO, CDO, CCO, CLO, CAIO) that also sit in your startup meetings
 - 🐞 ships **agents with their own cartoon avatars** (made locally with LTX), including a **QA Engineer** that tests web apps, mobile apps and APIs and a **Data Analyst** that sets up your metrics
 - 🎬 **makes videos** with LTX Desktop, locally and for free, and sends them back to your chat
@@ -208,6 +208,8 @@ The app can also run Hugging Face **MLX** models directly on your Mac's GPU, aft
 
 **Group chats:** **New chat → Group chat** starts an ad-hoc chat with any mix of agents *and* skills (say CTO, CMO and the Web QA skill; a skill joins as its own member and answers with its playbook). Tap members in to pick them, then type. Every member answers in turn, each building on the others, with their name in their own color, grouped bubbles and "… is typing"; tag `@CTO` (or a skill's `@slug`, Tab completes) to ask just one. Add or remove members from the header any time.
 
+**Let them talk to each other.** In a group chat, the **Discussion** menu sets what happens after your message: each member answers once, **2 or 3 rounds** where they reply to *each other* (building on or pushing back on what was said, working toward what you asked for), or **until they agree** (a member with nothing to add passes; it ends when everyone passes, max 5 rounds). Great for writing together: ask for a launch post and let the copywriter, the skeptical editor and the CMO argue it into shape. Every member can **think with its own model** (click their chip), or turn on **A different model for each member** to divide the available models automatically; each reply shows the model that wrote it. **Add → New persona…** creates a quick persona (a name plus who they are and how they write) right in the chat.
+
 **Status:** the **Status** page shows which models are running, your Mac's CPU and memory (with live charts), each container's CPU and memory (`docker stats`), and every model task: what's running now and a history with timings and results.
 
 **Chatting:** a roomy message box that grows as you type; press **Enter** to send (**Shift+Enter** for a new line). **Drag files** into a chat, or click 📎: text, code and PDFs are read into the prompt (up to 10 files, 20 MB and 100k characters each); images and other files are passed by name, since the chat models only read text.
@@ -257,6 +259,9 @@ Skills are plain `SKILL.md` files in [`gateway/skills/`](gateway/skills). They'r
 | 📋 **Project Manager**: plans, critical path, risks, status updates | `/project-manager plan a launch in 6 weeks` |
 | 🎥 **Video Director**: idea → on-model shot prompts → LTX clips | `/video-director a 20 s teaser for my app` |
 | 🌐 **Web QA**: risk-based test plans, Playwright tests, accessibility, flaky-test hygiene, bug reports | `/web-qa test the checkout on staging.example.com` |
+| 🤝 **Business Development**: segments and partners worth chasing, leads qualified with evidence, outreach drafts for a human to send, a measurable pipeline. Also an agent. | `/business-development find 20 partners for a booking app` |
+| 🎨 **Product Designer**: the user and their job first, a small token system and wireframes before pixels, one bold idea instead of a template, accessibility as the floor | `/product-designer design onboarding for a dog-walker app` |
+| 🖌️ **Brand Designer**: a visual philosophy first, then palette, type, three logo directions, posters and social posts with LTX prompts to render them locally | `/brand-designer a brand for a neighborhood coffee newsletter` |
 | ☁️ **AWS DevOps**: reads a simple project and lays out at least 3 ways to deploy it to AWS (static, serverless, containers, managed platform…), each with architecture, monthly cost, effort, tradeoffs and exact commands; then recommends one and plans CI/CD (GitHub Actions + OIDC), security, monitoring and rollback. Also an agent: **AWS DevOps**. | `/aws-devops my Express API + React app with Postgres, 200 users a day` |
 | 📱 **Mobile QA**: device matrix, Maestro/XCUITest/Espresso flows, interruptions, offline, store readiness | `/mobile-qa test our iOS onboarding` |
 | 🔌 **API Testing**: contract, negative and OWASP API Top 10 checks, pytest + httpx suites, k6 load tests | `/api-testing here's our openapi.yaml` |
@@ -278,6 +283,8 @@ Group changes by user benefit, lead with the biggest one, keep it under 200 word
 ```
 
 ## 🚀 Projects
+
+> **In the Mac app, ideas now start in Chats.** Choose **New chat → Pitch an idea (group chat + 10 questions)**: describe the idea, answer Agent Tim's 10 questions one at a time (**Back / Skip / Next**, **✨ Suggest an answer**, **Let AI answer the rest**), and your leadership agents (CPO, CTO, CMO, CRO, CFO, whichever you have) discuss it with each other in rounds, with your answers as the group's brief. The project engine below (worth-building check, graphs, launch, hiring) still runs in the gateway and is used from Telegram/WhatsApp/Slack (`/startup`), the HTTP API and Claude/ChatGPT (MCP); it no longer has its own screen in the Mac app.
 
 Run **as many startups as you like**, each with its own team of agents who act like real employees.
 

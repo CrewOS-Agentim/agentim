@@ -38,6 +38,13 @@ struct Conversation: Identifiable, Codable, Hashable {
     var participantIDs: [UUID]?
     /// Skills that take part in the group chat as their own members ("Web QA", "CFO"…).
     var participantSkillIDs: [UUID]?
+    /// Group chats: the model each member thinks with (member id → model id), or one per member automatically.
+    var memberModels: [UUID: String]?
+    var autoDivideModels: Bool?
+    /// How many rounds the members talk to each other after a message (1 = each answers once; 5 = until they agree).
+    var discussionRounds: Int?
+    /// A group chat that started from an idea: the idea, the 10 questions and the answers (the group's brief).
+    var brief: IdeaBrief?
 
     var isMeeting: Bool { participantIDs != nil }
     var updatedAt = Date()

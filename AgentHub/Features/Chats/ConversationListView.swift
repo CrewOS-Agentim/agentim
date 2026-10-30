@@ -57,6 +57,9 @@ struct ConversationListView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu {
+                    Button("Pitch an idea (group chat + 10 questions)", systemImage: "lightbulb.max.fill") {
+                        selection = store.newIdeaGroup().id
+                    }
                     Button("Group chat (agents & skills)", systemImage: "bubble.left.and.bubble.right.fill") {
                         selection = store.newMeeting(with: []).id
                     }
