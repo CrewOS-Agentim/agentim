@@ -121,6 +121,28 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertFalse(SidebarItem.visible.contains(.startup), "Projects moved into Chats")
     }
 
+    @MainActor
+    func testChatOptions() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        store.agents = [cto, cmo]
+        var chat = store.newConversation(agent: cto)
+        chat.messages = [ChatMessage(role: .user, content: "Hi"), ChatMessage(role: .assistant, content: "Hello")]
+        store.conversations[0] = chat
+        store.rename(chat.id, to: "  Launch plan  ")
+        XCTAssertEqual(store.conversations[0].title, "Launch plan")
+        store.rename(chat.id, to: " ")
+        XCTAssertEqual(store.conversations[0].title, "Launch plan", "blank names are ignored")
+        store.switchAgent(chat.id, to: cmo.id)
+        XCTAssertEqual(store.agent(for: store.conversations[0])?.name, "CMO")
+        let md = store.markdown(store.conversations[0])
+        XCTAssertTrue(md.hasPrefix("# Launch plan"))
+        XCTAssertTrue(md.contains("**You**") && md.contains("Hello"))
+        store.clearMessages(chat.id)
+        XCTAssertTrue(store.conversations[0].messages.isEmpty)
+        store.deleteConversation(chat.id)
+        XCTAssertTrue(store.conversations.isEmpty)
+    }
+
     func testChatTimelineDividersAndGrouping() {
         let calendar = Calendar.current
         let now = Date()

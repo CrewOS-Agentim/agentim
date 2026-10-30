@@ -16,11 +16,6 @@ struct ChatView: View {
     var body: some View {
         if let conversation {
             VStack(spacing: 0) {
-                if conversation.isMeeting {
-                    ParticipantsBar(conversation: conversation)
-                } else {
-                    ChatHeader(agent: store.agent(for: conversation))
-                }
                 if conversation.isMeeting, let brief = conversation.brief, brief.stage != "done" {
                     IdeaInterview(conversation: conversation)
                 } else if conversation.isMeeting && conversation.messages.isEmpty {
@@ -50,10 +45,23 @@ struct ChatView: View {
                 if case .success(let urls) = result { addFiles(urls) }
             }
             .navigationTitle(conversation.title)
+            .navigationSubtitle(subtitle(conversation))
             .onAppear { store.markRead(conversation.id) }
             .onChange(of: conversation.messages.count) { store.markRead(conversation.id) }
             .onChange(of: store.isStreaming(conversation.id)) { store.markRead(conversation.id) }
-            .toolbar { ToolbarItem(placement: .primaryAction) { modelMenu(conversation) } }
+            .toolbar {
+                // Every option for this chat lives up here (like Messages and Slack).
+                ToolbarItemGroup(placement: .primaryAction) {
+                    if conversation.isMeeting {
+                        MembersButton(conversation: conversation)
+                        DiscussionMenu(conversation: conversation)
+                    } else {
+                        AgentMenu(conversation: conversation)
+                    }
+                    modelMenu(conversation)
+                    MoreMenu(conversation: conversation)
+                }
+            }
         } else {
             ContentUnavailableView("Conversation deleted", systemImage: "trash")
         }
@@ -211,6 +219,16 @@ struct ChatView: View {
     }
 
     /// Per-conversation override: Auto (router) or a pinned model.
+    /// Under the title: what the agent does, or the group's members and how they talk.
+    private func subtitle(_ conversation: Conversation) -> String {
+        guard conversation.isMeeting else { return store.agent(for: conversation)?.summary ?? "" }
+        let members = store.members(in: conversation)
+        guard !members.isEmpty else { return "No members yet" }
+        let rounds = conversation.discussionRounds ?? 1
+        let mode = rounds == 1 ? "one answer each" : rounds >= AppStore.maxRounds ? "talk until they agree" : "\(rounds) rounds"
+        return members.map(\.name).joined(separator: ", ") + " · " + mode
+    }
+
     private func modelMenu(_ conversation: Conversation) -> some View {
         Menu {
             Picker("Model", selection: Binding(
@@ -232,6 +250,8 @@ struct ChatView: View {
                 .labelStyle(.titleAndIcon)
                 .font(.footnote)
         }
+        .help(conversation.isMeeting ? "One model for the whole group (members' own models come first)"
+                                     : "The model for this chat: Auto lets the router pick each time")
     }
 }
 
@@ -562,7 +582,26 @@ struct StackedAvatars: View {
 }
 
 /// The group chat's header: stacked avatars, member chips (remove with ×) and Add (agents or skills).
-private struct ParticipantsBar: View {
+/// Toolbar: the group's members (their models, remove, add, new persona) in a panel.
+private struct MembersButton: View {
+    @Environment(AppStore.self) private var store
+    let conversation: Conversation
+    @State private var open = false
+
+    var body: some View {
+        let members = store.members(in: conversation)
+        Button { open.toggle() } label: {
+            // A symbol and the count: toolbars draw images at their full size.
+            Label("\(members.count)", systemImage: "person.2.fill")
+                .labelStyle(.titleAndIcon).font(.footnote.monospacedDigit())
+        }
+        .help("Members: who's in this group, and the model each one uses")
+        .accessibilityLabel("Members, \(members.count)")
+        .popover(isPresented: $open, arrowEdge: .bottom) { MembersPanel(conversation: conversation) }
+    }
+}
+
+private struct MembersPanel: View {
     @Environment(AppStore.self) private var store
     let conversation: Conversation
     @State private var newPersona = false
@@ -570,124 +609,76 @@ private struct ParticipantsBar: View {
     @State private var personaDescription = ""
 
     private var chatModels: [AIModel] { store.availableModels.filter { !$0.isExplicitOnly } }
-    private var rounds: Int { conversation.discussionRounds ?? 1 }
 
     var body: some View {
         let members = store.members(in: conversation)
-        HStack(spacing: Theme.s3) {
-            StackedAvatars(members: members)
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Group chat").font(.callout.weight(.semibold))
-                Text(members.isEmpty ? "No members yet"
-                     : "\(members.count) member\(members.count == 1 ? "" : "s") · " + (rounds == 1 ? "one answer each"
-                        : rounds >= AppStore.maxRounds ? "they talk until they agree" : "\(rounds) rounds of discussion"))
-                    .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            Text("Members").font(.headline)
+            if members.isEmpty {
+                Text("Nobody yet: add agents or skills below.").font(.callout).foregroundStyle(.secondary)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(members) { member in chip(member) }
-                }
-            }
-            discussionMenu
-            Menu {
-                Button("New persona…", systemImage: "theatermasks") { newPersona = true }
-                Section("Agents") {
-                    ForEach(store.agents.filter { agent in !members.contains { $0.id == agent.id } }) { agent in
-                        Button("\(agent.emoji) \(agent.name)") { store.toggle(agent: agent.id, in: conversation.id) }
+            ForEach(members) { member in row(member) }
+            Divider()
+            HStack {
+                Menu {
+                    Section("Agents") {
+                        ForEach(store.agents.filter { agent in !members.contains { $0.id == agent.id } }) { agent in
+                            Button("\(agent.emoji) \(agent.name)") { store.toggle(agent: agent.id, in: conversation.id) }
+                        }
                     }
-                }
-                Section("Skills") {
-                    ForEach(store.skills.filter { skill in !members.contains { $0.id == skill.id } }) { skill in
-                        Button("🪄 \(skill.name)") { store.toggle(skill: skill.id, in: conversation.id) }
+                    Section("Skills") {
+                        ForEach(store.skills.filter { skill in !members.contains { $0.id == skill.id } }) { skill in
+                            Button("🪄 \(skill.name)") { store.toggle(skill: skill.id, in: conversation.id) }
+                        }
                     }
-                }
-            } label: {
-                Label("Add", systemImage: "person.badge.plus")
+                } label: { Label("Add", systemImage: "person.badge.plus") }
+                    .fixedSize()
+                Button("New persona…", systemImage: "theatermasks") { newPersona.toggle() }
+                Spacer()
+                Toggle("A model each", isOn: Binding(get: { conversation.autoDivideModels == true },
+                                                     set: { store.setAutoDivide($0, in: conversation.id) }))
+                    .toggleStyle(.switch).controlSize(.small)
+                    .help("Give each member a different available model")
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .popover(isPresented: $newPersona, arrowEdge: .bottom) { personaForm }
+            if newPersona { personaForm }
         }
-        .padding(.horizontal, Theme.s6)
-        .padding(.vertical, Theme.s2)
-        .background(.bar)
+        .padding(Theme.s4)
+        .frame(width: 420)
     }
 
-    /// A member: their model (set for them, divided automatically, or picked by the router), and remove.
-    private func chip(_ member: AppStore.Member) -> some View {
+    private func row(_ member: AppStore.Member) -> some View {
         let model = store.model(for: member, in: conversation)
-        let pinned = conversation.memberModels?[member.id] != nil
-        return Menu {
-            Section("\(member.name) thinks with") {
-                Button { store.setMemberModel(nil, for: member.id, in: conversation.id) } label: {
-                    Label(conversation.autoDivideModels == true ? "Divided automatically" : "Auto (the router picks)",
-                          systemImage: pinned ? "circle" : "checkmark.circle.fill")
+        return HStack(spacing: Theme.s2) {
+            MemberAvatar(member: member, size: 26)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(member.name).font(.callout.weight(.semibold))
+                Text(member.skill != nil ? "Skill" : (member.agent?.summary ?? "")).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer()
+            Menu {
+                Button(conversation.autoDivideModels == true ? "Divided automatically" : "Auto (the router picks)") {
+                    store.setMemberModel(nil, for: member.id, in: conversation.id)
                 }
+                Divider()
                 ForEach(chatModels) { option in
-                    Button { store.setMemberModel(option.id, for: member.id, in: conversation.id) } label: {
-                        Label(option.displayName,
-                              systemImage: conversation.memberModels?[member.id] == option.id ? "checkmark.circle.fill" : "circle")
-                    }
+                    Button(option.displayName) { store.setMemberModel(option.id, for: member.id, in: conversation.id) }
                 }
-            }
-            Divider()
-            Button("Remove from the group", systemImage: "person.badge.minus", role: .destructive) {
-                store.toggle(member, in: conversation.id)
-            }
-        } label: {
-            HStack(spacing: 5) {
-                MemberAvatar(member: member, size: 20)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(member.name).font(.callout)
-                    if let model {
-                        Text(model.displayName).font(.caption2).foregroundStyle(pinned ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                            .lineLimit(1)
-                    }
-                }
-            }
-            .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Theme.surface, in: Capsule())
-            .overlay(Capsule().strokeBorder(Theme.border))
+            } label: { Text(model?.displayName ?? "Auto").font(.caption) }
+                .fixedSize()
+                .help("The model \(member.name) thinks with")
+            Button { store.toggle(member, in: conversation.id) } label: { Image(systemName: "minus.circle") }
+                .buttonStyle(.borderless).foregroundStyle(.secondary)
+                .help("Remove \(member.name)")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("\(member.name): choose their model, or remove them")
-    }
-
-    /// How the members talk: one answer each, a few rounds, or until they agree; and one model per member.
-    private var discussionMenu: some View {
-        Menu {
-            Picker("After your message", selection: Binding(get: { rounds },
-                                                          set: { store.setDiscussionRounds($0, in: conversation.id) })) {
-                Text("Each answers once").tag(1)
-                Text("2 rounds: they reply to each other").tag(2)
-                Text("3 rounds").tag(3)
-                Text("Until they agree (max \(AppStore.maxRounds))").tag(AppStore.maxRounds)
-            }
-            .pickerStyle(.inline)
-            Divider()
-            Toggle("A different model for each member", isOn: Binding(
-                get: { conversation.autoDivideModels == true },
-                set: { store.setAutoDivide($0, in: conversation.id) }))
-        } label: {
-            Label("Discussion", systemImage: "bubble.left.and.bubble.right")
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Let the members talk to each other after your message, and choose how models are divided")
     }
 
     private var personaForm: some View {
-        VStack(alignment: .leading, spacing: Theme.s2) {
-            Text("New persona").font(.headline)
+        VStack(alignment: .leading, spacing: 6) {
             TextField("Name, e.g. Skeptical Editor", text: $personaName).textFieldStyle(.roundedBorder)
-            TextField("Who they are and how they write, e.g. \"A blunt NYT editor who cuts every extra word\"",
-                      text: $personaDescription, axis: .vertical)
-                .lineLimit(3...6).textFieldStyle(.roundedBorder)
+            TextField("Who they are and how they write", text: $personaDescription, axis: .vertical)
+                .lineLimit(2...5).textFieldStyle(.roundedBorder)
             HStack {
                 Spacer()
-                Button("Cancel") { newPersona = false }
                 Button("Add to the group") {
                     store.newPersona(name: personaName, description: personaDescription, in: conversation.id)
                     personaName = ""
@@ -699,8 +690,103 @@ private struct ParticipantsBar: View {
                           || personaDescription.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding(Theme.s4)
-        .frame(width: 360)
+    }
+}
+
+/// Toolbar: how the group talks after your message.
+private struct DiscussionMenu: View {
+    @Environment(AppStore.self) private var store
+    let conversation: Conversation
+
+    var body: some View {
+        let rounds = conversation.discussionRounds ?? 1
+        Menu {
+            Picker("After your message", selection: Binding(get: { rounds },
+                                                          set: { store.setDiscussionRounds($0, in: conversation.id) })) {
+                Text("Each answers once").tag(1)
+                Text("2 rounds: they reply to each other").tag(2)
+                Text("3 rounds").tag(3)
+                Text("Until they agree (max \(AppStore.maxRounds))").tag(AppStore.maxRounds)
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Label(rounds == 1 ? "Once" : rounds >= AppStore.maxRounds ? "Until agreed" : "\(rounds) rounds",
+                  systemImage: "bubble.left.and.bubble.right")
+                .labelStyle(.titleAndIcon).font(.footnote)
+        }
+        .help("Discussion: let the members talk to each other after your message")
+    }
+}
+
+/// Toolbar (direct chats): switch who you're talking to.
+private struct AgentMenu: View {
+    @Environment(AppStore.self) private var store
+    let conversation: Conversation
+
+    var body: some View {
+        let current = store.agent(for: conversation)
+        Menu {
+            ForEach(store.agents) { agent in
+                Button { store.switchAgent(conversation.id, to: agent.id) } label: {
+                    Label("\(agent.emoji) \(agent.name)", systemImage: agent.id == current?.id ? "checkmark" : "")
+                }
+            }
+        } label: {
+            // Text only: toolbars draw images at their full size.
+            Text("\(current?.emoji ?? "🤖") \(current?.name ?? "Agent")").font(.footnote)
+        }
+        .help("The agent you're talking to (the history stays)")
+    }
+}
+
+/// Toolbar: rename, copy or export, clear, delete.
+private struct MoreMenu: View {
+    @Environment(AppStore.self) private var store
+    let conversation: Conversation
+    @State private var renaming = false
+    @State private var newTitle = ""
+    @State private var confirmClear = false
+    @State private var confirmDelete = false
+
+    var body: some View {
+        Menu {
+            Button("Rename…", systemImage: "pencil") { newTitle = conversation.title; renaming = true }
+            Button("Copy as Markdown", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(store.markdown(conversation), forType: .string)
+            }
+            Button("Export…", systemImage: "square.and.arrow.up") { export() }
+            Divider()
+            Button("Clear messages…", systemImage: "eraser") { confirmClear = true }
+                .disabled(conversation.messages.isEmpty)
+            Button("Delete chat…", systemImage: "trash", role: .destructive) { confirmDelete = true }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .help("More: rename, copy, export, clear or delete this chat")
+        .popover(isPresented: $renaming, arrowEdge: .bottom) {
+            HStack {
+                TextField("Name", text: $newTitle).textFieldStyle(.roundedBorder).frame(width: 240)
+                    .onSubmit { store.rename(conversation.id, to: newTitle); renaming = false }
+                Button("Save") { store.rename(conversation.id, to: newTitle); renaming = false }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(Theme.s3)
+        }
+        .confirmationDialog("Clear all messages in “\(conversation.title)”?", isPresented: $confirmClear) {
+            Button("Clear messages", role: .destructive) { store.clearMessages(conversation.id) }
+        } message: { Text("The chat, its members and settings stay.") }
+        .confirmationDialog("Delete “\(conversation.title)”?", isPresented: $confirmDelete) {
+            Button("Delete chat", role: .destructive) { store.deleteConversation(conversation.id) }
+        } message: { Text("This can't be undone.") }
+    }
+
+    private func export() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = conversation.title.replacingOccurrences(of: "/", with: "-") + ".md"
+        panel.allowedContentTypes = [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? store.markdown(conversation).write(to: url, atomically: true, encoding: .utf8)
     }
 }
 
@@ -805,24 +891,3 @@ struct TypingDots: View {
     }
 }
 
-/// A direct chat's header (Slack-style): who you're talking to and what they do.
-private struct ChatHeader: View {
-    let agent: Agent?
-
-    var body: some View {
-        HStack(spacing: Theme.s2) {
-            AvatarView(agent: agent, size: 28)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(agent?.name ?? "Agent").font(.callout.weight(.semibold))
-                if let summary = agent?.summary, !summary.isEmpty {
-                    Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            Spacer()
-        }
-        .padding(.horizontal, Theme.s6)
-        .padding(.vertical, Theme.s2)
-        .background(.bar)
-        .overlay(alignment: .bottom) { Divider() }
-    }
-}

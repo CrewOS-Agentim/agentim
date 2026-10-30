@@ -273,6 +273,36 @@ final class AppStore {
             : names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
     }
 
+    func rename(_ conversationID: UUID, to title: String) {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].title = String(title.prefix(120))
+    }
+
+    func clearMessages(_ conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }), !isStreaming(conversationID) else { return }
+        conversations[i].messages = []
+    }
+
+    func deleteConversation(_ conversationID: UUID) {
+        conversations.removeAll { $0.id == conversationID }
+    }
+
+    /// Talk to another agent in the same chat (the history stays).
+    func switchAgent(_ conversationID: UUID, to agentID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[i].agentID = agentID
+    }
+
+    /// The chat as Markdown (for Copy and Export).
+    func markdown(_ conversation: Conversation) -> String {
+        let lines = conversation.messages.filter { !$0.content.isEmpty }.map { message -> String in
+            let who = message.role == .user ? "You" : speaker(of: message)?.name ?? agent(for: conversation)?.name ?? "Assistant"
+            return "**\(who)** · \(message.createdAt.formatted(date: .abbreviated, time: .shortened))\n\n\(message.content)"
+        }
+        return "# \(conversation.title)\n\n" + lines.joined(separator: "\n\n---\n\n") + "\n"
+    }
+
     /// You've seen this chat (clears the unread dot).
     func markRead(_ conversationID: UUID) {
         guard let i = conversations.firstIndex(where: { $0.id == conversationID }), conversations[i].isUnread else { return }
