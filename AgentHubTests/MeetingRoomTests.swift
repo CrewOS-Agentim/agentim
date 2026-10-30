@@ -121,6 +121,47 @@ final class MeetingRoomTests: XCTestCase {
         XCTAssertFalse(SidebarItem.visible.contains(.startup), "Projects moved into Chats")
     }
 
+    func testChatTimelineDividersAndGrouping() {
+        let calendar = Calendar.current
+        let now = Date()
+        var a = ChatMessage(role: .assistant, content: "Hi")
+        a.createdAt = now.addingTimeInterval(-3600)
+        var b = ChatMessage(role: .assistant, content: "More")
+        b.createdAt = a.createdAt.addingTimeInterval(30)
+        var c = ChatMessage(role: .user, content: "Thanks")
+        c.createdAt = b.createdAt.addingTimeInterval(20 * 60)
+        XCTAssertTrue(ChatTimeline.showsDivider(a, after: nil), "the first message")
+        XCTAssertFalse(ChatTimeline.showsDivider(b, after: a))
+        XCTAssertTrue(ChatTimeline.showsDivider(c, after: b), "after a 15-minute gap")
+        XCTAssertTrue(ChatTimeline.groups(b, with: a, sameSpeaker: true))
+        XCTAssertFalse(ChatTimeline.groups(c, with: b, sameSpeaker: true), "another sender")
+        XCTAssertTrue(ChatTimeline.label(now, now: now, calendar: calendar).hasPrefix("Today"))
+        XCTAssertTrue(ChatTimeline.label(now.addingTimeInterval(-86_400), now: now, calendar: calendar).hasPrefix("Yesterday"))
+    }
+
+    @MainActor
+    func testUnreadAndRetry() {
+        let store = AppStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).json"))
+        store.agents = [cto]
+        var chat = store.newConversation(agent: cto)
+        XCTAssertFalse(chat.isUnread, "a new chat starts read")
+        var reply = ChatMessage(role: .assistant, content: "Hello")
+        reply.createdAt = Date().addingTimeInterval(5)
+        chat.messages = [ChatMessage(role: .user, content: "Hi"), reply]
+        store.conversations[0] = chat
+        XCTAssertTrue(store.conversations[0].isUnread)
+        store.markRead(chat.id)
+        XCTAssertFalse(store.conversations[0].isUnread)
+        store.retryLast(in: chat.id)
+        XCTAssertFalse(store.conversations[0].messages.contains { $0.content == "Hello" }, "the old reply is gone")
+        // With no models here, the resend re-checks the servers first (async), then posts "Hi" again.
+        let deadline = Date().addingTimeInterval(3)
+        while store.conversations[0].messages.first?.content != "Hi" && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertEqual(store.conversations[0].messages.first?.content, "Hi", "asks again with the same message")
+    }
+
     func testCloudKeysGoToTheGatewayEnv() {
         let env = "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=\n"
         XCTAssertEqual(HostController.withEnv("ANTHROPIC_API_KEY", "sk-ant-1", in: env), "RUNNER_TOKEN=x\nANTHROPIC_API_KEY=sk-ant-1\n")

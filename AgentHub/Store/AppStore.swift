@@ -193,7 +193,8 @@ final class AppStore {
 
     @discardableResult
     func newConversation(agent: Agent) -> Conversation {
-        let conversation = Conversation(title: "New chat", agentID: agent.id)
+        var conversation = Conversation(title: "New chat", agentID: agent.id)
+        conversation.lastReadAt = Date()
         conversations.insert(conversation, at: 0)
         return conversation
     }
@@ -226,6 +227,7 @@ final class AppStore {
     @discardableResult
     func newMeeting(with participants: [Agent], skills: [Skill] = []) -> Conversation {
         var conversation = Conversation(title: "Group chat", agentID: participants.first?.id ?? agents.first?.id ?? UUID())
+        conversation.lastReadAt = Date()
         conversation.participantIDs = participants.map(\.id)
         conversation.participantSkillIDs = skills.map(\.id)
         let names = participants.map(\.name) + skills.map(\.name)
@@ -269,6 +271,25 @@ final class AppStore {
         let names = members(in: conversations[i]).map(\.name)
         conversations[i].title = names.isEmpty ? "Group chat"
             : names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
+    }
+
+    /// You've seen this chat (clears the unread dot).
+    func markRead(_ conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }), conversations[i].isUnread else { return }
+        conversations[i].lastReadAt = max(Date(), conversations[i].messages.last?.createdAt ?? .distantPast)
+    }
+
+    /// Asks again: drops the last exchange and resends your last message (direct chats).
+    func retryLast(in conversationID: UUID) {
+        guard let i = conversations.firstIndex(where: { $0.id == conversationID }), !isStreaming(conversationID),
+              let lastUser = conversations[i].messages.lastIndex(where: { $0.role == .user }) else { return }
+        let message = conversations[i].messages[lastUser]
+        conversations[i].messages.removeSubrange(lastUser...)
+        if conversations[i].isMeeting {
+            sendToMeeting(message.content, attachments: message.attachments ?? [], in: conversationID)
+        } else {
+            send(message.content, attachments: message.attachments ?? [], in: conversationID)
+        }
     }
 
     func setSkillParticipants(_ ids: [UUID], in conversationID: UUID) {
@@ -632,7 +653,12 @@ final class AppStore {
         isLoading = true
         agents = snapshot.agents
         skills = snapshot.skills
-        conversations = snapshot.conversations
+        // Chats saved before unread tracking start out read (no wall of dots after an update).
+        conversations = snapshot.conversations.map { conversation in
+            var conversation = conversation
+            if conversation.lastReadAt == nil { conversation.lastReadAt = Date() }
+            return conversation
+        }
         customModels = snapshot.customModels
         // Drop entries whose weights were removed (e.g. storage cleanup).
         installedLocalModels = snapshot.installedLocalModels.filter { LocalModelManager.isInstalled($0.modelName) }

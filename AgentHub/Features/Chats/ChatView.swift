@@ -9,7 +9,7 @@ struct ChatView: View {
     @State private var attachError: String?
     @State private var dropTargeted = false
     @State private var importing = false
-    @State private var composerHeight: CGFloat = 84
+    @State private var composerHeight: CGFloat = 38
 
     private var conversation: Conversation? { store.conversations.first { $0.id == conversationID } }
 
@@ -18,6 +18,8 @@ struct ChatView: View {
             VStack(spacing: 0) {
                 if conversation.isMeeting {
                     ParticipantsBar(conversation: conversation)
+                } else {
+                    ChatHeader(agent: store.agent(for: conversation))
                 }
                 if conversation.isMeeting, let brief = conversation.brief, brief.stage != "done" {
                     IdeaInterview(conversation: conversation)
@@ -48,6 +50,9 @@ struct ChatView: View {
                 if case .success(let urls) = result { addFiles(urls) }
             }
             .navigationTitle(conversation.title)
+            .onAppear { store.markRead(conversation.id) }
+            .onChange(of: conversation.messages.count) { store.markRead(conversation.id) }
+            .onChange(of: store.isStreaming(conversation.id)) { store.markRead(conversation.id) }
             .toolbar { ToolbarItem(placement: .primaryAction) { modelMenu(conversation) } }
         } else {
             ContentUnavailableView("Conversation deleted", systemImage: "trash")
@@ -57,20 +62,34 @@ struct ChatView: View {
     private func messages(_ conversation: Conversation) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: Theme.s4) {
+                LazyVStack(alignment: .leading, spacing: 0) {
                     let messages = conversation.messages
+                    let lastAssistant = messages.lastIndex { $0.role == .assistant }
                     ForEach(Array(messages.enumerated()), id: \.element.id) { index, message in
                         let speaker = conversation.isMeeting ? store.speaker(of: message) : nil
-                        MessageRow(message: message, model: store.model(id: message.modelID),
-                                   agent: message.agentID.flatMap { id in store.agents.first { $0.id == id } }
-                                       ?? store.agent(for: conversation),
-                                   showsName: conversation.isMeeting,
-                                   mentionNames: conversation.isMeeting ? store.members(in: conversation).map(\.mention) : [],
-                                   speaker: speaker,
-                                   groupedWithPrevious: conversation.isMeeting && index > 0 && message.role == .assistant
-                                       && messages[index - 1].role == .assistant
-                                       && speaker != nil && store.speaker(of: messages[index - 1])?.id == speaker?.id)
-                            .id(message.id)
+                        let previous = index > 0 ? messages[index - 1] : nil
+                        let divider = ChatTimeline.showsDivider(message, after: previous)
+                        let grouped = !divider && ChatTimeline.groups(message, with: previous,
+                            sameSpeaker: !conversation.isMeeting || (speaker != nil && store.speaker(of: previous!)?.id == speaker?.id))
+                        VStack(spacing: 0) {
+                            if divider {
+                                Text(ChatTimeline.label(message.createdAt))
+                                    .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.top, index == 0 ? 0 : Theme.s4).padding(.bottom, Theme.s2)
+                            }
+                            MessageRow(message: message, model: store.model(id: message.modelID),
+                                       agent: message.agentID.flatMap { id in store.agents.first { $0.id == id } }
+                                           ?? store.agent(for: conversation),
+                                       showsName: conversation.isMeeting,
+                                       mentionNames: conversation.isMeeting ? store.members(in: conversation).map(\.mention) : [],
+                                       speaker: speaker,
+                                       groupedWithPrevious: grouped,
+                                       onRetry: index == lastAssistant && !store.isStreaming(conversation.id)
+                                           ? { store.retryLast(in: conversation.id) } : nil)
+                                .padding(.top, divider ? 0 : grouped ? 3 : Theme.s3)
+                        }
+                        .id(message.id)
                     }
                 }
                 .frame(maxWidth: Theme.readableWidth)
@@ -102,48 +121,48 @@ struct ChatView: View {
                     }
                 }
             }
-            VStack(spacing: 0) {
-                ComposerTextView(text: $draft,
-                                 placeholder: conversation.isMeeting ? "Message the group…  (@Name asks one member · Tab completes)"
-                                                                     : "Message Agent Tim…  (@model · /skill · drop files)",
-                                 minHeight: 84, maxHeight: 320,
-                                 mentions: conversation.isMeeting ? store.members(in: conversation).map(\.mention) : [],
-                                 onSubmit: { submit(conversation) },
-                                 height: $composerHeight,
-                                 onTab: { completeMention(in: conversation) })
-                    .frame(height: composerHeight)
-                    .padding(.horizontal, Theme.s2)
-                    .padding(.top, Theme.s1)
-                HStack(spacing: Theme.s3) {
-                    Button { importing = true } label: {
-                        Image(systemName: "paperclip").font(.system(size: 17, weight: .medium))
-                            .frame(width: 32, height: 32).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Attach files (or drag them into the chat)")
-                    .accessibilityLabel("Attach files")
-                    RoutePreview(text: draft, conversation: conversation)
-                    Spacer(minLength: Theme.s2)
-                    Text("⏎ send · ⇧⏎ new line").font(.caption).foregroundStyle(.tertiary)
+            if !draft.trimmingCharacters(in: .whitespaces).isEmpty {
+                RoutePreview(text: draft, conversation: conversation).padding(.leading, 48)
+            }
+            HStack(alignment: .bottom, spacing: Theme.s2) {
+                Button { importing = true } label: {
+                    Image(systemName: "plus").font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 34, height: 34)
+                        .background(Theme.surface, in: Circle())
+                        .overlay(Circle().strokeBorder(Theme.border))
+                }
+                .buttonStyle(.plain)
+                .help("Attach files (or drag them into the chat)")
+                .accessibilityLabel("Attach files")
+                HStack(alignment: .bottom, spacing: 4) {
+                    ComposerTextView(text: $draft,
+                                     placeholder: conversation.isMeeting ? "Message the group" : "Message \(store.agent(for: conversation)?.name ?? "Agent Tim")",
+                                     minHeight: 38, maxHeight: 220,
+                                     mentions: conversation.isMeeting ? store.members(in: conversation).map(\.mention) : [],
+                                     onSubmit: { submit(conversation) },
+                                     height: $composerHeight,
+                                     onTab: { completeMention(in: conversation) })
+                        .frame(height: composerHeight)
+                        .padding(.leading, Theme.s2)
                     Button { submit(conversation) } label: {
                         Image(systemName: store.isStreaming(conversation.id) ? "ellipsis" : "arrow.up")
-                            .font(.system(size: 16, weight: .bold))
+                            .font(.system(size: 13, weight: .bold))
                             .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
-                            .background(canSend(conversation) ? Theme.accent : Color.secondary.opacity(0.35), in: Circle())
+                            .frame(width: 28, height: 28)
+                            .background(canSend(conversation) ? Theme.accent : Color.secondary.opacity(0.3), in: Circle())
                     }
                     .buttonStyle(.plain)
                     .disabled(!canSend(conversation))
+                    .padding(.trailing, 5).padding(.bottom, 5)
                     .accessibilityLabel("Send")
-                    .help("Send (Return)")
+                    .help(conversation.isMeeting ? "Send (Return) · Shift-Return for a new line · @Name asks one member, Tab completes"
+                                                 : "Send (Return) · Shift-Return for a new line · @model picks a model · /skill uses a skill")
                 }
-                .padding(.horizontal, Theme.s3)
-                .padding(.bottom, Theme.s2)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: 19, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous)
+                    .strokeBorder(draft.isEmpty ? Theme.border : Theme.accent.opacity(0.55), lineWidth: 1))
             }
-            .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
-                .strokeBorder(Theme.accent.opacity(draft.isEmpty ? 0.25 : 0.6), lineWidth: 1.5))
-            .shadow(color: .black.opacity(0.06), radius: 10, y: 2)
         }
         .frame(maxWidth: Theme.readableWidth + 80)
         .padding(.horizontal, Theme.s6)
@@ -295,8 +314,12 @@ struct MessageRow: View {
     var mentionNames: [String] = []
     /// In a group chat: who wrote this (an agent or a skill).
     var speaker: AppStore.Member? = nil
-    /// The same member's earlier message is right above: no avatar or name again.
+    /// The same sender's earlier message is right above: no avatar or name again.
     var groupedWithPrevious = false
+    /// Shown on the last reply: ask again.
+    var onRetry: (() -> Void)? = nil
+    @State private var hovering = false
+    @State private var copied = false
 
     private var isUser: Bool { message.role == .user }
 
@@ -326,28 +349,24 @@ struct MessageRow: View {
                 if !(isUser && message.content.isEmpty) {
                     Group {
                         if message.content.isEmpty && message.role == .assistant {
-                            HStack(spacing: 6) {
-                                ProgressView().controlSize(.small)
-                                if showsName { Text("\(speaker?.name ?? agent?.name ?? "") is typing…").font(.callout).foregroundStyle(.secondary) }
-                            }
-                            .padding(Theme.s3)
+                            TypingDots()
+                                .padding(.horizontal, 14).padding(.vertical, 12)
+                                .accessibilityLabel("\(speaker?.name ?? agent?.name ?? "The agent") is typing")
                         } else {
                             Text(LocalizedStringKey(mentionNames.isEmpty ? message.content
                                                     : StartupDetail.boldMentions(message.content, names: mentionNames)))
                                 .font(.system(size: 14))
                                 .lineSpacing(3)
                                 .textSelection(.enabled)
-                                .padding(.horizontal, Theme.s4)
-                                .padding(.vertical, Theme.s3)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
                         }
                     }
-                    .background(background, in: RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
-                    .overlay {
-                        if !isUser {
-                            RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.border)
-                        }
-                    }
+                    .background(background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .foregroundStyle(isUser ? Color.white : Color.primary)
+                    .overlay(alignment: isUser ? .topLeading : .topTrailing) {
+                        if hovering && !message.content.isEmpty { actions.offset(x: isUser ? -8 : 8, y: -14) }
+                    }
                 }
 
                 if let files = message.attachments, !files.isEmpty {
@@ -369,18 +388,42 @@ struct MessageRow: View {
                     .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
                 }
 
-                if message.role == .assistant, let model {
-                    Label {
-                        Text(model.displayName) + Text(message.routingReason.map { " · \($0)" } ?? "")
-                    } icon: {
-                        Image(systemName: model.locationSymbol)
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if message.role == .assistant, let model, !message.content.isEmpty {
+                    Label(model.displayName, systemImage: model.locationSymbol)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 6)
+                        .help(message.routingReason.map { "\(model.displayName): \($0)" } ?? model.displayName)
                 }
             }
             if !isUser { Spacer(minLength: 60) }
         }
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+    }
+
+    /// Slack-style actions on hover: copy, and ask again on the last reply.
+    private var actions: some View {
+        HStack(spacing: 2) {
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(message.content, forType: .string)
+                copied = true
+            } label: { Image(systemName: copied ? "checkmark" : "doc.on.doc").frame(width: 26, height: 24) }
+                .help("Copy")
+            if let onRetry, !isUser {
+                Button(action: onRetry) { Image(systemName: "arrow.clockwise").frame(width: 26, height: 24) }
+                    .help("Ask again")
+            }
+        }
+        .buttonStyle(.borderless)
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(.secondary)
+        .padding(2)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Theme.border))
+        .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+        .onDisappear { copied = false }
     }
 
     /// `[video](http://…mp4)` / `[image](http://…png)` links from media models (e.g. LTX via the runner).
@@ -717,5 +760,69 @@ private struct PickRoom: View {
             }
         }
         .frame(maxWidth: 820)
+    }
+}
+
+/// When to show a time divider and when to group bubbles (iMessage-style).
+enum ChatTimeline {
+    /// A divider before the first message and after a 15-minute gap.
+    static func showsDivider(_ message: ChatMessage, after previous: ChatMessage?) -> Bool {
+        guard let previous else { return true }
+        return message.createdAt.timeIntervalSince(previous.createdAt) > 15 * 60
+    }
+
+    /// Same sender, within two minutes: one group (no repeated avatar, tighter spacing).
+    static func groups(_ message: ChatMessage, with previous: ChatMessage?, sameSpeaker: Bool) -> Bool {
+        guard let previous, previous.role == message.role, sameSpeaker else { return false }
+        return message.createdAt.timeIntervalSince(previous.createdAt) < 2 * 60
+    }
+
+    /// "Today 10:42", "Yesterday 18:05", "Tuesday 09:12", "Oct 3, 14:20".
+    static func label(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let time = date.formatted(date: .omitted, time: .shortened)
+        if calendar.isDate(date, inSameDayAs: now) { return "Today \(time)" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) {
+            return "Yesterday \(time)"
+        }
+        if let days = calendar.dateComponents([.day], from: date, to: now).day, days < 7 {
+            return "\(date.formatted(.dateTime.weekday(.wide))) \(time)"
+        }
+        return "\(date.formatted(.dateTime.month(.abbreviated).day())), \(time)"
+    }
+}
+
+/// iMessage's typing bubble: three dots that pulse in turn.
+struct TypingDots: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.15)) { context in
+            let phase = Int(context.date.timeIntervalSinceReferenceDate / 0.3) % 3
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { i in
+                    Circle().fill(Color.secondary.opacity(i == phase ? 0.9 : 0.35)).frame(width: 7, height: 7)
+                }
+            }
+        }
+    }
+}
+
+/// A direct chat's header (Slack-style): who you're talking to and what they do.
+private struct ChatHeader: View {
+    let agent: Agent?
+
+    var body: some View {
+        HStack(spacing: Theme.s2) {
+            AvatarView(agent: agent, size: 28)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(agent?.name ?? "Agent").font(.callout.weight(.semibold))
+                if let summary = agent?.summary, !summary.isEmpty {
+                    Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, Theme.s6)
+        .padding(.vertical, Theme.s2)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
