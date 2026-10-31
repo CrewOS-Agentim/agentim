@@ -8,7 +8,7 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agentim import config as config_lib, skills as skill_lib  # noqa: E402
+from agentim import config as config_lib, router as router_lib, skills as skill_lib  # noqa: E402
 from agentim.channels import Channel, chunks  # noqa: E402
 from agentim.channels.slack import parse_event  # noqa: E402
 from agentim.channels.telegram import multipart, parse_update  # noqa: E402
@@ -107,6 +107,25 @@ class RouterTests(unittest.TestCase):
         router = Router([QWEN, LTX_VIDEO])
         self.assertEqual(router.route("make a video of a fox").model.id, LTX_VIDEO.id)
         self.assertEqual(router.route("hello").model.id, QWEN.id)
+
+    def test_agents_get_models_that_fit_their_work(self):
+        router = Router([QWEN, LTX_VIDEO, SONNET], prefer_local=False)
+        analyst = config_lib.Agent(name="Data Analyst", summary="Sets up your metrics, tracking and dashboards")
+        youtube = config_lib.Agent(name="YouTube Creator", summary="Plans, scripts and grows your YouTube channel")
+        # A Data Analyst never gets LTX, even when the words sound like media.
+        self.assertEqual(router.route("make a video of our churn numbers", agent=analyst).model.id, SONNET.id)
+        self.assertEqual(router.route("draw a chart of signups", agent=analyst).profile.primary, "reasoning")
+        # A media agent (or anyone, with /video) still renders.
+        self.assertEqual(router.route("make a video of a fox", agent=youtube).model.id, LTX_VIDEO.id)
+        self.assertEqual(router.route("/video churn over time", agent=analyst).model.id, LTX_VIDEO.id)
+        # Quick questions go to the kind of model the agent needs.
+        self.assertEqual(router.route("how was churn?", agent=analyst).profile.primary, "reasoning")
+        self.assertEqual(router_lib.agent_needs(config_lib.Agent(name="CTO", summary="Architecture and build vs. buy")),
+                         ("coding", False))
+        self.assertEqual(router_lib.agent_needs(config_lib.Agent(name="Agent Tim", summary="Helpful, knows every skill")),
+                         (None, True))
+        # "Draw conclusions" isn't a picture.
+        self.assertEqual(router.route("draw conclusions from this survey").profile.primary != "image", True)
 
     def test_video_without_media_model_falls_back_to_text(self):
         self.assertEqual(Router([QWEN]).route("make a video of a fox").model.id, QWEN.id)

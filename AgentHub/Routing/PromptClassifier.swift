@@ -62,11 +62,11 @@ enum PromptClassifier {
     ]
     static let videoSignals = [
         "make a video", "generate a video", "create a video", "render a video", "video of", "video clip",
-        "animate ", "animation of", "short film", "film of",
+        "animate a ", "animate an ", "animate my", "animation of", "short film", "film of",
     ]
     static let imageSignals = [
         "make an image", "generate an image", "create an image", "image of", "picture of", "photo of",
-        "draw ", "illustrate", "illustration of", "render an image", "poster of",
+        "draw a ", "draw an ", "draw me", "sketch of", "illustration of", "render an image", "poster of",
     ]
     static let sensitiveSignals = [
         "password", "passcode", "ssn", "social security", "diagnosis", "medical", "my salary",

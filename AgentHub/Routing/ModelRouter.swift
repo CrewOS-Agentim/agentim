@@ -23,6 +23,10 @@ struct RoutingRequest {
     var agent: Agent?
     var conversationPin: String?
     var isOnline = true
+    /// What was actually asked, when `text` is a bigger prompt (a group chat's transcript): the task is read from this.
+    var taskText: String? = nil
+    /// "@name" in `text` picks a model. Off for group chats, where "@CTO" in the transcript means a member.
+    var parseOverride = true
 }
 
 struct RoutingDecision: Equatable {
@@ -62,8 +66,26 @@ struct ModelRouter {
     var settings: RouterSettings
 
     func route(_ request: RoutingRequest) throws -> RoutingDecision {
-        let (alias, cleaned) = Self.extractOverride(request.text)
-        var profile = PromptClassifier.classify(cleaned, history: request.history)
+        let (alias, cleaned) = request.parseOverride ? Self.extractOverride(request.text) : (nil, request.text)
+        var profile = PromptClassifier.classify(request.taskText ?? cleaned, history: request.history)
+        if request.taskText != nil {  // classify the task, but size the whole prompt
+            profile.estimatedTokens = PromptClassifier.estimateTokens(
+                characters: cleaned.count + request.history.reduce(0) { $0 + $1.content.count })
+        }
+        // /video and /image always mean media.
+        let command = (request.taskText ?? cleaned).trimmingCharacters(in: .whitespaces).lowercased()
+        if command.hasPrefix("/video") { profile.primary = .video } else if command.hasPrefix("/image") { profile.primary = .image }
+        // The agent's requirements: a specialist who doesn't make media never gets a media model (a Data Analyst
+        // saying "draw conclusions" answers in text), and quick or general messages go to the kind of model its
+        // work needs (reasoning for an analyst, coding for an engineer).
+        let needs = AgentNeeds.of(request.agent)
+        let explicitMedia = command.hasPrefix("/video") || command.hasPrefix("/image")
+        if profile.primary.isMedia, !needs.makesMedia, !explicitMedia {
+            profile.primary = needs.primary ?? .creative
+        }
+        if profile.primary == .fast || profile.primary == .general, let need = needs.primary {
+            profile.primary = need
+        }
         // Asked for media but nothing can make it: answer in text instead.
         if profile.primary.isMedia, !available.contains(where: { $0.capabilities.contains(profile.primary) }) {
             profile.primary = .creative

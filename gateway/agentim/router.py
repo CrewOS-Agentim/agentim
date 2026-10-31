@@ -10,9 +10,32 @@ REASONING = ["prove", "step by step", "why does", "analyze", "analyse", "trade-o
              "calculate", "solve", "plan", "strategy", "estimate", "math", "validate"]
 CREATIVE = ["story", "poem", "write a", "draft", "rewrite", "slogan", "lyrics", "blog post", "tone", "script"]
 VIDEO = ["make a video", "generate a video", "create a video", "render a video", "video of", "video clip",
-         "animate ", "animation of", "short film", "film of"]
+         "animate a ", "animate an ", "animate my", "animation of", "short film", "film of"]
 IMAGE = ["make an image", "generate an image", "create an image", "image of", "picture of", "photo of",
-         "draw ", "illustrate", "illustration of", "render an image", "poster of", "thumbnail of"]
+         "draw a ", "draw an ", "draw me", "sketch of", "illustration of", "render an image", "poster of", "thumbnail of"]
+
+# What an agent's work needs (same rules as the Mac app's AgentNeeds): read from its name and description.
+MEDIA_WORDS = ["video", "youtube", "film", "animation", "animator", "illustrator", "illustration", "photo",
+               "photographer", "thumbnail", "image", "images", "ltx", "motion graphics"]
+CODING_WORDS = ["engineer", "developer", "programmer", "code", "coding", "qa", "devops", "cto", "debugging", "software",
+                "frontend", "backend", "api testing", "sre"]
+REASONING_WORDS = ["analyst", "analytics", "data", "metrics", "cfo", "finance", "financial", "strategy", "validator",
+                   "validate", "product manager", "cpo", "ciso", "security", "research", "researcher", "recruiter",
+                   "project manager", "coo", "legal", "economist", "scientist"]
+CREATIVE_WORDS = ["writer", "copywriter", "copy", "marketing", "cmo", "content", "brand", "social media",
+                  "storyteller", "story", "creator", "editor", "designer"]
+
+
+def agent_needs(agent):
+    """(primary, makes_media): the kind of model the agent's work needs (None for generalists), and whether it makes
+    images or video at all. Specialists who don't never get a media model."""
+    if agent is None:
+        return None, True
+    text = f"{agent.name} {agent.summary}".lower()
+    words = set(re.findall(r"[a-z0-9]+", text))
+    has = lambda items: any((w in text) if " " in w else (w in words) for w in items)
+    primary = "coding" if has(CODING_WORDS) else "reasoning" if has(REASONING_WORDS) else "creative" if has(CREATIVE_WORDS) else None
+    return primary, primary is None or has(MEDIA_WORDS)
 SENSITIVE = ["password", "passcode", "ssn", "social security", "diagnosis", "medical", "my salary", "bank account",
              "private key", "api key", "secret", "confidential", "therapy"]
 MEDIA = {"video", "image"}
@@ -215,6 +238,18 @@ class Router:
     def route(self, text, history_chars=0, pinned=None, agent=None):
         alias, cleaned = extract_override(text)
         profile = classify(cleaned, history_chars)
+        command = cleaned.strip().lower()
+        if command.startswith("/video"):
+            profile.primary = "video"
+        elif command.startswith("/image"):
+            profile.primary = "image"
+        # The agent's requirements: a Data Analyst saying "draw a conclusion" answers in text, never with LTX, and
+        # quick or general messages go to the kind of model its work needs.
+        need, makes_media = agent_needs(agent)
+        if profile.primary in MEDIA and not makes_media and not command.startswith(("/video", "/image")):
+            profile.primary = need or "creative"
+        if profile.primary in ("fast", "general") and need:
+            profile.primary = need
         if profile.primary in MEDIA and not any(profile.primary in m.caps for m in self.models):
             profile.primary = "creative"
 

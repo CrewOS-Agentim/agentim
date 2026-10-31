@@ -541,10 +541,22 @@ final class AppStore {
             return model
         }
         guard conversation.autoDivideModels == true else { return nil }
-        let chat = availableModels.filter { !$0.isExplicitOnly }
-            .sorted { ($0.qualityTier, $1.displayName) > ($1.qualityTier, $0.displayName) }
-        guard !chat.isEmpty, let index = members(in: conversation).firstIndex(where: { $0.id == member.id }) else { return nil }
-        return chat[index % chat.count]
+        // Each member gets the best model for its own work (reasoning for an analyst, coding for an engineer),
+        // a different one per member while there are enough; never a media model.
+        let chat = availableModels.filter { !$0.isExplicitOnly && !$0.capabilities.contains(.agent) }
+        let everyone = members(in: conversation)
+        guard !chat.isEmpty, let index = everyone.firstIndex(where: { $0.id == member.id }) else { return nil }
+        let scorer = ModelRouter(available: chat, settings: router)
+        var taken = Set<String>()
+        var pick: AIModel?
+        for current in everyone.prefix(index + 1) {
+            let needs = current.agent.map(AgentNeeds.of) ?? current.skill.map { AgentNeeds.of(name: $0.name, summary: $0.summary) } ?? .anything
+            let profile = TaskProfile(primary: needs.primary ?? .general, estimatedTokens: 2_000, isSensitive: false)
+            let ranked = chat.sorted { (scorer.score($0, profile), $1.displayName) > (scorer.score($1, profile), $0.displayName) }
+            pick = ranked.first { !taken.contains($0.id) } ?? ranked.first
+            if let pick { taken.insert(pick.id) }
+        }
+        return pick
     }
 
     func setMemberModel(_ modelID: String?, for memberID: UUID, in conversationID: UUID) {
@@ -636,7 +648,10 @@ final class AppStore {
         conversations[c].messages.append(reply)
         do {
             let decision = try ModelRouter(available: availableModels, settings: router).route(
-                RoutingRequest(text: ask, history: [], agent: agent, conversationPin: conversation.pinnedModelID, isOnline: isOnline))
+                RoutingRequest(text: ask, history: [], agent: agent, conversationPin: conversation.pinnedModelID, isOnline: isOnline,
+                               // The task is what you asked, not everything the members said; "@CTO" here is a member.
+                               taskText: conversation.messages.last { $0.role == .user }?.content ?? ask,
+                               parseOverride: false))
             // The member's own model first (set for them, or divided automatically), then the router's picks.
             let own = model(for: member, in: conversation)
             let ranked = (own.map { [$0] } ?? []) + [decision.model] + decision.fallbacks
