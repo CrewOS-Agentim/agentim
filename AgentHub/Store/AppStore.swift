@@ -54,6 +54,8 @@ final class AppStore {
     /// Group chats working "until it's ready": round, disagreements so far, when it started (the progress bar).
     private(set) var discussions: [UUID: DiscussionProgress] = [:]
     @ObservationIgnored private var stopRequests: Set<UUID> = []
+    /// Models that just stopped responding, and when: they're tried last for a few minutes.
+    @ObservationIgnored private var unresponsiveModels: [String: Date] = [:]
     /// Each chat's codebase summary (README, manifests, tree) and when it was read.
     @ObservationIgnored private var codebaseContexts: [UUID: (at: Date, text: String)] = [:]
     var huggingFaceAccount: HuggingFaceClient.Account?
@@ -656,8 +658,9 @@ final class AppStore {
             let own = model(for: member, in: conversation)
             let ranked = (own.map { [$0] } ?? []) + [decision.model] + decision.fallbacks
             var seen = Set<String>()
-            let ordered = ranked.filter { seen.insert($0.id).inserted }
-            let targets = ordered.prefix(2).compactMap { model in client(for: model).map { (model, $0) } }
+            let ordered = deprioritizingUnresponsive(ranked.filter { seen.insert($0.id).inserted })
+            let targets = ordered.prefix(3).compactMap { model in client(for: model).map { (model, $0) } }
+            var switchedFrom: String?
             guard !targets.isEmpty else { throw RoutingError.noModelsAvailable }
             let system = member.skill.map { "You are the \($0.name) specialist in this group chat.\n\n## Skill: \($0.name)\n\($0.instructions)" }
                 ?? systemPrompt(agent: agent, message: ask)
@@ -667,6 +670,7 @@ final class AppStore {
                     $0.modelID = model.id
                     $0.routingReason = "\(member.name) in the group chat"
                         + (final != nil ? " · final result" : round > 1 ? " · round \(round)" : "")
+                        + (switchedFrom.map { " · \($0), switched" } ?? "")
                 }
                 do {
                     // Members whose model can see get the images you shared lately along with the transcript.
@@ -674,8 +678,8 @@ final class AppStore {
                     let request = ChatRequest(model: model.modelName, system: system,
                                               messages: [ChatMessage(role: .user, content: ask, attachments: images.nilIfEmpty)],
                                               sendImages: !images.isEmpty)
-                    for try await chunk in client.stream(request) {
-                        updateReply(reply.id, in: conversationID) { $0.content += chunk }
+                    try await ModelWatchdog.watch(client.stream(request), limits: ModelWatchdog.limits(for: model)) { chunk in
+                        self.updateReply(reply.id, in: conversationID) { $0.content += chunk }
                     }
                     // Small models often echo "Name:"; the bubble already shows who's talking.
                     updateReply(reply.id, in: conversationID) {
@@ -686,6 +690,9 @@ final class AppStore {
                         return .passed
                     }
                     return .spoke
+                } catch let timeout as ModelWatchdog.Timeout {
+                    markUnresponsive(model.id)  // not responding: the next model takes the turn
+                    switchedFrom = "\(model.displayName) \(timeout.localizedDescription)"
                 } catch {
                     if let content = message(reply.id, in: conversationID)?.content, !content.isEmpty { return .spoke }
                 }
@@ -904,7 +911,8 @@ final class AppStore {
                     ranked.insert(seer, at: 0)
                     reasons[seer.id] = "Can see your images"
                 }
-                targets = ranked.prefix(3).compactMap { model in
+                ranked = deprioritizingUnresponsive(ranked)
+                targets = ranked.prefix(4).compactMap { model in
                     client(for: model).map {
                         ($0, model.modelName, model.id, reasons[model.id] ?? "Fallback after error", model.canSeeImages)
                     }
@@ -941,20 +949,27 @@ final class AppStore {
             // A chat with a codebase: agents know its README, manifests and file tree.
             let fullSystem = await withCodebase(system, conversationID: conversationID)
             var lastError: Error?
+            var switchedFrom: String?
             for target in targets {
                 updateReply(reply.id, in: conversationID) {
                     $0.content = ""
                     $0.modelID = target.modelID
-                    $0.routingReason = target.reason
+                    $0.routingReason = switchedFrom.map { "\($0) → switched" } ?? target.reason
                     $0.isError = false
                 }
                 do {
                     let request = ChatRequest(model: target.model, system: fullSystem, messages: history, sendImages: target.images)
-                    for try await chunk in target.client.stream(request) {
-                        updateReply(reply.id, in: conversationID) { $0.content += chunk }
+                    let model = target.modelID.flatMap { self.model(id: $0) }
+                    try await ModelWatchdog.watch(target.client.stream(request), limits: model.flatMap(ModelWatchdog.limits)) { chunk in
+                        self.updateReply(reply.id, in: conversationID) { $0.content += chunk }
                     }
                     replyFinished(conversationID, replyID: reply.id)  // notify if you're elsewhere
                     return
+                } catch let timeout as ModelWatchdog.Timeout {
+                    // Not responding: remember it for a few minutes and switch, starting the answer over.
+                    lastError = timeout
+                    if let id = target.modelID { markUnresponsive(id) }
+                    switchedFrom = "\(target.modelID.flatMap { self.model(id: $0)?.displayName } ?? target.model) \(timeout.localizedDescription)"
                 } catch {
                     lastError = error
                     // Keep partial output instead of retrying a half-finished answer.
@@ -963,9 +978,26 @@ final class AppStore {
             }
             updateReply(reply.id, in: conversationID) {
                 $0.isError = true
-                $0.content += ($0.content.isEmpty ? "" : "\n\n") + (lastError?.localizedDescription ?? "No model answered.")
+                let why = (lastError as? ModelWatchdog.Timeout).map { "No model responded in time (the last one \($0.localizedDescription))." }
+                $0.content += ($0.content.isEmpty ? "" : "\n\n") + (why ?? lastError?.localizedDescription ?? "No model answered.")
             }
         }
+    }
+
+    // MARK: - Models that stop responding
+
+    /// How long a model that timed out is tried last.
+    nonisolated static let unresponsiveCooldown: TimeInterval = 5 * 60
+
+    func markUnresponsive(_ modelID: String) { unresponsiveModels[modelID] = Date() }
+
+    func isUnresponsive(_ modelID: String) -> Bool {
+        unresponsiveModels[modelID].map { Date().timeIntervalSince($0) < Self.unresponsiveCooldown } ?? false
+    }
+
+    /// Models that just timed out move to the end (still a last resort if nothing else answers).
+    func deprioritizingUnresponsive(_ models: [AIModel]) -> [AIModel] {
+        models.filter { !isUnresponsive($0.id) } + models.filter { isUnresponsive($0.id) }
     }
 
     /// Agent instructions + every attached skill that is always-on or matched by the message.

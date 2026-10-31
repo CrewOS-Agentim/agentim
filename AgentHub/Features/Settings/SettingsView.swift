@@ -64,6 +64,7 @@ struct SettingsView: View {
                 }
 
                 DiscussionLimitsSection()
+                ModelTimeoutsSection()
 
                 Section("Cloud providers") {
                     ForEach(store.providers.filter { $0.id != Provider.huggingFace.id }) { provider in
