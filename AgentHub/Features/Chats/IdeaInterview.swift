@@ -47,7 +47,7 @@ extension AppStore {
 
     /// One answer from the best available model (no conversation, no streaming to the UI).
     func ask(_ prompt: String, system: String = "") async throws -> String {
-        let decision = try ModelRouter(available: availableModels, settings: router).route(
+        let decision = try ModelRouter(available: availableModels, settings: router, cloudFirst: cloudModelsFirst).route(
             RoutingRequest(text: prompt, history: [], agent: nil, conversationPin: nil, isOnline: isOnline))
         let targets = ([decision.model] + decision.fallbacks.prefix(1)).compactMap { m in client(for: m).map { (m, $0) } }
         for (model, client) in targets {

@@ -88,7 +88,7 @@ struct AIModel: Identifiable, Codable, Hashable {
         switch location {
         case .local:
             return false  // the on-device MLX models are text-only
-        case .cloud(let provider) where provider == Provider.anthropic.id || provider == Provider.gemini.id:
+        case .cloud(let provider) where provider == Provider.anthropic.id || provider == Provider.gemini.id || provider == Provider.xai.id:
             return true
         case .cloud(let provider) where provider == Provider.openAI.id:
             return ["gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4"].contains { name.hasPrefix($0) }
@@ -138,6 +138,8 @@ extension AIModel {
                caps: [.coding, .reasoning, .creative, .longContext, .general], context: 400_000, cost: 3, quality: 5),
         .cloud(.openAI, "gpt-5-mini", display: "GPT-5 mini", alias: "gpt5mini",
                caps: [.fast, .general, .coding], context: 400_000, cost: 1, quality: 3),
+        .cloud(.xai, "grok-4", display: "Grok 4", alias: "grok",
+               caps: [.coding, .reasoning, .creative, .longContext, .general], context: 256_000, cost: 3, quality: 5),
         .cloud(.gemini, "gemini-2.5-pro", display: "Gemini 2.5 Pro", alias: "gemini",
                caps: [.reasoning, .coding, .longContext, .general], context: 1_000_000, cost: 3, quality: 4),
         .cloud(.gemini, "gemini-2.5-flash", display: "Gemini 2.5 Flash", alias: "flash",

@@ -318,6 +318,14 @@ GitHub links in any reply (pull requests, issues, commits, files) also show as c
 
 Agents with a design skill (Designer, UI UX Designer, Product Designer, Brand Designer) end their designs with a complete HTML mockup, and the chat **renders it live**: switch between desktop, tablet and phone widths, show the code, or open it in your browser. SVGs render too. Previews are sandboxed (nothing is stored; links open in your browser). Code blocks in every reply get a language label, **Copy**, and scroll for long lines.
 
+### Cloud models (paid, for performance)
+
+One switch, in **Settings → Performance** or any chat's model menu: **Cloud models** puts the connected paid models first: **ChatGPT** (OpenAI key or your ChatGPT login), **Claude** (Anthropic key or your Claude login) and **Grok** (an xAI key; add it under Cloud providers). Each agent still gets the kind of model it needs (coding, reasoning, writing) among them, even agents set to prefer private models; messages that look sensitive still stay on your Mac. With nothing connected it changes nothing, and off means local models first.
+
+### When a model doesn't respond
+
+Every reply is watched: if a model says nothing within **90 s**, or goes quiet for **45 s** in the middle of an answer, the agent switches to the next model and starts the answer over (the reply says which model stalled). The slow model is tried last for 5 minutes. Both times are in **Settings → When a model doesn't respond**; Claude and ChatGPT through your login and LoRA models get at least 4 minutes, and videos, images and coding agents aren't timed. Group-chat members switch the same way.
+
 ### Models that fit the skill
 
 Pick skills for an agent and its editor suggests models for them; a skill's editor does the same. **Use** pins a model that's ready, **Get** opens the memory check and downloads it into Docker.

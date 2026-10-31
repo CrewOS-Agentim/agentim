@@ -114,6 +114,14 @@ final class AppStore {
         didSet { UserDefaults.standard.set(chatgptVia, forKey: "chatgptVia") }
     }
 
+    /// Cloud models (paid, for performance): ChatGPT, Claude and Grok first whenever they're connected.
+    var cloudModelsFirst: Bool = UserDefaults.standard.bool(forKey: "cloudModelsFirst") {
+        didSet { UserDefaults.standard.set(cloudModelsFirst, forKey: "cloudModelsFirst") }
+    }
+
+    /// The paid models the switch would use right now (connected ones only).
+    var paidCloudModels: [AIModel] { availableModels.filter(ModelRouter.isPaidCloud) }
+
     /// What the router may choose from: connected providers + installed local weights.
     var availableModels: [AIModel] {
         allModels.filter { model in
@@ -548,7 +556,7 @@ final class AppStore {
         let chat = availableModels.filter { !$0.isExplicitOnly && !$0.capabilities.contains(.agent) }
         let everyone = members(in: conversation)
         guard !chat.isEmpty, let index = everyone.firstIndex(where: { $0.id == member.id }) else { return nil }
-        let scorer = ModelRouter(available: chat, settings: router)
+        let scorer = ModelRouter(available: chat, settings: router, cloudFirst: cloudModelsFirst)
         var taken = Set<String>()
         var pick: AIModel?
         for current in everyone.prefix(index + 1) {
@@ -649,7 +657,7 @@ final class AppStore {
         guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return .failed }
         conversations[c].messages.append(reply)
         do {
-            let decision = try ModelRouter(available: availableModels, settings: router).route(
+            let decision = try ModelRouter(available: availableModels, settings: router, cloudFirst: cloudModelsFirst).route(
                 RoutingRequest(text: ask, history: [], agent: agent, conversationPin: conversation.pinnedModelID, isOnline: isOnline,
                                // The task is what you asked, not everything the members said; "@CTO" here is a member.
                                taskText: conversation.messages.last { $0.role == .user }?.content ?? ask,
@@ -873,7 +881,7 @@ final class AppStore {
     func previewRoute(_ text: String, in conversation: Conversation) -> Result<RoutingDecision, Error> {
         if case .remote = agent(for: conversation)?.kind { return .failure(RoutingError.noModelsAvailable) }
         return Result {
-            try ModelRouter(available: availableModels, settings: router).route(
+            try ModelRouter(available: availableModels, settings: router, cloudFirst: cloudModelsFirst).route(
                 RoutingRequest(text: text, history: conversation.messages, agent: agent(for: conversation),
                                conversationPin: conversation.pinnedModelID, isOnline: isOnline))
         }
@@ -897,7 +905,7 @@ final class AppStore {
             prompt = text
         } else {
             do {
-                let decision = try ModelRouter(available: availableModels, settings: router).route(
+                let decision = try ModelRouter(available: availableModels, settings: router, cloudFirst: cloudModelsFirst).route(
                     RoutingRequest(text: text, history: conversation.messages, agent: agent,
                                    conversationPin: conversation.pinnedModelID, isOnline: isOnline))
                 var ranked = [decision.model] + decision.fallbacks

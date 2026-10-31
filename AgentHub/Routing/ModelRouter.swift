@@ -64,6 +64,19 @@ struct ModelRouter {
     /// Models the user can actually call right now (provider connected or weights installed).
     var available: [AIModel]
     var settings: RouterSettings
+    /// "Cloud models" (Settings, or a chat's model menu): paid ChatGPT, Claude and Grok first, for performance.
+    var cloudFirst = false
+
+    /// The paid, high-performance models the Cloud models switch prefers: OpenAI, Anthropic and xAI (Grok), and
+    /// Claude or ChatGPT through your login.
+    static func isPaidCloud(_ model: AIModel) -> Bool {
+        if let provider = model.providerID { return [Provider.openAI.id, Provider.anthropic.id, Provider.xai.id].contains(provider) }
+        let name = model.modelName.lowercased()
+        return name.hasPrefix("claude/") || name.hasPrefix("chatgpt/")
+    }
+
+    /// The switch only changes anything when one of those is connected.
+    var cloudActive: Bool { cloudFirst && available.contains(where: Self.isPaidCloud) }
 
     func route(_ request: RoutingRequest) throws -> RoutingDecision {
         let (alias, cleaned) = request.parseOverride ? Self.extractOverride(request.text) : (nil, request.text)
@@ -118,7 +131,7 @@ struct ModelRouter {
         if profile.isSensitive, settings.keepSensitiveLocal, let best = bestLocal(locals, profile) {
             return decide(best, best.isOnDevice ? "Looks sensitive, kept on-device" : "Looks sensitive, kept on your server")
         }
-        if request.agent?.preferLocal == true, let best = bestLocal(locals, profile) {
+        if request.agent?.preferLocal == true, !cloudActive, let best = bestLocal(locals, profile) {
             return decide(best, "\(request.agent?.name ?? "Agent") prefers private models")
         }
 
@@ -170,7 +183,9 @@ struct ModelRouter {
         if [.reasoning, .coding, .longContext].contains(profile.primary) {
             score -= Double(max(0, 3 - model.qualityTier)) * 2
         }
-        if settings.preferLocal && model.isLocal { score += 3 }
+        if settings.preferLocal && model.isLocal && !cloudActive { score += 3 }
+        // Cloud models on: the paid ones lead; among them the agent's kind of model still decides.
+        if cloudActive && Self.isPaidCloud(model) { score += 10 }
         return score
     }
 
@@ -195,7 +210,8 @@ struct ModelRouter {
     private func explain(_ model: AIModel, _ profile: TaskProfile) -> String {
         let task = profile.primary == .fast ? "Quick question" : "\(profile.primary.label) task"
         let fit = model.capabilities.contains(profile.primary) ? "strong at \(profile.primary.label.lowercased())" : "best available"
-        return "\(task) → \(model.displayName) (\(fit), \(settings.priority.label.lowercased()) mode)"
+        let mode = cloudActive && Self.isPaidCloud(model) ? "cloud models on" : "\(settings.priority.label.lowercased()) mode"
+        return "\(task) → \(model.displayName) (\(fit), \(mode))"
     }
 
     /// Splits a leading or inline "@alias" from the prompt.

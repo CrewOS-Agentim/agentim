@@ -402,7 +402,7 @@ final class HostController {
 
     /// Loads the model chats will use first, so the first answer doesn't wait for it.
     func preloadDefaultModel(store: AppStore) async {
-        guard let decision = try? ModelRouter(available: store.availableModels, settings: store.router).route(
+        guard let decision = try? ModelRouter(available: store.availableModels, settings: store.router, cloudFirst: store.cloudModelsFirst).route(
             RoutingRequest(text: "Hello", history: [], agent: store.agents.first, conversationPin: nil, isOnline: true)),
               decision.model.serverID != nil, !decision.model.capabilities.contains(.agent) else { return }
         startupNote = "Loading \(decision.model.displayName)…"

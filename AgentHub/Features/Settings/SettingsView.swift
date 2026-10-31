@@ -22,6 +22,8 @@ struct SettingsView: View {
                     Text("Download on-device models and use Hugging Face Inference Providers with one token.")
                 }
 
+                CloudModelsSection()
+
                 Section {
                     ForEach(store.servers) { server in
                         Button { editingServer = server } label: {

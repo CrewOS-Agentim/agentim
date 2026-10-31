@@ -45,5 +45,11 @@ extension Provider {
         wire: .openAICompatible, symbol: "face.smiling",
         keyHelpURL: URL(string: "https://huggingface.co/settings/tokens"))
 
-    static let builtIn: [Provider] = [.anthropic, .openAI, .gemini, .openRouter, .huggingFace]
+    /// xAI's Grok (an OpenAI-compatible API).
+    static let xai = Provider(
+        id: "xai", name: "xAI Grok", baseURL: URL(string: "https://api.x.ai/v1")!,
+        wire: .openAICompatible, symbol: "x.circle.fill",
+        keyHelpURL: URL(string: "https://console.x.ai"))
+
+    static let builtIn: [Provider] = [.anthropic, .openAI, .xai, .gemini, .openRouter, .huggingFace]
 }

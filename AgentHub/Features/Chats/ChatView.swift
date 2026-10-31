@@ -325,9 +325,16 @@ struct ChatView: View {
                     Label(model.displayName, systemImage: model.locationSymbol).tag(Optional(model.id))
                 }
             }
+            Divider()
+            // Paid cloud models first (ChatGPT, Claude, Grok) for performance: one switch for every chat.
+            Toggle(isOn: Binding(get: { store.cloudModelsFirst }, set: { store.cloudModelsFirst = $0 })) {
+                Label(store.paidCloudModels.isEmpty ? "Cloud models (none connected)" : "Cloud models (paid, faster)",
+                      systemImage: "bolt.horizontal.circle")
+            }
+            .disabled(store.paidCloudModels.isEmpty && !store.cloudModelsFirst)
         } label: {
-            Label(store.model(id: conversation.pinnedModelID)?.displayName ?? "Auto",
-                  systemImage: conversation.pinnedModelID == nil ? "wand.and.rays" : "pin.fill")
+            Label(store.model(id: conversation.pinnedModelID)?.displayName ?? (store.cloudModelsFirst && !store.paidCloudModels.isEmpty ? "Auto · Cloud" : "Auto"),
+                  systemImage: conversation.pinnedModelID == nil ? (store.cloudModelsFirst ? "bolt.horizontal.circle" : "wand.and.rays") : "pin.fill")
                 .labelStyle(.titleAndIcon)
                 .font(.footnote)
         }
