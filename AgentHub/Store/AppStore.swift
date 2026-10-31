@@ -51,6 +51,9 @@ final class AppStore {
     }
     /// Messages typed while a chat was still answering, sent in order as each reply finishes.
     private(set) var queuedMessages: [UUID: [QueuedMessage]] = [:]
+    /// Group chats working "until it's ready": round, disagreements so far, when it started (the progress bar).
+    private(set) var discussions: [UUID: DiscussionProgress] = [:]
+    @ObservationIgnored private var stopRequests: Set<UUID> = []
     /// Each chat's codebase summary (README, manifests, tree) and when it was read.
     @ObservationIgnored private var codebaseContexts: [UUID: (at: Date, text: String)] = [:]
     var huggingFaceAccount: HuggingFaceClient.Account?
@@ -252,6 +255,8 @@ final class AppStore {
         conversation.lastReadAt = Date()
         conversation.participantIDs = participants.map(\.id)
         conversation.participantSkillIDs = skills.map(\.id)
+        // Give them a task and they keep working until it's ready and they all agree (within the limits in Settings).
+        conversation.discussionRounds = Self.maxRounds
         let names = participants.map(\.name) + skills.map(\.name)
         if !names.isEmpty {
             conversation.title = names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " +\(names.count - 3)" : "")
@@ -411,30 +416,123 @@ final class AppStore {
     }
 
     /// Posts the message, then the addressed members answer in turn; with more discussion rounds they keep talking to
-    /// each other (each seeing everything before it) until the rounds run out or everyone passes.
+    /// each other (each seeing everything before it). "Until it's ready" keeps going until everyone agrees, up to the
+    /// disagreement and time limits from Settings, then the lead member writes the finished result.
     func sendToMeeting(_ text: String, attachments: [ChatAttachment] = [], in conversationID: UUID) {
         guard let index = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
         conversations[index].messages.append(ChatMessage(role: .user, content: text, attachments: attachments.nilIfEmpty))
         let everyone = members(in: conversations[index])
         let speakers = Self.addressed(text, among: everyone)
         let rounds = max(1, min(conversations[index].discussionRounds ?? 1, Self.maxRounds))
+        let untilReady = rounds >= Self.maxRounds
+        let limits = (disagreements: Self.maxDisagreements, minutes: Self.maxDiscussionMinutes)
+        let started = Date()
+        let deadline = started.addingTimeInterval(TimeInterval(limits.minutes * 60))
         streamingConversationIDs.insert(conversationID)
+        stopRequests.remove(conversationID)
+        if untilReady {
+            discussions[conversationID] = DiscussionProgress(round: 1, disagreements: 0, started: started,
+                                                             maxDisagreements: limits.disagreements, maxMinutes: limits.minutes)
+        }
         Task {
-            defer { streamingConversationIDs.remove(conversationID) }
-            for round in 1...rounds {
-                var spoke = false
+            defer {
+                streamingConversationIDs.remove(conversationID)
+                discussions[conversationID] = nil
+                stopRequests.remove(conversationID)
+            }
+            var outcome = DiscussionOutcome.roundsDone
+            var round = 0, disagreements = 0
+            discussion: while true {
+                round += 1
+                discussions[conversationID]?.round = round
+                var spoke = false, answered = false
                 for member in speakers {
-                    let passed = await meetingReply(from: member, others: everyone.filter { $0.id != member.id },
-                                                    in: conversationID, round: round)
-                    spoke = spoke || !passed
+                    if stopRequests.contains(conversationID) { outcome = .stopped; break discussion }
+                    if untilReady, round > 1, Date() >= deadline { outcome = .timeLimit; break discussion }
+                    let turn = await meetingReply(from: member, others: everyone.filter { $0.id != member.id },
+                                                  in: conversationID, round: round, untilReady: untilReady)
+                    spoke = spoke || turn == .spoke
+                    answered = answered || turn != .failed
                 }
-                if round > 1 && !spoke { break }  // everyone agrees: the discussion is over
+                if !answered { outcome = .failed; break }               // nobody could answer: don't spin for hours
+                if round > 1 && !spoke { outcome = .agreed; break }     // everyone agrees: it's ready
+                if !untilReady {
+                    if round >= rounds { break }
+                    continue
+                }
+                if round > 1 {
+                    disagreements += 1
+                    discussions[conversationID]?.disagreements = disagreements
+                }
+                if disagreements >= limits.disagreements { outcome = .disagreementLimit; break }
+                if Date() >= deadline { outcome = .timeLimit; break }
+            }
+            if untilReady {
+                await finishDiscussion(conversationID, outcome: outcome, lead: speakers.first, everyone: everyone,
+                                       rounds: round, disagreements: disagreements, limits: limits)
             }
             await discussionEnded(conversationID)  // a notification with the summary (or the question for you)
         }
     }
 
     static let maxRounds = 5
+
+    // MARK: - Until it's ready: limits, progress, stop
+
+    nonisolated static let defaultMaxDisagreements = 20
+    nonisolated static let defaultMaxDiscussionMinutes = 240
+
+    /// Settings → Group chats: how many disagreements (rounds where someone still pushes back) before they stop.
+    nonisolated static var maxDisagreements: Int {
+        let value = UserDefaults.standard.integer(forKey: "discussionMaxDisagreements")
+        return value > 0 ? min(value, 500) : defaultMaxDisagreements
+    }
+
+    /// Settings → Group chats: how long a discussion may run, in minutes.
+    nonisolated static var maxDiscussionMinutes: Int {
+        let value = UserDefaults.standard.integer(forKey: "discussionMaxMinutes")
+        return value > 0 ? min(value, 24 * 60) : defaultMaxDiscussionMinutes
+    }
+
+    struct DiscussionProgress: Equatable {
+        var round: Int
+        var disagreements: Int
+        var started: Date
+        var maxDisagreements: Int
+        var maxMinutes: Int
+    }
+
+    enum DiscussionOutcome: Equatable { case roundsDone, agreed, disagreementLimit, timeLimit, stopped, failed }
+    enum Turn: Equatable { case spoke, passed, failed }
+
+    /// Stops a running discussion after the current member's turn.
+    func stopDiscussion(_ conversationID: UUID) {
+        stopRequests.insert(conversationID)
+    }
+
+    /// The end of an "until it's ready" discussion: a note on why it stopped, then the lead member writes the
+    /// finished result (agreed), or the best version so far with what's still open (a limit, or you stopped it).
+    private func finishDiscussion(_ conversationID: UUID, outcome: DiscussionOutcome, lead: Member?, everyone: [Member],
+                                  rounds: Int, disagreements: Int, limits: (disagreements: Int, minutes: Int)) async {
+        let note: String
+        switch outcome {
+        case .agreed: note = "Everyone agreed after \(rounds) round\(rounds == 1 ? "" : "s") and \(disagreements) disagreement\(disagreements == 1 ? "" : "s")."
+        case .disagreementLimit: note = "Stopped at the limit of \(limits.disagreements) disagreements without full agreement."
+        case .timeLimit: note = "Stopped at the time limit (\(Self.duration(minutes: limits.minutes))) without full agreement."
+        case .stopped: note = "You stopped the discussion after \(rounds) round\(rounds == 1 ? "" : "s")."
+        case .failed: note = "The discussion stopped: no member could answer (are the models running?)."
+        case .roundsDone: return
+        }
+        guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return }
+        conversations[c].messages.append(ChatMessage(role: .assistant, content: note, routingReason: "Discussion"))
+        guard outcome != .failed, let lead else { return }
+        _ = await meetingReply(from: lead, others: everyone.filter { $0.id != lead.id }, in: conversationID,
+                               round: rounds + 1, untilReady: true, final: outcome == .agreed ? .agreed : .unresolved)
+    }
+
+    nonisolated static func duration(minutes: Int) -> String {
+        minutes % 60 == 0 ? "\(minutes / 60) h" : minutes >= 60 ? "\(minutes / 60) h \(minutes % 60) min" : "\(minutes) min"
+    }
 
     /// The model a member thinks with in this group: the one set for them, else (auto-divide) a different available
     /// model per member, else nil (the router picks).
@@ -484,21 +582,45 @@ final class AppStore {
         return t.uppercased() == "PASS" || t.uppercased().hasPrefix("PASS ") || t.uppercased().hasPrefix("PASS:")
     }
 
-    /// One member's turn. Returns true when they passed (nothing to add): their empty turn is removed.
+    enum FinalTurn { case agreed, unresolved }
+
+    /// One member's turn: they spoke, passed (agree, nothing to add: their empty turn is removed) or couldn't answer.
     @discardableResult
-    private func meetingReply(from member: Member, others: [Member], in conversationID: UUID, round: Int = 1) async -> Bool {
-        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return true }
+    private func meetingReply(from member: Member, others: [Member], in conversationID: UUID, round: Int = 1,
+                              untilReady: Bool = false, final: FinalTurn? = nil) async -> Turn {
+        guard let conversation = conversations.first(where: { $0.id == conversationID }) else { return .failed }
         let names = others.map(\.name).joined(separator: ", ")
-        let turn = round == 1
-            ? """
-              Reply now as \(member.name), from your own expertise. Build on (or push back on) what others said, address them \
-              by name when you do, don't repeat their points, and keep it under 180 words. Start with "\(member.name):".
-              """
-            : """
-              The discussion continues (round \(round)). Reply as \(member.name) to what the others just said: build on it, \
-              push back, or improve the draft, addressing them by name. Work toward what the user asked for. Under 150 words, \
-              start with "\(member.name):". If you have nothing new to add and agree with where it landed, reply with exactly PASS.
-              """
+        let turn: String
+        switch final {
+        case .agreed?:
+            turn = """
+            Everyone agreed. As \(member.name), write the FINISHED result the user asked for: the complete deliverable \
+            itself (not a summary of the discussion), with every point the group agreed on. Start with "\(member.name):".
+            """
+        case .unresolved?:
+            turn = """
+            The discussion has to stop now. As \(member.name), write the best complete version of what the user asked for \
+            so far, then list what's still disputed and who disagrees, in one short section. Start with "\(member.name):".
+            """
+        case nil where round == 1:
+            turn = """
+            Reply now as \(member.name), from your own expertise. Build on (or push back on) what others said, address them \
+            by name when you do, don't repeat their points, and keep it under 180 words. Start with "\(member.name):".
+            """
+        case nil where untilReady:
+            turn = """
+            The work continues (round \(round)). Reply as \(member.name): improve the draft, fix what's missing or wrong, and \
+            push back where you disagree, addressing the others by name. Keep going until the result is finished and ready \
+            for the user. Under 150 words, start with "\(member.name):". Reply with exactly PASS only when the result is \
+            ready and you fully agree with it.
+            """
+        case nil:
+            turn = """
+            The discussion continues (round \(round)). Reply as \(member.name) to what the others just said: build on it, \
+            push back, or improve the draft, addressing them by name. Work toward what the user asked for. Under 150 words, \
+            start with "\(member.name):". If you have nothing new to add and agree with where it landed, reply with exactly PASS.
+            """
+        }
         let ask = """
         You're in a group chat with the user\(names.isEmpty ? "" : " and \(names)").\(briefText(conversation).map { "\n\n\($0)" } ?? "")
 
@@ -510,7 +632,7 @@ final class AppStore {
         """
         let agent = member.agent
         let reply = ChatMessage(role: .assistant, content: "", agentID: member.agent?.id, skillID: member.skill?.id)
-        guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return true }
+        guard let c = conversations.firstIndex(where: { $0.id == conversationID }) else { return .failed }
         conversations[c].messages.append(reply)
         do {
             let decision = try ModelRouter(available: availableModels, settings: router).route(
@@ -528,7 +650,8 @@ final class AppStore {
                 updateReply(reply.id, in: conversationID) {
                     $0.content = ""
                     $0.modelID = model.id
-                    $0.routingReason = "\(member.name) in the group chat" + (round > 1 ? " · round \(round)" : "")
+                    $0.routingReason = "\(member.name) in the group chat"
+                        + (final != nil ? " · final result" : round > 1 ? " · round \(round)" : "")
                 }
                 do {
                     // Members whose model can see get the images you shared lately along with the transcript.
@@ -543,13 +666,13 @@ final class AppStore {
                     updateReply(reply.id, in: conversationID) {
                         $0.content = Self.withoutSpeakerPrefix($0.content, name: member.name)
                     }
-                    if round > 1, Self.isPass(message(reply.id, in: conversationID)?.content ?? "") {
+                    if round > 1, final == nil, Self.isPass(message(reply.id, in: conversationID)?.content ?? "") {
                         removeMessage(reply.id, in: conversationID)  // nothing to add: no empty bubble
-                        return true
+                        return .passed
                     }
-                    return false
+                    return .spoke
                 } catch {
-                    if let content = message(reply.id, in: conversationID)?.content, !content.isEmpty { return false }
+                    if let content = message(reply.id, in: conversationID)?.content, !content.isEmpty { return .spoke }
                 }
             }
             throw RoutingError.noModelsAvailable
@@ -559,7 +682,7 @@ final class AppStore {
                 $0.content = "\(member.name) couldn't answer: \(error.localizedDescription)"
             }
         }
-        return false
+        return .failed
     }
 
     private func removeMessage(_ id: UUID, in conversationID: UUID) {
@@ -860,7 +983,11 @@ final class AppStore {
         models.first { $0.canSeeImages && client(for: $0) != nil }
     }
 
+    /// Tests: answer with a stand-in instead of a real model.
+    @ObservationIgnored var clientOverride: ((AIModel) -> ChatClient?)?
+
     func client(for model: AIModel) -> ChatClient? {
+        if let clientOverride { return clientOverride(model) }
         switch model.location {
         case .local(let repo):
             return MLXChatClient(repo: repo)

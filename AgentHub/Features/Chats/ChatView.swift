@@ -116,6 +116,9 @@ struct ChatView: View {
 
     private func composer(_ conversation: Conversation) -> some View {
         VStack(alignment: .leading, spacing: Theme.s2) {
+            if let progress = store.discussions[conversation.id] {
+                DiscussionProgressBar(progress: progress) { store.stopDiscussion(conversation.id) }
+            }
             if let codebase = conversation.codebase {
                 CodebaseBar(conversation: conversation, codebase: codebase)
             }
@@ -303,7 +306,7 @@ struct ChatView: View {
         let members = store.members(in: conversation)
         guard !members.isEmpty else { return "No members yet" }
         let rounds = conversation.discussionRounds ?? 1
-        let mode = rounds == 1 ? "one answer each" : rounds >= AppStore.maxRounds ? "talk until they agree" : "\(rounds) rounds"
+        let mode = rounds == 1 ? "one answer each" : rounds >= AppStore.maxRounds ? "work until it's ready" : "\(rounds) rounds"
         return members.map(\.name).joined(separator: ", ") + " · " + mode
     }
 
@@ -827,11 +830,11 @@ private struct DiscussionMenu: View {
                 Text("Each answers once").tag(1)
                 Text("2 rounds: they reply to each other").tag(2)
                 Text("3 rounds").tag(3)
-                Text("Until they agree (max \(AppStore.maxRounds))").tag(AppStore.maxRounds)
+                Text("Until it's ready and they all agree (up to \(AppStore.maxDisagreements) disagreements or \(AppStore.duration(minutes: AppStore.maxDiscussionMinutes)))").tag(AppStore.maxRounds)
             }
             .pickerStyle(.inline)
         } label: {
-            Label(rounds == 1 ? "Once" : rounds >= AppStore.maxRounds ? "Until agreed" : "\(rounds) rounds",
+            Label(rounds == 1 ? "Once" : rounds >= AppStore.maxRounds ? "Until ready" : "\(rounds) rounds",
                   systemImage: "bubble.left.and.bubble.right")
                 .labelStyle(.titleAndIcon).font(.footnote)
         }
@@ -1012,3 +1015,48 @@ struct TypingDots: View {
     }
 }
 
+
+/// A group working "until it's ready": round, disagreements against the limit, time against the limit, and Stop.
+private struct DiscussionProgressBar: View {
+    let progress: AppStore.DiscussionProgress
+    let stop: () -> Void
+    @State private var stopping = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let minutes = Int(context.date.timeIntervalSince(progress.started) / 60)
+            HStack(spacing: Theme.s3) {
+                ProgressView().controlSize(.small)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Working until it's ready · round \(progress.round)").font(.callout.weight(.medium))
+                    HStack(spacing: Theme.s3) {
+                        meter("Disagreements", value: Double(progress.disagreements), of: Double(progress.maxDisagreements),
+                              label: "\(progress.disagreements) of \(progress.maxDisagreements)")
+                        meter("Time", value: Double(minutes), of: Double(progress.maxMinutes),
+                              label: "\(AppStore.duration(minutes: minutes)) of \(AppStore.duration(minutes: progress.maxMinutes))")
+                    }
+                }
+                Spacer(minLength: 8)
+                Button(stopping ? "Stopping…" : "Stop") {
+                    stopping = true
+                    stop()
+                }
+                .disabled(stopping)
+                .help("Stop after the current member's turn; the lead writes the best version so far")
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.border))
+        .padding(.leading, 42)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func meter(_ title: String, value: Double, of total: Double, label: String) -> some View {
+        HStack(spacing: 6) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            ProgressView(value: min(value, total), total: max(total, 1)).frame(width: 70)
+            Text(label).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+        }
+    }
+}

@@ -63,6 +63,8 @@ struct SettingsView: View {
                     Text("Only for chats you're not looking at. Click a notification to open the chat.")
                 }
 
+                DiscussionLimitsSection()
+
                 Section("Cloud providers") {
                     ForEach(store.providers.filter { $0.id != Provider.huggingFace.id }) { provider in
                         NavigationLink { ProviderKeyView(provider: provider) } label: {
